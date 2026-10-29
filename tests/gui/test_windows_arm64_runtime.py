@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,22 @@ def test_arm64_selects_desktop_runtime_before_backend_import(monkeypatch):
     options = json.loads(config.read_text(encoding="utf-8"))["runtimeOptions"]
     assert options["framework"]["name"] == "Microsoft.WindowsDesktop.App"
     assert options["rollForward"] == "LatestMajor"
+
+
+def test_arm64_preloads_system_events_for_coreclr(monkeypatch):
+    references = []
+
+    class FakeClr:
+        @staticmethod
+        def AddReference(name):
+            references.append(name)
+
+    monkeypatch.setattr(helpers.sys, "platform", "win32")
+    monkeypatch.setattr(helpers.sysconfig, "get_platform", lambda: "win-arm64")
+    monkeypatch.setitem(sys.modules, "clr", FakeClr())
+    helpers.configure_windows_gui_runtime()
+    helpers.load_windows_arm64_framework_assemblies()
+    assert references == ["Microsoft.Win32.SystemEvents"]
 
 
 @pytest.mark.parametrize("host,platform", [("win32", "win-amd64"), ("linux", "linux-aarch64")])

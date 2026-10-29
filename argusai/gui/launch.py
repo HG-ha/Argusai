@@ -27,9 +27,15 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from threading import Thread
 
-from ._helpers import WEBUI_DIR, configure_windows_gui_runtime, resource_root
+from ._helpers import (
+    WEBUI_DIR,
+    configure_windows_gui_runtime,
+    load_windows_arm64_framework_assemblies,
+    resource_root,
+)
 
 configure_windows_gui_runtime()
+load_windows_arm64_framework_assemblies()
 
 import webview
 

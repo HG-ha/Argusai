@@ -36,6 +36,25 @@ def configure_windows_gui_runtime() -> None:
         )
 
 
+def load_windows_arm64_framework_assemblies() -> None:
+    """Preload framework assemblies that pywebview imports by namespace.
+
+    Python.NET's CoreCLR loader does not implicitly load an assembly merely
+    because a matching CLR namespace is imported. pywebview's WinForms backend
+    imports ``Microsoft.Win32.SystemEvents`` without its own ``AddReference``;
+    load the Windows Desktop framework assembly before importing pywebview.
+    """
+    if (
+        sys.platform != "win32"
+        or sysconfig.get_platform().lower() != "win-arm64"
+        or os.environ.get("PYTHONNET_RUNTIME", "").lower() != "coreclr"
+    ):
+        return
+    import clr
+
+    clr.AddReference("Microsoft.Win32.SystemEvents")
+
+
 def debug_log(message: str) -> None:
     """Print a debug line when ``ARGUSAI_DEBUG_LOG`` is enabled.
 
