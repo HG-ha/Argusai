@@ -5,6 +5,7 @@ import json
 import plistlib
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,8 +15,11 @@ build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
 
 
-def options(monkeypatch, system="Linux", *extra):
-    monkeypatch.setattr(build.platform, "machine", lambda: "x86_64")
+def options(monkeypatch, system="Linux", *extra, machine="x86_64", python_platform=None):
+    monkeypatch.setattr(build.platform, "machine", lambda: machine)
+    monkeypatch.setattr(build.sysconfig, "get_platform", lambda: python_platform or (
+        "win-arm64" if machine.lower() in {"arm64", "aarch64"} else "win-amd64"
+    ))
     return build.parse_args(list(extra), system=system)
 
 
@@ -65,6 +69,70 @@ def test_compiler_controls(monkeypatch):
     assert "--onefile-tempdir-spec={CACHE_DIR}/{COMPANY}/{PRODUCT}/{VERSION}" in flags
 
 
+@pytest.mark.parametrize("system,machine,runtime", [
+    ("Windows", "ARM64", "win-arm64"),
+    ("Linux", "aarch64", "linux-arm64"),
+])
+def test_native_arm64_build_plan_uses_matching_abi(monkeypatch, system, machine, runtime):
+    args = options(monkeypatch, system, "--arch", "arm64", machine=machine)
+    assert args.target_arch == args.python_arch == "arm64"
+    assert args.runtime_arch == runtime
+    flags = build.nuitka_args(args)
+    assert ("--msvc=latest" in flags) == (system == "Windows")
+    runtime_flag = f"--include-data-files={build.WINDOWS_ARM_RUNTIME_CONFIG}={build.WINDOWS_ARM_RUNTIME_CONFIG}"
+    assert (runtime_flag in flags) == (system == "Windows")
+    assert "--mingw64" not in flags
+    assert not any("innoextract/win-x64" in flag or "innoextract/linux-x64" in flag for flag in flags)
+
+
+def test_windows_arm64_host_does_not_disguise_x64_python(monkeypatch):
+    with pytest.raises(SystemExit):
+        options(monkeypatch, "Windows", "--arch", "arm64", machine="ARM64", python_platform="win-amd64")
+    args = options(monkeypatch, "Windows", machine="ARM64", python_platform="win-amd64")
+    assert args.runtime_arch == "win-x64"
+    assert args.python_arch == "x86_64"
+
+
+def test_windows_32_bit_interpreter_is_rejected(monkeypatch):
+    with pytest.raises(SystemExit):
+        options(monkeypatch, "Windows", python_platform="win32")
+
+
+@pytest.mark.parametrize("system", ["Windows", "Linux"])
+def test_arm64_preparation_does_not_download_x64_vendor(monkeypatch, tmp_path, capsys, system):
+    args = options(monkeypatch, system, "--skip-webui", machine="ARM64")
+    args.output = tmp_path / "output"
+    source = tmp_path / "source"
+    monkeypatch.setattr(build, "ROOT", source)
+    index = source / "argusai/webui/dist/index.html"
+    index.parent.mkdir(parents=True)
+    index.write_text("frontend fixture")
+    from scripts import frontend_notices
+    monkeypatch.setattr(frontend_notices, "check_notices", lambda path: None)
+    monkeypatch.setattr(build, "prepare_legal", lambda args: None)
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(build.shutil, "which", lambda name: f"/tools/{name}")
+    monkeypatch.setattr(build, "run", lambda *a, **kw: pytest.fail("ARM64 downloaded an unsupported vendor archive"))
+    helper = source / "webview/platforms/win32.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("helper fixture")
+    runtime_config = source / build.WINDOWS_ARM_RUNTIME_CONFIG
+    runtime_config.parent.mkdir(parents=True, exist_ok=True)
+    runtime_config.write_text('{"runtimeOptions": {}}')
+    monkeypatch.setitem(build.sys.modules, "webview", SimpleNamespace(__file__=str(source / "webview/__init__.py")))
+    result = build.prepare(args)
+    assert result == (helper if system == "Windows" else None)
+    assert args.output.is_dir()
+    assert "no official portable ARM64 archive" in capsys.readouterr().out
+
+
+def test_windows_arm64_preparation_requires_runtime_config(monkeypatch, tmp_path):
+    args = options(monkeypatch, "Windows", machine="ARM64")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="Windows ARM64 .NET runtime configuration"):
+        build.prepare(args)
+
+
 def populate_payload(path, args):
     for name in ["argusai/webui/dist/index.html", "argusai/webui/dist/THIRD_PARTY_NOTICES.txt", "argusai/vendor/sqlmap/sqlmap.py", *(f"argusai/core/reverse/ghidra_scripts/{name}" for name in build.GHIDRA_SCRIPTS), *(f"argusai/legal/{name}" for name in build.LEGAL_FILES)]:
         target = path / name
@@ -105,9 +173,22 @@ def test_payload_requires_gpl_and_dependency_notices(monkeypatch, tmp_path):
         build.verify_payload(tmp_path, args)
 
 
+def test_windows_arm64_payload_requires_coreclr_runtime_config(monkeypatch, tmp_path):
+    args = options(monkeypatch, "Windows", machine="ARM64")
+    monkeypatch.setattr(build, "ROOT", tmp_path / "source")
+    populate_payload(tmp_path, args)
+    with pytest.raises(ValueError, match="windows-arm64.runtimeconfig.json"):
+        build.verify_payload(tmp_path, args)
+    runtime_config = tmp_path / build.WINDOWS_ARM_RUNTIME_CONFIG
+    runtime_config.parent.mkdir(parents=True, exist_ok=True)
+    runtime_config.write_text('{"runtimeOptions": {}}')
+    build.verify_payload(tmp_path, args)
+
+
 @pytest.mark.parametrize("mode", ["folder", "onefile"])
-def test_linux_archive_and_onefile_cleanup(monkeypatch, tmp_path, mode):
-    args = options(monkeypatch, "Linux", "--mode", mode)
+@pytest.mark.parametrize("machine,runtime", [("x86_64", "linux-x64"), ("aarch64", "linux-arm64")])
+def test_linux_archive_and_onefile_cleanup(monkeypatch, tmp_path, mode, machine, runtime):
+    args = options(monkeypatch, "Linux", "--mode", mode, machine=machine)
     args.output = tmp_path
     args.app_name = "ReleaseTool"
     monkeypatch.setattr(build, "ROOT", tmp_path / "source")
@@ -121,11 +202,11 @@ def test_linux_archive_and_onefile_cleanup(monkeypatch, tmp_path, mode):
     archive = build.finish(args)
     with tarfile.open(archive) as stream:
         members = stream.getnames()
-        expected = f"{args.app_name}-{args.version}-linux-x64/{args.app_name}"
+        expected = f"{args.app_name}-{args.version}-{runtime}/{args.app_name}"
         assert expected in members
         assert stream.getmember(expected).mode & 0o111
-        assert f"{args.app_name}-{args.version}-linux-x64/licenses/LICENSE" in members
-        assert f"{args.app_name}-{args.version}-linux-x64/licenses/python/THIRD_PARTY_NOTICES.txt" in members
+        assert f"{args.app_name}-{args.version}-{runtime}/licenses/LICENSE" in members
+        assert f"{args.app_name}-{args.version}-{runtime}/licenses/python/THIRD_PARTY_NOTICES.txt" in members
     if mode == "onefile":
         assert not dist.exists()
         assert not (tmp_path / "__main__.build").exists()
@@ -222,8 +303,9 @@ def test_compile_failure_does_not_package_stale_output(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["folder", "onefile"])
-def test_nsis_defines_and_notice_encoding(monkeypatch, tmp_path, mode):
-    args = options(monkeypatch, "Windows", "--mode", mode)
+@pytest.mark.parametrize("machine,arch", [("AMD64", "x86_64"), ("ARM64", "arm64")])
+def test_nsis_defines_and_notice_encoding(monkeypatch, tmp_path, mode, machine, arch):
+    args = options(monkeypatch, "Windows", "--mode", mode, machine=machine)
     args.output = tmp_path
     args.nsis_path = Path("makensis.exe")
     calls = []
@@ -242,6 +324,8 @@ def test_nsis_defines_and_notice_encoding(monkeypatch, tmp_path, mode):
     monkeypatch.setattr(build, "run", fake_run)
     installer = build.nsis(tmp_path / "payload", args)
     assert installer.exists()
+    assert f"/DAPP_ARCH={arch}" in calls[-1]
+    assert ("win-arm64" in installer.name) == (arch == "arm64")
     assert f"/DINSTALL_MODE={mode}" in calls[-1]
     assert any(flag.startswith("/DPAYLOAD_FILE=" if mode == "onefile" else "/DDIST_DIR=") for flag in calls[-1])
     assert calls[-1][1:3] == ["/INPUTCHARSET", "UTF8"]

@@ -16,6 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 from pathlib import Path
@@ -23,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 REMOVED_RUNTIMES = ("python-runtime", "node-runtime", "js-tools", "wabt")
 GHIDRA_SCRIPTS = ("decompile_function.py", "disassemble_function.py", "list_functions.py")
+WINDOWS_ARM_RUNTIME_CONFIG = "argusai/gui/windows-arm64.runtimeconfig.json"
 LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "SOURCE_CODE.txt",
                "python/THIRD_PARTY_NOTICES.txt", "python/manifest.json")
 
@@ -64,6 +66,8 @@ def parse_args(argv: list[str] | None = None, *, system: str | None = None) -> a
 
 Defaults: macOS app bundle; Windows/Linux standalone folder. Linux also
 creates a versioned tar.gz. A C toolchain is required; Linux needs patchelf.
+Windows ARM64 requires ARM64 Python and the Visual Studio ARM64 C++ tools;
+Nuitka is forced to use MSVC for that target. Build ARM64 on an ARM64 runner.
 Frontend dependencies are installed with npm ci unless --skip-webui is set.
 Use --output-dir for a dedicated directory; known older build outputs there
 are replaced. Running applications are never terminated automatically.
@@ -116,8 +120,17 @@ For notarization, first store credentials with xcrun notarytool store-credential
     if args.notarize and args.mode != "app":
         parser.error("--notarize requires --mode app (optionally with --dmg)")
     args.host_arch = architecture(platform.machine())
-    args.target_arch = args.host_arch if args.arch == "native" else args.arch
-    if args.target_arch != args.host_arch:
+    args.python_arch = args.host_arch
+    if system == "Windows":
+        # machine() can describe the ARM64 host while Python runs under x64
+        # emulation. Wheel/extension ABI follows the interpreter, not that host.
+        python_platform = sysconfig.get_platform().lower()
+        python_arch = {"win-amd64": "x86_64", "win-arm64": "arm64"}.get(python_platform)
+        if python_arch is None:
+            parser.error(f"Use a 64-bit Windows Python interpreter (win-amd64 or win-arm64), got {python_platform}")
+        args.python_arch = python_arch
+    args.target_arch = args.python_arch if args.arch == "native" else args.arch
+    if args.target_arch != args.python_arch:
         parser.error("Use a Python interpreter and dependencies for the target architecture; on Apple Silicon run the x86_64 environment under Rosetta")
     label = {"Windows": "win", "Darwin": "macos", "Linux": "linux"}[system]
     args.runtime_arch = f"{label}-{'x64' if args.target_arch == 'x86_64' else 'arm64'}"
@@ -169,6 +182,9 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
     if args.system == "Windows":
         flags += ["--include-package=clr_loader", "--include-package=pythonnet",
                   f"--windows-console-mode={'force' if args.console else 'hide'}"]
+        if args.target_arch == "arm64":
+            flags += ["--msvc=latest",
+                      f"--include-data-files={WINDOWS_ARM_RUNTIME_CONFIG}={WINDOWS_ARM_RUNTIME_CONFIG}"]
         if win32_helper:
             flags.append(f"--include-data-files={win32_helper}=webview/platforms/win32.py")
         flags.append(f"--output-filename={args.app_name}.exe")
@@ -260,6 +276,10 @@ def copy_legal(destination: Path, *roots: Path) -> None:
 
 
 def prepare(args: argparse.Namespace) -> Path | None:
+    if args.system == "Windows" and args.target_arch == "arm64":
+        runtime_config = ROOT / WINDOWS_ARM_RUNTIME_CONFIG
+        if not runtime_config.is_file():
+            raise ValueError(f"Missing Windows ARM64 .NET runtime configuration: {runtime_config}")
     if args.system == "Darwin":
         tools = ["codesign", "file"]
         if args.dmg:
@@ -295,6 +315,9 @@ def prepare(args: argparse.Namespace) -> Path | None:
         run([sys.executable, "scripts/vendor_runtime.py"])
         if not executable.is_file():
             raise ValueError(f"Vendor installation did not produce {executable}")
+    elif not executable.exists() and args.target_arch == "arm64":
+        print(f"innoextract is not bundled for {args.runtime_arch}: no official portable ARM64 archive. "
+              "Installer unpacking requires a separately configured compatible tool.", flush=True)
     helper = None
     if args.system == "Windows":
         import webview
@@ -311,6 +334,8 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
                 "argusai/vendor/runners", "argusai/vendor/sqlmap/sqlmap.py"]
     required += [f"argusai/core/reverse/ghidra_scripts/{name}" for name in GHIDRA_SCRIPTS]
     required += [f"argusai/legal/{name}" for name in LEGAL_FILES]
+    if args.system == "Windows" and args.target_arch == "arm64":
+        required.append(WINDOWS_ARM_RUNTIME_CONFIG)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch
     if vendor.is_dir():
         required.append(f"argusai/vendor/innoextract/{args.runtime_arch}/{'innoextract.exe' if args.system == 'Windows' else 'innoextract'}")
@@ -361,6 +386,7 @@ def nsis(payload: Path, args: argparse.Namespace) -> Path:
         "APP_NAME": args.app_name, "APP_VERSION": args.version,
         "APP_VERSION_QUAD": ".".join((re.findall(r"\d+", args.version) + ["0"] * 4)[:4]),
         "PUBLISHER": "ArgusAI", "OUT_FILE": str(installer),
+        "APP_ARCH": args.target_arch,
         "INSTALL_MODE": "onefile" if args.mode == "onefile" else "folder",
         "PAYLOAD_FILE" if args.mode == "onefile" else "DIST_DIR": str(payload),
         "ICON_FILE": str(ROOT / "assets/brand/argusai-icon-Transparency.ico"),

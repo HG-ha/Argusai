@@ -11,8 +11,10 @@
 | 平台 | 自动发布产物 | 额外运行环境 |
 | --- | --- | --- |
 | Windows x64 | `ArgusAI-0.1.0-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
+| Windows ARM64 | `ArgusAI-0.1.0-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
 | macOS Apple Silicon | `ArgusAI-0.1.0-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
 | Linux x64 | `ArgusAI-0.1.0-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
+| Linux ARM64 | `ArgusAI-0.1.0-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
 
 这些是自动工作流目前配置的发布平台。其他架构应在对应环境中从源码运行或自行构建，不能仅修改文件名来转换架构。
 
@@ -43,7 +45,7 @@ shasum -a 256 -c ArgusAI-0.1.0-macos-arm64.dmg.sha256
 
 ### Windows
 
-运行 NSIS 安装包，按安装器完成安装，然后从开始菜单或桌面入口打开。缺少 WebView2 Runtime 时，先安装该运行时再启动。
+运行与系统架构匹配的 NSIS 安装包，按安装器完成安装，然后从开始菜单或桌面入口打开。缺少 WebView2 Runtime 时，先安装对应架构的运行时再启动。Windows ARM64 还需要原生 Microsoft .NET Desktop Runtime；缺失时 WinForms 桥接无法初始化。
 
 企业设备可能对未知程序、脚本或浏览器运行时有限制。按组织的软件准入流程处理，保留被拦截的错误和版本信息用于排查。
 
@@ -62,6 +64,8 @@ tar -xzf ArgusAI-0.1.0-linux-x64.tar.gz
 cd ArgusAI-0.1.0-linux-x64
 ./ArgusAI --gui
 ```
+
+ARM64 系统将文件名和目录名中的 `linux-x64` 替换为 `linux-arm64`。
 
 交互终端中直接执行 `./ArgusAI` 会进入 ops 控制台。Linux 桌面依赖按发行版准备；Ubuntu 示例：
 

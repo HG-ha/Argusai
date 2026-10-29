@@ -6,9 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to build; empty uses the selected branch. Manual runs upload artifacts only."
+        description: "Git ref to build; empty uses the selected branch."
         required: false
         type: string
+      publish_release:
+        description: "Publish the verified packages as a Release after every build succeeds."
+        required: false
+        default: false
+        type: boolean
 
 # Compilation jobs only read the repository. Only publish can change a Release.
 permissions:
@@ -32,10 +37,12 @@ jobs:
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       commit: ${{ steps.metadata.outputs.commit }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
@@ -59,10 +66,33 @@ jobs:
           subprocess.run(command, check=True)
           version = subprocess.check_output([sys.executable, "scripts/bump_version.py"], text=True).strip()
           commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          release_tag = os.environ.get("RELEASE_TAG") or f"v{version}"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"version={version}\ncommit={commit}\n")
+              output.write(f"version={version}\ncommit={commit}\nrelease_tag={release_tag}\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(f"## ArgusAI {version}\n\nSource commit: `{commit}`\n")
+      - name: Validate release tag target
+        if: github.event_name == 'release' || inputs.publish_release
+        env:
+          RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: python
+        run: |
+          import os
+          import subprocess
+
+          ref = f"refs/tags/{os.environ['RELEASE_TAG']}"
+          exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", ref])
+          if exists.returncode not in (0, 1):
+              raise SystemExit("Cannot inspect release tag")
+          if exists.returncode == 0:
+              target = subprocess.run(["git", "rev-parse", "--verify", ref + "^{commit}"],
+                                      capture_output=True, text=True)
+              if target.returncode or target.stdout.strip() != os.environ["SOURCE_COMMIT"]:
+                  raise SystemExit("Release tag does not match validated source commit")
+          elif os.environ["EVENT_NAME"] == "release":
+              raise SystemExit("Published release tag is missing from the checkout")
 
   source:
     name: Archive matching source
@@ -104,6 +134,7 @@ jobs:
                       "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
           with tarfile.open(package, "r:gz") as archive:
@@ -151,6 +182,11 @@ jobs:
             runtime: win-x64
             build_args: --nsis
             suffix: -setup.exe
+          - os: windows-11-arm
+            architecture: arm64
+            runtime: win-arm64
+            build_args: --nsis
+            suffix: -setup.exe
           - os: macos-14
             architecture: arm64
             runtime: macos-arm64
@@ -159,6 +195,11 @@ jobs:
           - os: ubuntu-24.04
             architecture: x64
             runtime: linux-x64
+            build_args: --onefile
+            suffix: .tar.gz
+          - os: ubuntu-24.04-arm
+            architecture: arm64
+            runtime: linux-arm64
             build_args: --onefile
             suffix: .tar.gz
     env:
@@ -180,6 +221,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+          architecture: ${{ matrix.architecture }}
           cache: npm
           cache-dependency-path: argusai/webui/package-lock.json
       - name: Install Linux build dependencies
@@ -189,11 +231,159 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config ccache patchelf \
             libgtk-3-dev libwebkit2gtk-4.1-dev
-      - name: Install NSIS
+      - name: Ensure NSIS is available
         if: runner.os == 'Windows'
-        run: choco install nsis --no-progress -y
+        shell: python
+        run: |
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          def locate():
+              candidates = [shutil.which("makensis"), shutil.which("makensis.exe")]
+              for variable in ("ProgramFiles(x86)", "ProgramFiles"):
+                  if os.environ.get(variable):
+                      candidates.append(str(Path(os.environ[variable]) / "NSIS/makensis.exe"))
+              return next((Path(path) for path in candidates if path and Path(path).is_file()), None)
+
+          compiler = locate()
+          if compiler is None:
+              subprocess.run(["choco", "install", "nsis", "--no-progress", "-y"], check=True)
+              compiler = locate()
+          if compiler is None:
+              raise SystemExit("NSIS installation did not provide makensis.exe")
+          # Windows ARM runners can execute this installer compiler; the app's
+          # native architecture is checked separately below and by build.py.
+          subprocess.run([str(compiler), "/VERSION"], check=True, timeout=30)
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(f"{compiler.parent}\n")
+      - name: Prepare Windows ARM64 native build dependencies
+        if: matrix.runtime == 'win-arm64'
+        shell: python
+        run: |
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          original = dict(os.environ)
+          vswhere = shutil.which("vswhere") or str(Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe")
+          installation = subprocess.check_output(
+              [vswhere, "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+               "-property", "installationPath"], text=True).strip()
+          if not installation:
+              raise SystemExit("MSVC ARM64 tools are missing from the runner")
+          developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
+          command = f'call "{developer}" -no_logo -arch=arm64 -host_arch=arm64 >nul && set'
+          environment = subprocess.check_output([os.environ["COMSPEC"], "/d", "/s", "/c", command], text=True)
+          for line in environment.splitlines():
+              key, separator, value = line.partition("=")
+              if separator and key and not key.startswith("="):
+                  os.environ[key] = value
+          if (os.environ.get("VSCMD_ARG_HOST_ARCH", "").lower() != "arm64"
+                  or os.environ.get("VSCMD_ARG_TGT_ARCH", "").lower() != "arm64"):
+              raise SystemExit("MSVC developer environment is not native ARM64")
+
+          toolchain = "stable-aarch64-pc-windows-msvc"
+          subprocess.run(["rustup", "toolchain", "install", toolchain, "--profile", "minimal"], check=True)
+          subprocess.run(["rustup", "target", "add", "aarch64-pc-windows-msvc", "--toolchain", toolchain], check=True)
+          os.environ["RUSTUP_TOOLCHAIN"] = toolchain
+          os.environ["CARGO_BUILD_TARGET"] = "aarch64-pc-windows-msvc"
+          rust = subprocess.check_output(["rustc", "-vV"], text=True)
+          if "host: aarch64-pc-windows-msvc" not in rust:
+              raise SystemExit("Rust compiler is not native Windows ARM64")
+
+          vcpkg_location = os.environ.get("VCPKG_INSTALLATION_ROOT") or os.environ.get("VCPKG_ROOT")
+          if not vcpkg_location:
+              executable = shutil.which("vcpkg")
+              vcpkg_location = str(Path(executable).parent) if executable else ""
+          if not vcpkg_location:
+              raise SystemExit("The runner's vcpkg installation was not found")
+          vcpkg = Path(vcpkg_location) / "vcpkg.exe"
+          triplet = "arm64-windows-static-md"
+          overlay = Path("build/vcpkg-triplets").resolve()
+          overlay.mkdir(parents=True, exist_ok=True)
+          (overlay / f"{triplet}.cmake").write_text(
+              "set(VCPKG_TARGET_ARCHITECTURE arm64)\n"
+              "set(VCPKG_CRT_LINKAGE dynamic)\n"
+              "set(VCPKG_LIBRARY_LINKAGE static)\n", encoding="utf-8")
+          subprocess.run([str(vcpkg), "install", f"openssl:{triplet}",
+                          f"--overlay-triplets={overlay}", "--host-triplet=arm64-windows"], check=True)
+          openssl = Path(vcpkg_location) / "installed" / triplet
+          if not all((openssl / name).is_file() for name in ("include/openssl/ssl.h", "lib/libssl.lib", "lib/libcrypto.lib")):
+              raise SystemExit("ARM64 static OpenSSL headers/libraries were not installed")
+          os.environ["OPENSSL_DIR"] = str(openssl)
+          os.environ["OPENSSL_STATIC"] = "1"
+          os.environ["OPENSSL_NO_VENDOR"] = "1"
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              for key, value in os.environ.items():
+                  upper = key.upper()
+                  keep = upper in {"PATH", "INCLUDE", "LIB", "LIBPATH", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_TARGET", "OPENSSL_DIR", "OPENSSL_STATIC", "OPENSSL_NO_VENDOR"}
+                  keep = keep or upper.startswith(("VC", "VS", "WINDOWSSDK", "UNIVERSALCRT", "UCRT", "FRAMEWORK", "DEVENV", "EXTENSIONSDK"))
+                  if keep and original.get(key) != value:
+                      output.write(f"{key}={value}\n")
+      - name: Install Windows ARM64 Desktop runtime
+        if: matrix.runtime == 'win-arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+          $desktopRoot = Join-Path $env:RUNNER_TEMP 'dotnet-arm64'
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer
+          & $installer -Runtime windowsdesktop -Channel 10.0 -Architecture arm64 -InstallDir $desktopRoot -NoPath
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 Windows Desktop runtime installation failed' }
+          $env:DOTNET_ROOT = $desktopRoot
+          $runtimes = & (Join-Path $desktopRoot 'dotnet.exe') --list-runtimes
+          if ($LASTEXITCODE -ne 0 -or -not ($runtimes -match 'Microsoft.WindowsDesktop.App 10\.')) {
+            throw 'ARM64 Microsoft.WindowsDesktop.App 10.x was not installed'
+          }
+          "DOTNET_ROOT=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "DOTNET_ROOT_ARM64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $desktopRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install locked Python dependencies
-        run: uv sync --locked --group build
+        run: uv sync --locked --group build --python python
+      - name: Verify native Python and Node architectures
+        env:
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+
+          probe = ("import json,platform,struct,sysconfig; "
+                   "print(json.dumps({'platform':sysconfig.get_platform(),"
+                   "'machine':platform.machine(),'bits':struct.calcsize('P')*8}))")
+          metadata = json.loads(subprocess.check_output(
+              ["uv", "run", "--locked", "--group", "build", "python", "-c", probe], text=True))
+          expected = os.environ["EXPECTED_ARCH"]
+          # platform.machine() may describe an ARM host running emulated x64
+          # Python. Windows sysconfig identifies the interpreter itself.
+          name = metadata["platform"].lower().replace("_", "-")
+          if name.startswith("win-"):
+              python_arch = {"win-arm64": "arm64", "win-amd64": "x64"}.get(name)
+          else:
+              python_arch = {"arm64": "arm64", "aarch64": "arm64",
+                             "x86_64": "x64", "amd64": "x64"}.get(metadata["machine"].lower())
+          node_arch = subprocess.check_output(["node", "-p", "process.arch"], text=True).strip()
+          if metadata["bits"] != 64 or python_arch != expected or node_arch != expected:
+              raise SystemExit(f"Build architecture mismatch: expected {expected}, Python {metadata}, Node {node_arch}")
+          print(f"Native build architecture verified: Python {python_arch}, Node {node_arch}")
+      - name: Smoke-test Windows ARM64 WinForms backend
+        if: matrix.runtime == 'win-arm64'
+        shell: python
+        run: |
+          import subprocess
+
+          probe = ("import os,sysconfig; "
+                   "assert sysconfig.get_platform().lower() == 'win-arm64'; "
+                   "import argusai.gui.launch; "
+                   "assert os.environ.get('PYTHONNET_RUNTIME') == 'coreclr'; "
+                   "import webview.platforms.winforms; "
+                   "from System import Environment; "
+                   "print('Native ARM64 WinForms backend loaded, CLR', Environment.Version)")
+          subprocess.run(["uv", "run", "--locked", "--group", "build", "python", "-c", probe], check=True, timeout=120)
       - name: Test release tooling
         run: uv run --locked --group build pytest tests/scripts/ -q
       - name: Build frontend
@@ -259,19 +449,30 @@ jobs:
 
   publish:
     name: Attach verified packages to Release
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     needs: [validate, build, source]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      EVENT_NAME: ${{ github.event_name }}
+      MANUAL_PUBLISH: ${{ inputs.publish_release }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           pattern: ArgusAI-${{ needs.validate.outputs.version }}-*
           merge-multiple: true
           path: release-assets
-      - name: Verify source, all three packages and checksums
+      - name: Verify source, all five packages and checksums
         working-directory: release-assets
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -284,7 +485,8 @@ jobs:
           from pathlib import Path, PurePosixPath
 
           version = os.environ["RELEASE_VERSION"]
-          suffixes = ("win-x64-setup.exe", "macos-arm64.dmg", "linux-x64.tar.gz", "source.tar.gz")
+          suffixes = ("win-x64-setup.exe", "win-arm64-setup.exe", "macos-arm64.dmg",
+                      "linux-x64.tar.gz", "linux-arm64.tar.gz", "source.tar.gz")
           packages = [Path(f"ArgusAI-{version}-{suffix}") for suffix in suffixes]
           for package in packages:
               if not package.is_file() or not package.stat().st_size:
@@ -305,6 +507,7 @@ jobs:
                       "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
           try:
@@ -325,9 +528,56 @@ jobs:
                           raise SystemExit(f"Missing or empty tracked source file: {name}")
           except (OSError, tarfile.TarError) as exc:
               raise SystemExit(f"Invalid source archive: {exc}") from exc
-      - name: Upload release assets
+      - name: Publish verified release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          event = os.environ["EVENT_NAME"]
+          requested = os.environ.get("MANUAL_PUBLISH", "").lower() == "true"
+          if event != "release" and not (event == "workflow_dispatch" and requested):
+              raise SystemExit("Publishing was not requested")
+          version = os.environ["RELEASE_VERSION"]
+          commit = os.environ["SOURCE_COMMIT"]
+          tag = os.environ["RELEASE_TAG"]
+          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if actual != commit:
+              raise SystemExit("Publish checkout does not match validated source commit")
+          ref = f"refs/tags/{tag}"
+          exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", ref])
+          if exists.returncode not in (0, 1):
+              raise SystemExit("Cannot inspect release tag before publishing")
+          if exists.returncode == 0:
+              target = subprocess.run(["git", "rev-parse", "--verify", ref + "^{commit}"],
+                                      capture_output=True, text=True)
+              if target.returncode or target.stdout.strip() != commit:
+                  raise SystemExit("Release tag does not match validated source commit")
+          elif event == "release":
+              raise SystemExit("Published release tag is missing from the checkout")
+          assets = sorted(str(path) for path in Path("release-assets").iterdir())
+          result = subprocess.run(["gh", "release", "view", tag, "--json", "tagName,isDraft"],
+                                  capture_output=True, text=True)
+          if result.returncode == 0:
+              release = json.loads(result.stdout)
+              if release.get("tagName") != tag or release.get("isDraft"):
+                  raise SystemExit("Existing release is a draft or has an unexpected tag")
+              if exists.returncode != 0:
+                  raise SystemExit("Existing release tag is missing from the checkout")
+              subprocess.run(["gh", "release", "upload", tag, *assets, "--clobber"], check=True)
+          else:
+              if event == "release":
+                  raise SystemExit("Published release could not be read; refusing to create a replacement")
+              notes = Path(f"scripts/packaging/release-notes-{version}.md")
+              if not notes.is_file() or not notes.read_bytes().strip():
+                  raise SystemExit(f"Missing tracked release notes: {notes}")
+              committed_notes = subprocess.check_output(["git", "show", f"{commit}:{notes.as_posix()}"])
+              if committed_notes != notes.read_bytes():
+                  raise SystemExit("Release notes do not match the validated commit")
+              subprocess.run(["gh", "release", "create", tag, "--target", commit,
+                              "--title", f"ArgusAI v{version}", "--notes-file", str(notes), *assets], check=True)

@@ -27,6 +27,10 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from threading import Thread
 
+from ._helpers import WEBUI_DIR, configure_windows_gui_runtime, resource_root
+
+configure_windows_gui_runtime()
+
 import webview
 
 from argusai.core.infra.logging_setup import LoggingSettings, current_log_dir, init_logging, is_initialised
@@ -37,7 +41,6 @@ from argusai.core.infra.win_stdio import (
 )
 
 from . import Api
-from ._helpers import WEBUI_DIR, resource_root
 from .webview_permissions import bind_webview_media_permissions
 from .window_geometry import resolve_startup_geometry
 

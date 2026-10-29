@@ -181,7 +181,7 @@ uv run argusai --gui
 | 交互终端 | `uv run argusai` 或 `uv run argusai chat` | [CLI 命令参考](wiki/CLI-Reference.md) |
 | 发行包 | 从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载发布后对应平台的包与 `.sha256` | [安装与环境](wiki/Installation.md) |
 
-Windows 桌面需要 WebView2 Runtime；macOS 桌面自动化需要系统权限；Linux 桌面需要 GTK 与 WebKitGTK。外部模型、扫描器、逆向 CLI 和设备按功能准备，详细步骤见[安装说明](wiki/Installation.md)。
+Windows 桌面需要 WebView2 Runtime，Windows ARM64 还需要原生 Microsoft .NET Desktop Runtime；macOS 桌面自动化需要系统权限；Linux 桌面需要 GTK 与 WebKitGTK。外部模型、扫描器、逆向 CLI 和设备按功能准备，详细步骤见[安装说明](wiki/Installation.md)。
 
 <details>
 <summary><strong>构建、开发与发布</strong></summary>

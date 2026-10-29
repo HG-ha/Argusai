@@ -21,6 +21,18 @@
 
 脚本不会替你安装系统包或终止占用旧产物的应用。重建前关闭对应程序，系统依赖按平台准备。Linux 桌面构建还应先在构建解释器中验证所选 pywebview 图形后端，见[安装指南](Installation.md)中的 GTK/PyGObject 自检。
 
+本版的原生发布目标如下。矩阵中的条目表示对应的构建目标；是否已有可下载包，以同一轮 CI 全部成功后的 Release 附件为准。
+
+| 构建目标 | 原生 runner | 发行格式 | 依赖边界 |
+| --- | --- | --- | --- |
+| Windows x64 | `windows-2022` | `win-x64-setup.exe` | x64 Python、MSVC、NSIS 与 WebView2 |
+| Windows ARM64 | `windows-11-arm` | `win-arm64-setup.exe` | ARM64 Python/MSVC；锁定 cryptography 需源码构建；.NET/WinForms/WebView2 需验证原生 ARM 路径 |
+| macOS ARM64 | `macos-14` | `macos-arm64.dmg` | Apple Silicon Python、Xcode 工具与系统 WebKit |
+| Linux x64 | `ubuntu-24.04` | `linux-x64.tar.gz` | x64 Python、编译工具与实际选用的 GUI 后端 |
+| Linux ARM64 | `ubuntu-24.04-arm` | `linux-arm64.tar.gz` | ARM64 Python/编译工具、GTK/WebKitGTK 与构建解释器可导入的 PyGObject |
+
+这些 runner 标签可在 [GitHub 官方列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)中核对。ARM64 构建使用原生 ARM64 解释器与依赖，`--arch arm64` 用于校验，不能把 x64 环境自动变成交叉编译环境。
+
 ## 先检查构建计划
 
 在仓库根目录运行：
@@ -52,6 +64,10 @@ uv run --locked --group build python build.py --onefile --nsis --jobs 2
 
 找不到 NSIS 时可以用 `--nsis-path` 指定 `makensis.exe` 的实际路径。`--console` 强制保留调试控制台；默认构建保留终端 CLI 的使用能力，并在桌面启动时隐藏自行产生的控制台。
 
+Windows ARM64 同样生成 NSIS 安装器，主程序需为原生 ARM64。安装器自身的 32 位启动外壳可以由 Windows ARM 仿真运行，不能只凭该外壳判断主程序架构。
+
+当前锁定的 `cryptography 48.0.0` 没有 Windows ARM64 wheel，需在同步依赖前准备匹配架构的 OpenSSL、Rust 与 MSVC，再实际完成源码安装。`primp`、`curl-cffi` 和 Playwright 则已有锁内 ARM64 wheel。`pythonnet`/`clr-loader` 的通用 wheel 仍有 .NET 架构边界：默认 netfx loader 仅带 x86/amd64 DLL，pywebview 的 coreclr 后备路径需要可用的 ARM64 .NET 桌面环境及 WinForms 解析配置。依赖同步与 CLI 版本检查成功，都不能替代 GUI 初始化验证。[cryptography 版本化安装说明](https://cryptography.io/en/48.0.0/installation/)说明了源码构建工具要求。
+
 ### macOS
 
 ```sh
@@ -71,6 +87,8 @@ uv run --locked --group build python build.py --onefile --jobs 2
 ```
 
 默认目录产物为 `dist/ArgusAI.dist/ArgusAI`。单文件模式输出 `dist/ArgusAI`。两种模式均创建版本化 `ArgusAI-版本-linux-架构.tar.gz`。
+
+Linux ARM64 的主要锁定依赖已有 manylinux aarch64 wheel；Nuitka 与纯 Python 的 `proxy-tools` 仍按源码包安装。GTK/WebKitGTK 系统库与 Python 的 `gi` 桥接需分别准备，在实际构建解释器内执行导入自检。ARM 包不会自动使用 x64 的 innoextract，相关解包工具应另行按目标架构准备。
 
 ## 常用选项
 
@@ -149,25 +167,26 @@ python scripts/bump_version.py --check --tag v0.1.1
 ```mermaid
 flowchart TD
     A[Release published / 手动运行] --> B[校验版本并固定源码 commit]
-    B --> C[Windows x64 / macOS arm64 / Linux x64]
+    B --> C[Windows x64 与 ARM64<br/>macOS ARM64<br/>Linux x64 与 ARM64]
     C --> D[发布工具测试与前端构建]
     D --> E[原生构建与 CLI 版本烟测]
     E --> F[安装包与 SHA-256 上传为 artifacts]
     B --> J[从同一 commit 导出源码归档与 SHA-256]
     J --> K[上传源码 artifact]
-    F --> G{Release 事件且平台与源码全部成功}
+    F --> G{正式发布请求且平台与源码全部成功}
     K --> G
-    G -->|是| H[重新校验全部文件并附加到 Release]
+    G -->|是| H[重新校验全部文件并创建或更新 Release]
     G -->|否| I[保留 artifacts，不发布附件]
 ```
 
 - Release 发布事件要求标签与 Python、前端版本一致；支持匹配的版本标签，如 `v0.1.0`。
-- 三个平台和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件。
+- 五个原生构建目标和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
 - 前端构建后收集第三方许可声明，再在原生构建前核验；声明随应用资源分发。
 - 包装后的 CLI 必须启动并报告预期版本，才能上传平台 artifact。
-- 每份安装包和源码归档均附带 `.sha256`。汇总作业要求三个原生包、一个源码包和四份校验文件全部存在，重新校验实际字节，并检查源码提交标识及关键文件后统一上传。
-- 手动运行可选择 ref，只保存 Actions artifacts，包括 `ArgusAI-版本-source`；不会创建 Release 或把附件发布到已有 Release。当前 artifacts 保留 14 天。
-- 当前工作流不会自动替你提交源码、创建标签或发布 Release；这些是维护者单独决定的操作。
+- 每份安装包和源码归档均附带 `.sha256`。汇总作业要求五个原生包、一个源码包和六份校验文件全部存在，重新校验实际字节，并检查源码提交标识及关键文件后统一上传。
+- 手动运行可选择 ref。`publish_release` 默认为 `false`，此时只保存 Actions artifacts，包括 `ArgusAI-版本-source`，当前 artifacts 保留 14 天。
+- 维护者显式将 `publish_release` 设为 `true` 后，工作流仍会先完成五个平台与源码构建。全部校验成功后，才按源码版本创建标签与正式 Release，写入仓库中的版本说明并上传全部附件；任一构建失败都不会提前发布空 Release。
+- 已存在的同名正式 Release 必须指向同一提交，工作流才会覆盖上传附件；标签错指、草稿状态或提交不一致都会停止发布。
 
 工作流能生成打包结果，不等于完成所有 GUI、浏览器、代理与设备集成验收。正式发布前还应在目标系统检查实际启动和所需功能。
 
@@ -200,7 +219,7 @@ uv run --locked --group build python build.py --dry-run --jobs 2
 1. 校验版本与标签，确认工作区内容就是准备发布的内容。
 2. 执行 `uv run pytest tests/scripts/ -q` 及改动涉及的模块测试。
 3. 构建后测试 `version --json`、桌面启动和本版影响的业务路径。
-4. 核对产物架构、安装/卸载、数据目录、签名状态及下载校验文件；确认三个平台包与对应提交的源码归档齐全。
+4. 核对产物架构、安装/卸载、数据目录、签名状态及下载校验文件；确认五个原生包与对应提交的源码归档齐全，ARM64 主程序和关键原生依赖不能只是 x64 文件改名。
 5. 确认没有用户设置、密钥、代理 CA、业务流量或未经许可的样本进入源码和产物。
 6. 准备可追溯的版本说明，再由维护者决定何时创建标签和发布。
 

@@ -3,7 +3,8 @@
 ; Built from python build.py --nsis. Required defines:
 ;   APP_NAME, APP_VERSION, APP_VERSION_QUAD, OUT_FILE, INSTALL_MODE
 ;   PAYLOAD_FILE (onefile) or DIST_DIR (folder)
-; Optional: ICON_FILE, PUBLISHER, WELCOME_BMP, HEADER_BMP, NOTICE_ZH, NOTICE_EN
+; Optional: APP_ARCH (x86_64/arm64), ICON_FILE, PUBLISHER, WELCOME_BMP,
+;           HEADER_BMP, NOTICE_ZH, NOTICE_EN
 
 Unicode true
 ManifestDPIAware true
@@ -28,6 +29,14 @@ ShowUnInstDetails show
 !ifndef INSTALL_MODE
   !define INSTALL_MODE "folder"
 !endif
+!ifndef APP_ARCH
+  !define APP_ARCH "x86_64"
+!endif
+!if "${APP_ARCH}" != "x86_64"
+  !if "${APP_ARCH}" != "arm64"
+    !error "APP_ARCH must be x86_64 or arm64"
+  !endif
+!endif
 !ifndef OUT_FILE
   !error "OUT_FILE is required"
 !endif
@@ -37,6 +46,22 @@ ShowUnInstDetails show
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 !insertmacro GetSize
+
+; Match upstream x64.nsh on older NSIS releases without this helper.
+; IsWow64Process2 returns the native IMAGE_FILE_MACHINE on Windows ARM64.
+; Its NT shared-data fallback also covers older x64 Windows versions.
+!ifndef GetNativeMachineArchitecture
+  !macro ArgusAIGetNativeMachineArchitecture OUTVAR
+    System::Call kernel32::GetCurrentProcess()p.s
+    System::Call kernel32::IsWow64Process2(ps,*i,*i0s)
+    Pop ${OUTVAR}
+    ${If} ${OUTVAR} == 0
+      System::Call '*0x7FFE002E(&i2.s)'
+      Pop ${OUTVAR}
+    ${EndIf}
+  !macroend
+  !define GetNativeMachineArchitecture "!insertmacro ArgusAIGetNativeMachineArchitecture "
+!endif
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
@@ -165,21 +190,42 @@ Function RestoreExistingInstallDir
   Pop $0
 FunctionEnd
 
+; NSIS uses a 32-bit installer stub, including for a native ARM64 payload.
+; Older x64.nsh RunningX64 checks can return false on Windows ARM64, and
+; GetNativeSystemInfo can report an emulated x86/x64 CPU. Use the native
+; machine returned by IsWow64Process2 / the upstream NSIS helper instead.
+!macro DefineArchitectureCheck PREFIX
+Function ${PREFIX}RequireTargetArchitecture
+  Push $0
+  ${GetNativeMachineArchitecture} $0
+  !if "${APP_ARCH}" == "arm64"
+    ${If} $0 != 43620 ; IMAGE_FILE_MACHINE_ARM64
+      MessageBox MB_ICONSTOP "This installer requires ARM64 Windows. Download the installer for your CPU architecture."
+      Abort
+    ${EndIf}
+  !else
+    ${If} $0 != 34404 ; IMAGE_FILE_MACHINE_AMD64
+      MessageBox MB_ICONSTOP "This installer requires x64 Windows. Download the installer for your CPU architecture."
+      Abort
+    ${EndIf}
+  !endif
+  Pop $0
+FunctionEnd
+!macroend
+
+!insertmacro DefineArchitectureCheck ""
+!insertmacro DefineArchitectureCheck "un."
+
 Function .onInit
-  ${If} ${RunningX64}
-    SetRegView 64
-  ${Else}
-    MessageBox MB_ICONSTOP "This installer requires 64-bit Windows."
-    Abort
-  ${EndIf}
+  Call RequireTargetArchitecture
+  SetRegView 64
   Call RestoreExistingInstallDir
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 
 Function un.onInit
-  ${If} ${RunningX64}
-    SetRegView 64
-  ${EndIf}
+  Call un.RequireTargetArchitecture
+  SetRegView 64
   !insertmacro MUI_UNGETLANGUAGE
 FunctionEnd
 
@@ -220,6 +266,7 @@ Section "$(SEC_APP)" SecApp
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   File /oname=launch-gui.vbs "${LAUNCH_VBS}"
   WriteRegStr HKLM "Software\${APP_NAME}" "InstallDir" "$INSTDIR"
+  WriteRegStr HKLM "Software\${APP_NAME}" "InstallArchitecture" "${APP_ARCH}"
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortCut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\launch-gui.vbs"' "$INSTDIR\${APP_NAME}.exe" 0

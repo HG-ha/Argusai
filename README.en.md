@@ -181,7 +181,7 @@ On first launch, configure the AI endpoint, model and data directory in Settings
 | Interactive terminal | `uv run argusai` or `uv run argusai chat` | [CLI reference](wiki/CLI-Reference.md) |
 | Release package | Download the published package and `.sha256` from [Releases](https://github.com/HG-ha/Argusai/releases) | [Installation](wiki/Installation.md) |
 
-Windows needs WebView2 Runtime. macOS desktop automation requires system permissions. Linux needs GTK and WebKitGTK desktop libraries. External models, scanners, reverse CLIs and devices are prepared for the features you use; see [installation](wiki/Installation.md).
+Windows needs WebView2 Runtime; Windows ARM64 also needs the native Microsoft .NET Desktop Runtime. macOS desktop automation requires system permissions. Linux needs GTK and WebKitGTK desktop libraries. External models, scanners, reverse CLIs and devices are prepared for the features you use; see [installation](wiki/Installation.md).
 
 <details>
 <summary><strong>Build, development and release</strong></summary>

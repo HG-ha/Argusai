@@ -4,10 +4,36 @@ from __future__ import annotations
 
 import os
 import sys
+import sysconfig
 from pathlib import Path
 
 
 WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
+
+
+def configure_windows_gui_runtime() -> None:
+    """Use the native Windows Desktop CLR for ARM64 Python.
+
+    pythonnet's default .NET Framework loader ships x86/x64 native helpers.
+    Selecting CoreCLR before pywebview imports WinForms avoids loading an
+    x64 helper into an ARM64 process. Explicit user runtime settings win.
+    """
+    if sys.platform != "win32" or sysconfig.get_platform().lower() != "win-arm64":
+        return
+    runtime = os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
+    if runtime.lower() == "coreclr":
+        local_config = Path(__file__).resolve().with_name("windows-arm64.runtimeconfig.json")
+        frozen_config = (
+            Path(sys.executable).resolve().parent
+            / "argusai"
+            / "gui"
+            / "windows-arm64.runtimeconfig.json"
+        )
+        runtime_config = frozen_config if getattr(sys, "frozen", False) and frozen_config.is_file() else local_config
+        os.environ.setdefault(
+            "PYTHONNET_CORECLR_RUNTIME_CONFIG",
+            str(runtime_config),
+        )
 
 
 def debug_log(message: str) -> None:
