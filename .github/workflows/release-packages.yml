@@ -276,11 +276,19 @@ jobs:
           if not installation:
               raise SystemExit("MSVC ARM64 tools are missing from the runner")
           developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
-          # cmd /S strips the first and last quote. Wrap the complete command so
-          # the quoted batch-file path survives when Visual Studio lives under
-          # Program Files.
-          command = f'""{developer}" -no_logo -arch=arm64 -host_arch=arm64 >nul && set"'
-          environment = subprocess.check_output([os.environ["COMSPEC"], "/d", "/s", "/c", command], text=True)
+          # A wrapper avoids cmd.exe's ambiguous /S quote handling for the
+          # Visual Studio path under Program Files. It also preserves the
+          # environment established by VsDevCmd before printing it.
+          wrapper = Path(os.environ["RUNNER_TEMP"]) / "argusai-vs-arm64-env.cmd"
+          wrapper.write_text(
+              "@echo off\r\n"
+              f'call "{developer}" -no_logo -arch=arm64 -host_arch=arm64 >nul\r\n'
+              "if errorlevel 1 exit /b %errorlevel%\r\n"
+              "set\r\n",
+              encoding="utf-8",
+          )
+          environment = subprocess.check_output(
+              [os.environ["COMSPEC"], "/d", "/c", str(wrapper)], text=True)
           for line in environment.splitlines():
               key, separator, value = line.partition("=")
               if separator and key and not key.startswith("="):

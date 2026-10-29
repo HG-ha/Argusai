@@ -211,6 +211,10 @@ def source_repository(monkeypatch, tmp_path):
     repository = tmp_path / "repository"
     repository.mkdir()
     subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+    # Keep the fixture's object and archive bytes deterministic even when the
+    # Windows runner has core.autocrlf=true in its global Git configuration.
+    subprocess.run(["git", "-C", str(repository), "config", "core.autocrlf", "false"], check=True)
+    subprocess.run(["git", "-C", str(repository), "config", "core.eol", "lf"], check=True)
     hooks = repository / ".git/fixture-empty-hooks"
     hooks.mkdir()
     subprocess.run(["git", "-C", str(repository), "config", "core.hooksPath", str(hooks)], check=True)
@@ -408,13 +412,17 @@ def test_windows_arm_native_dependency_preparation_uses_static_openssl_dynamic_c
         path.write_bytes(b"fixture")
     monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "programs"))
     monkeypatch.setenv("COMSPEC", "fixture-cmd")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("VCPKG_INSTALLATION_ROOT", str(vcpkg))
     monkeypatch.setenv("GITHUB_ENV", str(tmp_path / "github-env"))
     monkeypatch.setattr(shutil, "which", lambda command: None)
     calls = []
     def output(command, **kwargs):
         if command[0] == "fixture-cmd":
-            assert "-arch=arm64 -host_arch=arm64" in command[-1]
+            wrapper = Path(command[-1])
+            contents = wrapper.read_text(encoding="utf-8")
+            assert 'call "' in contents
+            assert "-arch=arm64 -host_arch=arm64" in contents
             return "VSCMD_ARG_HOST_ARCH=arm64\nVSCMD_ARG_TGT_ARCH=arm64\nINCLUDE=arm-headers\n"
         if command[0] == "rustc":
             return "host: aarch64-pc-windows-msvc\n"
