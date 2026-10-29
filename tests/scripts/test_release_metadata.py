@@ -403,6 +403,11 @@ def test_windows_arm_native_dependency_preparation_uses_static_openssl_dynamic_c
     import os
     import shutil
     monkeypatch.setattr(os, "environ", dict(os.environ))
+    # The real ARM job exports these values before running this test suite.
+    # Exercise the preparation step from a clean input environment so the
+    # assertions verify every value it is responsible for exporting.
+    for name in ("OPENSSL_DIR", "OPENSSL_STATIC", "OPENSSL_NO_VENDOR", "CARGO_BUILD_TARGET"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.chdir(tmp_path)
     vcpkg = tmp_path / "vcpkg"
     openssl = vcpkg / "installed/arm64-windows-static-md"
