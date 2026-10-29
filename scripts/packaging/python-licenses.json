@@ -98,22 +98,22 @@
     {
       "package": "pywebview",
       "component": "Microsoft.Web.WebView2",
-      "version": "1.0.3856.49",
-      "source": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3856.49",
+      "version": "1.0.4258.31",
+      "source": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4258.31",
       "binaries": {
-        "webview/lib/Microsoft.Web.WebView2.Core.dll": "8219a3135436c147f8eb02fb831e99596103eebc18b6d7b794ca93f4c67018a2",
-        "webview/lib/Microsoft.Web.WebView2.WinForms.dll": "c48f8d729dc531288d2c53a6241effe7922ed1b947850b2442008a945c098c48",
-        "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll": "0937030efc718f3da77c5e0978fb5046e381d0bb7b01acaad31a535a1b588a33",
-        "webview/lib/runtimes/win-x64/native/WebView2Loader.dll": "eb5335edeaa6f2122c044e82aab2351dc8c9b4e0fe5e578c71922fb61be285e7",
-        "webview/lib/runtimes/win-x86/native/WebView2Loader.dll": "04814b2c59314c6452d61b821a4a3a5c5f8e8577b55b985f6a7a4b59f8907ec5"
+        "webview/lib/Microsoft.Web.WebView2.Core.dll": "d60e6e94245078cb56e44ebd5f360dc04bf18e460136be93bfc4cfca43b98505",
+        "webview/lib/Microsoft.Web.WebView2.WinForms.dll": "84b5772260dbdfe95591197edc9315dcd2cc86ad610e4b14ddd5e4291e31a381",
+        "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll": "4f48cb32d34298c86cca2108057eea0d900b5e422575e926e8086318a0b9cbf0",
+        "webview/lib/runtimes/win-x64/native/WebView2Loader.dll": "3426dcc55fdfb8b5e7ac623cf33b4ccf283fbf68a0c5a65bddfdb4d749a8abee",
+        "webview/lib/runtimes/win-x86/native/WebView2Loader.dll": "87c61e2cae380112c60853e28178b8ea9a0d63739fc03cead680d4ad3fde6b7d"
       },
       "documents": [
         {
-          "file": "webview2-1.0.3856.49.LICENSE.txt",
-          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+          "file": "webview2-1.0.4258.31.LICENSE.txt",
+          "sha256": "324083bf015092054be9d5851dafa1b79cbfab3331ff983476d502839515d8bb"
         },
         {
-          "file": "webview2-1.0.3856.49.NOTICE.txt",
+          "file": "webview2-1.0.4258.31.NOTICE.txt",
           "sha256": "106423785c5b7eba0a8e61d1837f2132e9c828e20ad530f565d981c1df60dd90"
         }
       ]

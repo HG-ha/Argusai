@@ -11,7 +11,10 @@ license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 dependencies = [
     "httpx>=0.28.1",
     "playwright>=1.58.0",
-    "pywebview>=5.0",
+    # pywebview 6.2.1 imports a .NET Framework-only private file-dialog type
+    # under CoreCLR. Pin the reviewed upstream fix until it reaches PyPI; this
+    # keeps native Windows ARM64 source installs and frozen builds usable.
+    "pywebview @ git+https://github.com/r0x0r/pywebview.git@ec11e828642069eb9b946c1e56dbf0fd7b6e7299",
     "pyyaml>=6.0",
     "jinja2>=3.1.4",
     "cryptography>=44.0",
@@ -50,6 +53,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "argusai/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["argusai"]
