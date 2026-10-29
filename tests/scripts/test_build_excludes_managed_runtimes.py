@@ -45,6 +45,10 @@ def test_native_defaults(monkeypatch, system, mode, tag):
     if system == "Darwin":
         assert "--macos-create-app-bundle" in flags
         assert not any("include-data-dir=argusai/vendor" in flag for flag in flags)
+        assert not any("include-raw-dir=argusai/vendor" in flag for flag in flags)
+    else:
+        assert "--include-raw-dir=argusai/vendor/sqlmap=argusai/vendor/sqlmap" in flags
+        assert "--include-data-dir=argusai/vendor/sqlmap=argusai/vendor/sqlmap" not in flags
 
 
 @pytest.mark.parametrize("system,argv", [
@@ -130,6 +134,16 @@ def test_windows_arm64_preparation_requires_runtime_config(monkeypatch, tmp_path
     args = options(monkeypatch, "Windows", machine="ARM64")
     monkeypatch.setattr(build, "ROOT", tmp_path)
     with pytest.raises(ValueError, match="Windows ARM64 .NET runtime configuration"):
+        build.prepare(args)
+
+
+def test_windows_nsis_requirement_is_checked_before_compilation(monkeypatch, tmp_path):
+    args = options(monkeypatch, "Windows", "--nsis", "--skip-webui")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build.shutil, "which", lambda name: None)
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "program-files-x86"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "program-files"))
+    with pytest.raises(ValueError, match="Install NSIS 3"):
         build.prepare(args)
 
 

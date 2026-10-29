@@ -150,6 +150,19 @@ def resolve_identity(identity: str) -> str:
     return identities[0]
 
 
+def resolve_nsis_compiler(args: argparse.Namespace) -> str:
+    compiler = str(args.nsis_path) if args.nsis_path else shutil.which("makensis")
+    if not compiler:
+        for variable in ("ProgramFiles(x86)", "ProgramFiles"):
+            candidate = Path(os.environ.get(variable, "C:/Program Files")) / "NSIS/makensis.exe"
+            if candidate.is_file():
+                compiler = str(candidate)
+                break
+    if not compiler:
+        raise ValueError("Install NSIS 3 or pass --nsis-path")
+    return compiler
+
+
 def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -> list[str]:
     flags = [
         "--standalone", "--enable-plugin=anti-bloat", "--assume-yes-for-downloads",
@@ -164,9 +177,15 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
     for package in ("argusai.vendor.sqlmap", "argusai.vendor.sqlmap.*", "lark_oapi.api", "lark_oapi.api.*"):
         flags.append(f"--nofollow-import-to={package}")
     data = ["argusai/webui/dist", "argusai/report/templates", "argusai/skills"]
+    raw_data: list[str] = []
     flags.append(f"--include-data-dir=build/release-licenses/{args.runtime_arch}=argusai/legal")
     if args.mode != "app":
-        data += ["argusai/vendor/runners", "argusai/vendor/sqlmap"]
+        data.append("argusai/vendor/runners")
+        # sqlmap is intentionally launched from its vendored Python sources.
+        # Nuitka's normal data-directory option excludes code files, which
+        # silently drops sqlmap.py and the modules it imports. Raw directories
+        # preserve that third-party tool exactly as shipped.
+        raw_data.append("argusai/vendor/sqlmap")
         vendor = f"argusai/vendor/innoextract/{args.runtime_arch}"
         if (ROOT / vendor).is_dir():
             data.append(vendor)
@@ -175,6 +194,7 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
                     relative = binary.relative_to(ROOT).as_posix()
                     flags.append(f"--include-data-files={relative}={relative}")
     flags += [f"--include-data-dir={path}={path}" for path in data]
+    flags += [f"--include-raw-dir={path}={path}" for path in raw_data]
     for pattern in ("argusai/webui/node_modules/*", "argusai/webui/src/*", "*/__pycache__/*", "*.pyc"):
         flags.append(f"--noinclude-data-files={pattern}")
     node = "node.exe" if args.system == "Windows" else "node"
@@ -276,6 +296,10 @@ def copy_legal(destination: Path, *roots: Path) -> None:
 
 
 def prepare(args: argparse.Namespace) -> Path | None:
+    # Fail before the expensive native compilation when an explicitly
+    # requested installer cannot be produced on this machine.
+    if args.nsis:
+        resolve_nsis_compiler(args)
     if args.system == "Windows" and args.target_arch == "arm64":
         runtime_config = ROOT / WINDOWS_ARM_RUNTIME_CONFIG
         if not runtime_config.is_file():
@@ -371,15 +395,7 @@ def notarize(path: Path, args: argparse.Namespace) -> None:
 
 
 def nsis(payload: Path, args: argparse.Namespace) -> Path:
-    compiler = str(args.nsis_path) if args.nsis_path else shutil.which("makensis")
-    if not compiler:
-        for variable in ("ProgramFiles(x86)", "ProgramFiles"):
-            candidate = Path(os.environ.get(variable, "C:/Program Files")) / "NSIS/makensis.exe"
-            if candidate.is_file():
-                compiler = str(candidate)
-                break
-    if not compiler:
-        raise ValueError("Install NSIS 3 or pass --nsis-path")
+    compiler = resolve_nsis_compiler(args)
     run([sys.executable, "scripts/windows/make_nsis_art.py"])
     installer = args.output / f"{args.app_name}-{args.version}-{args.runtime_arch}-setup.exe"
     defines = {
