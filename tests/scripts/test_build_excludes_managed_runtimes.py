@@ -41,8 +41,14 @@ def test_native_defaults(monkeypatch, system, mode, tag):
     assert not any(f"vendor/{name}" in flag for name in build.REMOVED_RUNTIMES for flag in flags if flag.startswith("--include"))
     if system == "Windows":
         assert "--windows-console-mode=hide" in flags
+        assert "--disable-plugin=pywebview" in flags
+        assert "--user-package-configuration-file=scripts/packaging/nuitka-package.config.yml" in flags
         assert f"--include-data-files={Path("webview/platforms/win32.py")}=webview/platforms/win32.py" in flags
+        for module in ("winforms", "edgechromium", "webview2core", "mshtml"):
+            assert f"--include-module=webview.platforms.{module}" in flags
     if system == "Darwin":
+        assert "--disable-plugin=pywebview" not in flags
+        assert not any("nuitka-package.config.yml" in flag for flag in flags)
         assert "--macos-create-app-bundle" in flags
         assert not any("include-data-dir=argusai/vendor" in flag for flag in flags)
         assert not any("include-raw-dir=argusai/vendor" in flag for flag in flags)
@@ -153,6 +159,8 @@ def populate_payload(path, args):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture")
     (path / "argusai/vendor/runners").mkdir(parents=True)
+    if args.system == "Windows":
+        (path / "WebView2Loader.dll").write_text("native loader fixture")
 
 
 def test_payload_rejects_missing_resources_and_bundled_runtime(monkeypatch, tmp_path):
@@ -175,6 +183,15 @@ def test_payload_requires_frontend_notices(monkeypatch, tmp_path):
     populate_payload(tmp_path, args)
     (tmp_path / "argusai/webui/dist/THIRD_PARTY_NOTICES.txt").unlink()
     with pytest.raises(ValueError, match="THIRD_PARTY_NOTICES.txt"):
+        build.verify_payload(tmp_path, args)
+
+
+def test_windows_payload_requires_root_webview2_loader(monkeypatch, tmp_path):
+    args = options(monkeypatch, "Windows")
+    monkeypatch.setattr(build, "ROOT", tmp_path / "source")
+    populate_payload(tmp_path, args)
+    (tmp_path / "WebView2Loader.dll").unlink()
+    with pytest.raises(ValueError, match="WebView2Loader.dll"):
         build.verify_payload(tmp_path, args)
 
 

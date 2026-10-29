@@ -201,6 +201,18 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
     flags.append(f"--noinclude-dlls=playwright/driver/{node}")
     if args.system == "Windows":
         flags += ["--include-package=clr_loader", "--include-package=pythonnet",
+                  # pywebview selects WinForms dynamically. Nuitka cannot see
+                  # that import chain. Nuitka 4.1.3's built-in pywebview
+                  # plug-in also rejects the newer split webview2core module,
+                  # so replace that stale platform allow-list with explicit
+                  # Windows backend modules. The generic data/DLL plug-ins
+                  # still collect webview/lib and WebView2Loader.
+                  "--disable-plugin=pywebview",
+                  "--user-package-configuration-file=scripts/packaging/nuitka-package.config.yml",
+                  "--include-module=webview.platforms.winforms",
+                  "--include-module=webview.platforms.edgechromium",
+                  "--include-module=webview.platforms.webview2core",
+                  "--include-module=webview.platforms.mshtml",
                   f"--windows-console-mode={'force' if args.console else 'hide'}"]
         if args.target_arch == "arm64":
             flags += ["--msvc=latest",
@@ -358,6 +370,8 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
                 "argusai/vendor/runners", "argusai/vendor/sqlmap/sqlmap.py"]
     required += [f"argusai/core/reverse/ghidra_scripts/{name}" for name in GHIDRA_SCRIPTS]
     required += [f"argusai/legal/{name}" for name in LEGAL_FILES]
+    if args.system == "Windows":
+        required.append("WebView2Loader.dll")
     if args.system == "Windows" and args.target_arch == "arm64":
         required.append(WINDOWS_ARM_RUNTIME_CONFIG)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch

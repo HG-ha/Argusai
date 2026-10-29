@@ -1,0 +1,20 @@
+# Keep WebView2Loader beside the Windows executable. The current pywebview
+# package stores it below lib/runtimes, but the .NET WebView2 P/Invoke loader
+# does not reliably honor a PATH update made after process start.
+- module-name: 'argusai' # checksum: d1b28101
+  dlls:
+    - by_code:
+        setup_code: 'import os, webview'
+        filename_code: "os.path.join(os.path.dirname(webview.__file__), 'lib', 'runtimes', 'win-x64', 'native', 'WebView2Loader.dll')"
+      dest_path: '.'
+      when: 'win32 and arch_amd64'
+    - by_code:
+        setup_code: 'import os, webview'
+        filename_code: "os.path.join(os.path.dirname(webview.__file__), 'lib', 'runtimes', 'win-arm64', 'native', 'WebView2Loader.dll')"
+      dest_path: '.'
+      when: 'win32 and arch_arm64'
+    - by_code:
+        setup_code: 'import os, webview'
+        filename_code: "os.path.join(os.path.dirname(webview.__file__), 'lib', 'runtimes', 'win-x86', 'native', 'WebView2Loader.dll')"
+      dest_path: '.'
+      when: 'win32 and arch_x86'
