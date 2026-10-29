@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="{{ 'zh-CN' if locale == 'zh' else 'en' }}">
+<head>
+<meta charset="utf-8">
+<title>{{ labels.title }} — {{ target.name }}</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --border: #30363d; --fg: #e6edf3;
+    --muted: #7d8590; --accent: #58a6ff;
+    --crit: #ff4d4f; --high: #ff7a45; --med: #faad14; --low: #52c4ff; --info: #8c8c8c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.55 -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+  header { padding: 24px 32px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 0 4px; font-size: 22px; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  .severity-bar { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .pill { padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: 12px;
+          background: var(--panel); border: 1px solid var(--border); }
+  .pill.critical { color: var(--crit); border-color: var(--crit); }
+  .pill.high { color: var(--high); border-color: var(--high); }
+  .pill.medium { color: var(--med); border-color: var(--med); }
+  .pill.low { color: var(--low); border-color: var(--low); }
+  .pill.info { color: var(--info); }
+  main { padding: 24px 32px; max-width: 1100px; }
+  .finding { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+             margin-bottom: 14px; overflow: hidden; }
+  .finding-head { display: flex; justify-content: space-between; align-items: baseline;
+                  padding: 14px 18px; cursor: pointer; user-select: none; }
+  .finding-title { font-weight: 600; }
+  .finding-body { padding: 0 18px 16px; border-top: 1px solid var(--border); display: none; }
+  .finding.open .finding-body { display: block; }
+  .meta-line { color: var(--muted); font-size: 12px; margin: 8px 0; }
+  code, pre { font: 12px/1.45 Consolas, Menlo, monospace; }
+  pre { background: #0a0d12; padding: 12px; border-radius: 6px; overflow: auto;
+        border: 1px solid var(--border); }
+  .sev-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+  .sev-dot.critical { background: var(--crit); }
+  .sev-dot.high { background: var(--high); }
+  .sev-dot.medium { background: var(--med); }
+  .sev-dot.low { background: var(--low); }
+  .sev-dot.info { background: var(--info); }
+  a { color: var(--accent); text-decoration: none; }
+  .url { word-break: break-all; color: var(--muted); }
+  .remediation { margin-top: 10px; padding: 10px 12px; background: #0a0d12;
+                 border-left: 3px solid var(--accent); border-radius: 4px; }
+  .filter-bar { margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .filter-btn { padding: 4px 12px; background: var(--panel); border: 1px solid var(--border);
+                border-radius: 999px; cursor: pointer; color: var(--fg); }
+  .filter-btn.active { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ labels.title }} — {{ target.name }}</h1>
+  <div class="meta">
+    <a href="{{ target.url }}">{{ target.url }}</a> · {{ labels.scope }}:
+    {{ target.scope | join(', ') or labels['default'] }} ·
+    {{ labels.finished }} {{ finished }} · {{ labels.in }} {{ elapsed }}{{ labels.seconds }}
+  </div>
+  <div class="severity-bar">
+    {% for sev in ['critical','high','medium','low','info'] %}
+      <span class="pill {{ sev }}">{{ labels.severity[sev] }} · {{ severity[sev] }}</span>
+    {% endfor %}
+  </div>
+</header>
+<main>
+  <div class="filter-bar">
+    <button class="filter-btn active" data-filter="all">{{ '全部' if locale == 'zh' else 'All' }} ({{ total }})</button>
+    {% for sev in ['critical','high','medium','low','info'] %}
+      {% if severity[sev] %}<button class="filter-btn" data-filter="{{ sev }}">{{ labels.severity[sev] }} ({{ severity[sev] }})</button>{% endif %}
+    {% endfor %}
+  </div>
+
+  {% for f in findings %}
+    <section class="finding" data-severity="{{ f.severity.value }}">
+      <div class="finding-head" onclick="this.parentElement.classList.toggle('open')">
+        <div>
+          <span class="sev-dot {{ f.severity.value }}"></span>
+          <span class="finding-title">{{ f.title }}</span>
+        </div>
+        <code style="color: var(--muted);">{{ f.id }}</code>
+      </div>
+      <div class="finding-body">
+        <div class="meta-line">
+          {{ labels.check }}: <code>{{ f.check }}</code> ·
+          {{ '严重性' if locale == 'zh' else 'severity' }}: <strong>{{ labels.severity[f.severity.value] }}</strong>
+          {% if f.cwe %} · CWE: {{ f.cwe }}{% endif %}
+        </div>
+        {% if f.url %}<div class="url">URL: <a href="{{ f.url }}">{{ f.url }}</a></div>{% endif %}
+        {% if f.description %}<p>{{ f.description }}</p>{% endif %}
+        {% if f.evidence %}
+          <details>
+            <summary>{{ labels.evidence }}</summary>
+            <pre>{{ dumps(f.evidence) }}</pre>
+          </details>
+        {% endif %}
+        {% if f.remediation %}
+          <div class="remediation"><strong>{{ labels.remediation }}.</strong> {{ f.remediation }}</div>
+        {% endif %}
+      </div>
+    </section>
+  {% endfor %}
+
+  {% if not findings %}
+    <p style="color: var(--muted);">{{ '未记录到安全发现。' if locale == 'zh' else 'No findings recorded.' }}</p>
+  {% endif %}
+
+  {% if errors %}
+    <h2 style="border-top: 1px solid var(--border); padding-top: 18px;">{{ labels.scan_errors }}</h2>
+    <ul>
+      {% for e in errors %}<li><code>{{ e.check }}</code>: {{ e.error }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+</main>
+<script>
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.filter;
+      document.querySelectorAll('.finding').forEach(el => {
+        el.style.display = (f === 'all' || el.dataset.severity === f) ? '' : 'none';
+      });
+    });
+  });
+</script>
+</body>
+</html>

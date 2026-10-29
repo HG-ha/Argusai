@@ -1,0 +1,43 @@
+{
+  "packages": {
+    "css-render": {
+      "kind": "upstream-license",
+      "version": "0.15.14",
+      "metadata_source": "https://registry.npmjs.org/css-render/0.15.14",
+      "source": "https://raw.githubusercontent.com/07akioni/css-render/4fd3b95ecedb17bffafabc00e93ce6eab843e716/LICENSE",
+      "file": "css-render-0.15.14.LICENSE.txt",
+      "file_sha256": "306f57de421d7ef77f7dc145e1234f9c0ec76b710d28769b4d98ef3c4f8a64bd"
+    },
+    "@css-render/plugin-bem": {
+      "kind": "upstream-license",
+      "version": "0.15.14",
+      "metadata_source": "https://registry.npmjs.org/@css-render%2fplugin-bem/0.15.14",
+      "source": "https://raw.githubusercontent.com/07akioni/css-render/4fd3b95ecedb17bffafabc00e93ce6eab843e716/LICENSE",
+      "file": "css-render-0.15.14.LICENSE.txt",
+      "file_sha256": "306f57de421d7ef77f7dc145e1234f9c0ec76b710d28769b4d98ef3c4f8a64bd"
+    },
+    "@css-render/vue3-ssr": {
+      "kind": "upstream-license",
+      "version": "0.15.14",
+      "metadata_source": "https://registry.npmjs.org/@css-render%2fvue3-ssr/0.15.14",
+      "source": "https://raw.githubusercontent.com/07akioni/css-render/4fd3b95ecedb17bffafabc00e93ce6eab843e716/LICENSE",
+      "file": "css-render-0.15.14.LICENSE.txt",
+      "file_sha256": "306f57de421d7ef77f7dc145e1234f9c0ec76b710d28769b4d98ef3c4f8a64bd"
+    },
+    "vdirs": {
+      "kind": "metadata-only",
+      "version": "0.1.8",
+      "metadata_source": "https://registry.npmjs.org/vdirs/0.1.8",
+      "metadata": {
+        "name": "vdirs",
+        "version": "0.1.8",
+        "author": "07akioni",
+        "license": "MIT"
+      },
+      "limitation": "The npm artifact has no LICENSE/COPYING text. Its declared gitHead a437193b3399502247732fc448bf2ddaa39916d7 was not retrievable in the public 07akioni/vdirs repository during review. Obtain the upstream copyright and license notice before treating this entry as complete.",
+      "reference_source": "https://raw.githubusercontent.com/spdx/license-list-data/d46e94e2c78ceede1cfc63cfa0396472d2798d4c/text/MIT.txt",
+      "reference_file": "MIT-SPDX-reference.txt",
+      "reference_file_sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+    }
+  }
+}

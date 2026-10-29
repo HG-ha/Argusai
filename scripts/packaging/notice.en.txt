@@ -1,0 +1,30 @@
+﻿ArgusAI Security Workbench
+
+A local desktop app for authorized security review of web apps, mobile
+packages, and native binaries. It includes an AI assistant, a passive
+proxy, a reverse workbench, checks, and reports.
+
+ArgusAI is not “a scanner with a chat box”. Work can be planned, tool-
+driven, confirmed, archived, and resumed. Data stays on this machine;
+secrets are not uploaded to an ArgusAI server.
+
+Scope
+- Use it only on sites and samples you own, or targets you are written-
+  authorized to test.
+- Probes are non-destructive by default. Do not use it for unauthorized
+  scanning, credential stuffing, or destructive payloads.
+- Do not send requests outside the declared scope.
+
+After install
+- Launch from the Start Menu or desktop shortcut.
+- Start-at-logon can be enabled in Settings and also appears under
+  Windows Settings → Apps → Startup.
+- Uninstall from the Start Menu shortcut.
+
+License
+ArgusAI's original code is licensed under GNU GPL version 3 only
+(GPL-3.0-only). Individuals and businesses may use it commercially under
+the GPL. There is no warranty to the extent permitted by applicable law.
+Third-party components retain their own licenses. Full terms and notices
+are in licenses/; source: https://github.com/HG-ha/Argusai .
+The safety guidance above does not add to or withdraw the GPL rights.

@@ -1,0 +1,333 @@
+name: Release packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build; empty uses the selected branch. Manual runs upload artifacts only."
+        required: false
+        type: string
+
+# Compilation jobs only read the repository. Only publish can change a Release.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ github.event.release.tag_name || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  ARGUSAI_BUILD_JOBS: "2"
+  UV_LINK_MODE: copy
+
+jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Check public documentation
+        run: python scripts/wiki_docs.py check
+      - name: Check version consistency and release tag
+        id: metadata
+        shell: python
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          command = [sys.executable, "scripts/bump_version.py", "--check"]
+          if os.environ.get("RELEASE_TAG"):
+              command += ["--tag", os.environ["RELEASE_TAG"]]
+          subprocess.run(command, check=True)
+          version = subprocess.check_output([sys.executable, "scripts/bump_version.py"], text=True).strip()
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={version}\ncommit={commit}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"## ArgusAI {version}\n\nSource commit: `{commit}`\n")
+
+  source:
+    name: Archive matching source
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Archive matching source and create SHA-256 checksum
+        shell: python
+        run: |
+          import hashlib
+          import os
+          import subprocess
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          version = os.environ["RELEASE_VERSION"]
+          commit = os.environ["SOURCE_COMMIT"]
+          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if actual != commit:
+              raise SystemExit("Source checkout does not match validated commit")
+          package = Path(f"dist/ArgusAI-{version}-source.tar.gz")
+          package.parent.mkdir(parents=True, exist_ok=True)
+          prefix = f"ArgusAI-{version}/"
+          subprocess.run(["git", "archive", "--format=tar.gz", f"--prefix={prefix}",
+                          f"--output={package.resolve()}", commit], check=True)
+          required = ("LICENSE", "THIRD_PARTY_NOTICES.md", "build.py", "pyproject.toml", "uv.lock",
+                      "argusai/webui/package.json", "argusai/webui/package-lock.json",
+                      "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
+                      "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
+                      "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
+                      ".github/workflows/release-packages.yml")
+          with tarfile.open(package, "r:gz") as archive:
+              if archive.pax_headers.get("comment") != commit:
+                  raise SystemExit("Source archive does not identify the validated commit")
+              members = {member.name: member for member in archive.getmembers()}
+              for name in members:
+                  path = PurePosixPath(name)
+                  if ".." in path.parts or ".git" in path.parts or not (name == prefix[:-1] or name.startswith(prefix)):
+                      raise SystemExit(f"Unsafe source archive path: {name}")
+                  relative = path.relative_to(prefix[:-1])
+                  if relative.parts and relative.parts[0] in {"config", "data", "tasks", "sessions", "logs", "settings.json"}:
+                      raise SystemExit(f"Private runtime path in source archive: {name}")
+              for name in required:
+                  member = members.get(prefix + name)
+                  if member is None or not member.isfile() or not member.size:
+                      raise SystemExit(f"Missing or empty tracked source file: {name}")
+          with package.open("rb") as stream:
+              digest = hashlib.file_digest(stream, "sha256").hexdigest()
+          Path(str(package) + ".sha256").write_text(f"{digest}  {package.name}\n", encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"## {package.name}\n\nSource commit: `{commit}`\n\nSHA-256: `{digest}`\n")
+      - name: Upload source archive and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: ArgusAI-${{ needs.validate.outputs.version }}-source
+          path: |
+            dist/ArgusAI-${{ needs.validate.outputs.version }}-source.tar.gz
+            dist/ArgusAI-${{ needs.validate.outputs.version }}-source.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  build:
+    name: Build ${{ matrix.runtime }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            architecture: x64
+            runtime: win-x64
+            build_args: --nsis
+            suffix: -setup.exe
+          - os: macos-14
+            architecture: arm64
+            runtime: macos-arm64
+            build_args: --dmg
+            suffix: .dmg
+          - os: ubuntu-24.04
+            architecture: x64
+            runtime: linux-x64
+            build_args: --onefile
+            suffix: .tar.gz
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      PACKAGE_PATH: dist/ArgusAI-${{ needs.validate.outputs.version }}-${{ matrix.runtime }}${{ matrix.suffix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.architecture }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: argusai/webui/package-lock.json
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config ccache patchelf \
+            libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress -y
+      - name: Install locked Python dependencies
+        run: uv sync --locked --group build
+      - name: Test release tooling
+        run: uv run --locked --group build pytest tests/scripts/ -q
+      - name: Build frontend
+        working-directory: argusai/webui
+        run: |
+          npm ci
+          npm run build
+      - name: Collect frontend third-party notices
+        run: uv run --locked --group build python scripts/frontend_notices.py
+      - name: Build native package
+        run: uv run --locked --group build python build.py ${{ matrix.build_args }} --skip-webui
+      - name: Smoke-test packaged CLI and version
+        shell: python
+        run: |
+          import json
+          import os
+          import platform
+          import plistlib
+          import subprocess
+          from pathlib import Path
+
+          system = platform.system()
+          if system == "Windows":
+              executable = Path("dist/ArgusAI.dist/ArgusAI.exe")
+          elif system == "Darwin":
+              app = Path("dist/ArgusAI.app")
+              with (app / "Contents/Info.plist").open("rb") as stream:
+                  name = plistlib.load(stream)["CFBundleExecutable"]
+              executable = app / "Contents/MacOS" / name
+          else:
+              executable = Path("dist/ArgusAI")
+          result = subprocess.run([str(executable.resolve()), "version", "--json"],
+                                  check=True, capture_output=True, text=True, timeout=120)
+          print(result.stdout)
+          metadata = json.loads(result.stdout)
+          if metadata.get("version") != os.environ["RELEASE_VERSION"]:
+              raise SystemExit("Packaged executable version does not match release metadata")
+      - name: Verify package and create SHA-256 checksum
+        shell: python
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+
+          package = Path(os.environ["PACKAGE_PATH"])
+          if not package.is_file() or not package.stat().st_size:
+              raise SystemExit(f"Missing or empty release package: {package}")
+          with package.open("rb") as stream:
+              digest = hashlib.file_digest(stream, "sha256").hexdigest()
+          Path(str(package) + ".sha256").write_text(f"{digest}  {package.name}\n", encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"## {package.name}\n\nSHA-256: `{digest}`\n")
+      - name: Upload package and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: ArgusAI-${{ needs.validate.outputs.version }}-${{ matrix.runtime }}
+          path: |
+            ${{ env.PACKAGE_PATH }}
+            ${{ env.PACKAGE_PATH }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Attach verified packages to Release
+    if: github.event_name == 'release'
+    needs: [validate, build, source]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ArgusAI-${{ needs.validate.outputs.version }}-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify source, all three packages and checksums
+        working-directory: release-assets
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+        shell: python
+        run: |
+          import hashlib
+          import os
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          version = os.environ["RELEASE_VERSION"]
+          suffixes = ("win-x64-setup.exe", "macos-arm64.dmg", "linux-x64.tar.gz", "source.tar.gz")
+          packages = [Path(f"ArgusAI-{version}-{suffix}") for suffix in suffixes]
+          for package in packages:
+              if not package.is_file() or not package.stat().st_size:
+                  raise SystemExit(f"Missing or empty release package: {package}")
+              if not Path(str(package) + ".sha256").is_file():
+                  raise SystemExit(f"Missing release checksum: {package}")
+              checksum = Path(str(package) + ".sha256").read_text(encoding="utf-8").strip()
+              with package.open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              if checksum != f"{digest}  {package.name}":
+                  raise SystemExit(f"Checksum mismatch: {package}")
+          expected = {path.name for package in packages for path in (package, Path(str(package) + ".sha256"))}
+          if {path.name for path in Path(".").iterdir()} != expected:
+              raise SystemExit("Unexpected files or directories in release assets")
+          prefix = f"ArgusAI-{version}/"
+          required = ("LICENSE", "THIRD_PARTY_NOTICES.md", "build.py", "pyproject.toml", "uv.lock",
+                      "argusai/webui/package.json", "argusai/webui/package-lock.json",
+                      "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
+                      "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
+                      "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
+                      ".github/workflows/release-packages.yml")
+          try:
+              with tarfile.open(packages[-1], "r:gz") as archive:
+                  if archive.pax_headers.get("comment") != os.environ["SOURCE_COMMIT"]:
+                      raise SystemExit("Source archive does not identify the validated commit")
+                  members = {member.name: member for member in archive.getmembers()}
+                  for name, member in members.items():
+                      path = PurePosixPath(name)
+                      if ".." in path.parts or ".git" in path.parts or not (name == prefix[:-1] or name.startswith(prefix)):
+                          raise SystemExit(f"Unsafe source archive path: {name}")
+                      relative = path.relative_to(prefix[:-1])
+                      if relative.parts and relative.parts[0] in {"config", "data", "tasks", "sessions", "logs", "settings.json"}:
+                          raise SystemExit(f"Private runtime path in source archive: {name}")
+                  for name in required:
+                      member = members.get(prefix + name)
+                      if member is None or not member.isfile() or not member.size:
+                          raise SystemExit(f"Missing or empty tracked source file: {name}")
+          except (OSError, tarfile.TarError) as exc:
+              raise SystemExit(f"Invalid source archive: {exc}") from exc
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber

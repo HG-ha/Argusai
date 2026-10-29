@@ -1,0 +1,15 @@
+# Keep packager scripts and macOS entitlements as LF so
+# git archive on Windows does not break codesign / bash.
+*.sh text eol=lf
+*.command text eol=lf
+*.entitlements text eol=lf
+scripts/macos/*.sh text eol=lf
+scripts/macos/*.py text eol=lf
+LICENSE text eol=lf
+# Preserve the exact upstream bytes checked by the notice collector.
+scripts/packaging/*.LICENSE.txt text eol=lf
+scripts/packaging/webview2-*.NOTICE.txt text eol=lf
+scripts/packaging/*.json text eol=lf
+# Keep the checksum-pinned upstream license's original trailing space.
+scripts/packaging/webview2-*.LICENSE.txt whitespace=-blank-at-eol
+scripts/packaging/MIT-SPDX-reference.txt text eol=lf

@@ -1,0 +1,68 @@
+{
+  "packages": {
+    "pythonnet": {
+      "kind": "upstream-license",
+      "version": "3.0.5",
+      "source": "https://files.pythonhosted.org/packages/9a/d6/1afd75edd932306ae9bd2c2d961d603dc2b52fcec51b04afea464f1f6646/pythonnet-3.0.5.tar.gz",
+      "archive_sha256": "48e43ca463941b3608b32b4e236db92d8d40db4c58a75ace902985f76dac21cf",
+      "archive_member": "pythonnet-3.0.5/LICENSE",
+      "file": "python-pythonnet-3.0.5.LICENSE.txt",
+      "sha256": "e1dc3a6ff017a6800dc27a7220500f512b95fbcd996d38ebbbff85c693245369"
+    },
+    "clr-loader": {
+      "kind": "upstream-license",
+      "version": "0.2.10",
+      "source": "https://files.pythonhosted.org/packages/18/24/c12faf3f61614b3131b5c98d3bf0d376b49c7feaa73edca559aeb2aee080/clr_loader-0.2.10.tar.gz",
+      "archive_sha256": "81f114afbc5005bafc5efe5af1341d400e22137e275b042a8979f3feb9fc9446",
+      "archive_member": "clr_loader-0.2.10/LICENSE",
+      "file": "python-clr-loader-0.2.10.LICENSE.txt",
+      "sha256": "b00f9a4b112b44f91276ad8388ed470ad36668ff80f56f15e1e6981c85e6d23d"
+    },
+    "ordered-set": {
+      "kind": "upstream-license",
+      "version": "4.1.0",
+      "source": "https://files.pythonhosted.org/packages/4c/ca/bfac8bc689799bcca4157e0e0ced07e70ce125193fc2e166d2e685b7e2fe/ordered-set-4.1.0.tar.gz",
+      "archive_sha256": "694a8e44c87657c59292ede72891eb91d34131f6531463aab3009191c77364a8",
+      "archive_member": "ordered-set-4.1.0/MIT-LICENSE",
+      "file": "python-ordered-set-4.1.0.LICENSE.txt",
+      "sha256": "0cf8f55f36dc1306b3fe89bf29e29a0c742f279f038d149244319e593ab16ca4"
+    },
+    "primp": {
+      "kind": "missing-original",
+      "version": "1.2.3",
+      "source": "https://pypi.org/project/primp/1.2.3/",
+      "limitation": "The installed Python wrapper lacks its original license notice. The locked source archive declares MIT at workspace level and includes component MIT/Apache/ISC texts, but the wrapper notice, educational-use wording and full static dependency notices remain unresolved."
+    },
+    "proxy-tools": {
+      "kind": "missing-original",
+      "version": "0.1.0",
+      "source": "https://pypi.org/project/proxy-tools/0.1.0/",
+      "limitation": "The locked source archive has no full LICENSE. Package metadata says MIT while source headers say BSD with Werkzeug-related copyright. Preserve the actual source notices and obtain the matching complete upstream text; do not treat the metadata alone as clearance."
+    }
+  },
+  "binary_supplements": [
+    {
+      "package": "pywebview",
+      "component": "Microsoft.Web.WebView2",
+      "version": "1.0.3856.49",
+      "source": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3856.49",
+      "binaries": {
+        "webview/lib/Microsoft.Web.WebView2.Core.dll": "8219a3135436c147f8eb02fb831e99596103eebc18b6d7b794ca93f4c67018a2",
+        "webview/lib/Microsoft.Web.WebView2.WinForms.dll": "c48f8d729dc531288d2c53a6241effe7922ed1b947850b2442008a945c098c48",
+        "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll": "0937030efc718f3da77c5e0978fb5046e381d0bb7b01acaad31a535a1b588a33",
+        "webview/lib/runtimes/win-x64/native/WebView2Loader.dll": "eb5335edeaa6f2122c044e82aab2351dc8c9b4e0fe5e578c71922fb61be285e7",
+        "webview/lib/runtimes/win-x86/native/WebView2Loader.dll": "04814b2c59314c6452d61b821a4a3a5c5f8e8577b55b985f6a7a4b59f8907ec5"
+      },
+      "documents": [
+        {
+          "file": "webview2-1.0.3856.49.LICENSE.txt",
+          "sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+        },
+        {
+          "file": "webview2-1.0.3856.49.NOTICE.txt",
+          "sha256": "106423785c5b7eba0a8e61d1837f2132e9c828e20ad530f565d981c1df60dd90"
+        }
+      ]
+    }
+  ]
+}

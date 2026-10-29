@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+dist/
+build/
+nuitka-crash-report.xml
+
+# Node
+node_modules/
+argusai/webui/dist/
+
+# Vendor toolchain — managed by scripts/vendor_runtime.py
+# We do NOT commit Node runtimes / npm caches / npm install trees / WABT
+# binaries — they're 80+ MB combined and trivially rebuildable on any
+# fresh checkout via `python scripts/vendor_runtime.py`. The only things
+# under vendor/ that are part of OUR source are the hand-written JS
+# runners (runners/) and the sqlmap fork (sqlmap/), which we re-allow
+# explicitly below.
+argusai/vendor/*
+!argusai/vendor/runners/
+!argusai/vendor/sqlmap/
+
+# argusai runtime / local config (never publish)
+runs/
+.profile/
+tasks/
+proxy_ca/
+config/
+settings.json
+.env
+.env.*
+!.env.example
+
+# Default data_root and common spillover dirs if created under the repo root
+/data/
+/sessions/
+/assistant_sessions/
+/session_vault/
+/reverse_jobs/
+/knowledge/
+/poc_pages/
+/tools/
+/proxy/
+
+# Mobile / signing samples that may land in the working tree
+*.apk
+*.apks
+*.aab
+*.ipa
+*.keystore
+*.jks
+*.p12
+
+# Packaged artifacts copied back from build hosts
+dist-release/
+
+# Local one-off Termux helpers (never ship)
+scripts/_termux_*
+scripts/_push_termux_*
+
+# uv
+.python-version
+
+# Generated i18n flatten dumps (locale *.js modules are the source)
+argusai/webui/src/i18n/locales/_*.flat.json
+
+# IDE
+.vscode/
+.idea/
+.claude/
+# Local design / engineering docs ? keep on disk, do not publish
+docs/
+
+#
+.cursor/

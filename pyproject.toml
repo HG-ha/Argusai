@@ -1,0 +1,100 @@
+[project]
+name = "argusai"
+# Single source of truth: argusai/__init__.py __version__ (read by hatchling
+# below, by the GUI via app_info(), and synced to the webui by
+# scripts/bump_version.py). Bump with: python scripts/bump_version.py X.Y.Z
+dynamic = ["version"]
+description = "ArgusAI Security Workbench, a local desktop web security audit toolkit"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+dependencies = [
+    "httpx>=0.28.1",
+    "playwright>=1.58.0",
+    "pywebview>=5.0",
+    "pyyaml>=6.0",
+    "jinja2>=3.1.4",
+    "cryptography>=44.0",
+    "ddgs>=9.14.2",
+    "beautifulsoup4>=4.14.3",
+    "curl-cffi>=0.7.4",
+    "requests>=2.34.1",
+    "pillow>=11.0",
+    "comtypes>=1.4.0; sys_platform == 'win32'",
+    "croniter>=6.2.4",
+    "agent-client-protocol==0.12.0",
+    "websockets>=17.0.1",
+    "lark-oapi>=1.5.5",
+    "dingtalk-stream>=0.24.3",
+    "segno>=1.6.6",
+    "typer>=0.19.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.43",
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+    "regex>=2024.11.6",
+    "h2>=4.1,<5",
+]
+
+[project.scripts]
+argusai = "argusai.cli:main"
+argusai-channels = "argusai.channels_daemon:main"
+
+# Windows: gui-scripts → pythonw-style launcher (no console window).
+[project.gui-scripts]
+argusai-gui = "argusai.gui:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "argusai/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["argusai"]
+# Everything tracked under argusai/ (skills, report templates, vendor/runners,
+# vendor/sqlmap) already ships via `packages`. Only the frontend toolchain is
+# dev-only: the app serves the built SPA from webui/dist and never reads these.
+exclude = [
+    "argusai/webui/node_modules",
+    "argusai/webui/src",
+    "argusai/webui/index.html",
+    "argusai/webui/test-runon.html",
+    "argusai/webui/vite.config.js",
+    "argusai/webui/package.json",
+    "argusai/webui/package-lock.json",
+]
+
+# Build outputs (webui/dist, vendor/innoextract, …) are gitignored, so
+# `packages` skips them. Do NOT force-include them here: hatchling fails
+# editable installs with FileNotFoundError when the path is absent (fresh
+# clone before ``npm run build`` / ``vendor_runtime.py``).
+#
+# Nuitka packaging (build.py) includes webui/dist and
+# innoextract explicitly when present. For a pip wheel that embeds the SPA,
+# build the frontend first and add a hatch hook / temporary force-include.
+
+[dependency-groups]
+build = [
+    "nuitka>=4.1,<4.2",
+    "ordered-set>=4.1",
+    "zstandard>=0.23",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A deadlocked test used to block the whole suite indefinitely. Cap every test
+# so a hang fails loudly with a stack dump instead of stalling the run.
+timeout = 90
+timeout_method = "thread"
+filterwarnings = [
+    # Windows ProactorEventLoop GCs StreamWriter objects after their loop has
+    # closed; the resulting "Event loop is closed" RuntimeError is a Python
+    # asyncio quirk, not something the application can fix.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]

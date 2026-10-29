@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html><body><pre id="o"></pre>
+<script>
+const RUN_ON_REGEX = /[：:][ \t]*(?=(让我们?|现在|接下来|下一步|然后|那么|好的?[,，]?|首先|其次|最后|另外|此外|不过|但是|可是|服务器|响应|结果|注入|OOB|UTL_HTTP|EXTRACTVALUE|raw_http_send|http_curl|oob_|sandbox_|browser_|第[一二三四五六七八九]|先试|再试|试试|两个|同时))/g
+
+function splitRunOns(text) {
+  return String(text || '').split(/\r?\n/).map((line) => {
+    if (line.length < 80) return line
+    if (/^\s*[-*#>`|]/.test(line)) return line
+    return line.replace(RUN_ON_REGEX, '\n\n')
+  }).join('\n')
+}
+
+const sample = '先试试 URL 编码版本的 EXTRACTVALUE payload：被跳过了。让我生成一个新的 token 并尝试不同的 payload 变体。先试试 UTL_HTTP：UTL_HTTP 返回了 200 OK（正常页面），说明 UTL_HTTP 可能没有执行权限或者 payload 被忽略。让我检查 OOB 回调：UTL_HTTP 也没有回调。让我回到 EXTRACTVALUE 方式，但这次用 raw_http_send 精确控制 payload 字节，避免 curl 可能对特殊字符做处理。同时检查一下第一个 token 280d1cca 是否在延迟回调：两个 token 都没有回调。让我用 raw_http_send 精确发送 EXTRACTVALUE payload，确保 XML 中的特殊字符（引号、分号）不被 curl 转义：好的，我用已有的 token a8f8bbcd 和 raw_http_send 来精确发送 EXTRACTVALUE payload：'
+
+document.getElementById('o').textContent = splitRunOns(sample)
+</script>
+</body></html>

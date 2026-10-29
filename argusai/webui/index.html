@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ArgusAI Security Workbench</title>
+<script>
+// Sync the preferred color theme before paint to avoid a flash.
+(function () {
+  try {
+    var key = "argusai.theme";
+    var stored = localStorage.getItem(key);
+    if (stored === null) {
+      stored = localStorage.getItem("web" + "audit.theme");
+      if (stored !== null) localStorage.setItem(key, stored);
+    }
+    var pref = (stored === "light" || stored === "dark" || stored === "auto") ? stored : "auto";
+    var eff = pref;
+    if (pref === "auto") {
+      eff = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark" : "light";
+    }
+    document.documentElement.setAttribute("data-theme", eff);
+    var loc = localStorage.getItem("argusai.locale") || "";
+    if (loc === "zh") document.documentElement.lang = "zh-CN";
+    else if (loc === "zh-Hant") document.documentElement.lang = "zh-TW";
+    else if (loc) document.documentElement.lang = loc;
+  } catch (e) {
+    document.documentElement.setAttribute("data-theme", "dark");
+  }
+})();
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
