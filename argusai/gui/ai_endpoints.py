@@ -38,6 +38,32 @@ def _run_blocking(coro_factory: Any) -> Any:
 class AIEndpointsMixin:
     """Direct probes against a single AI endpoint (test ping + list models)."""
 
+    def _endpoint_probe_payload(self, endpoint: dict[str, Any] | None) -> dict[str, Any]:
+        """Return draft endpoint fields with a persisted secret when needed.
+
+        The endpoint CRUD API deliberately returns redacted keys.  Settings UI
+        probes may therefore contain ``********abcd`` (or a blank key) while
+        still identifying an existing row by ``index``/``name``.  Only restore
+        that one secret; every other field remains the user's current draft so
+        base URL, model, protocol and custom-header edits are what get tested.
+        """
+        data = dict(endpoint or {})
+        key = str(data.get("api_key") or "").strip()
+        if key and not _is_redacted_api_key(key):
+            return data
+
+        settings_mgr = getattr(self, "settings_mgr", None)
+        if settings_mgr is None:
+            return data
+        try:
+            endpoints = list(getattr(settings_mgr.get(), "ai_endpoints", None) or [])
+            index = _resolve_endpoint_index(endpoints, data)
+        except (AttributeError, TypeError, ValueError):
+            return data
+        if index is not None:
+            data["api_key"] = str(getattr(endpoints[index], "api_key", "") or "")
+        return data
+
     def list_ai_provider_presets(self) -> dict[str, Any]:
         """Return the read-only provider preset catalog for the settings UI.
 
@@ -89,21 +115,45 @@ class AIEndpointsMixin:
 
     def test_ai_endpoint(self, endpoint: dict[str, Any]) -> dict[str, Any]:
         """Send a lightweight test prompt to a single endpoint."""
+        import asyncio
+
         from argusai.core.ai import AIEndpoint, create_provider
 
-        ep = AIEndpoint.from_dict(endpoint)
-        provider = create_provider(override=ep.to_ai_config())
+        ep = AIEndpoint.from_dict(self._endpoint_probe_payload(endpoint))
+        if not str(ep.base_url or "").strip():
+            return {"ok": False, "error": "Base URL is required"}
+        if not str(ep.model or "").strip():
+            return {"ok": False, "error": "Model is required"}
+
+        # A connectivity probe should fail promptly and must not inherit a
+        # production-sized completion budget (often 16K+ tokens).  Keeping the
+        # request tiny also makes it compatible with models whose output cap is
+        # lower than the endpoint's configured default.
+        config = ep.to_ai_config()
+        config.max_tokens = max(1, min(int(config.max_tokens or 16), 16))
+        config.timeout = max(3.0, min(float(config.timeout or 30.0), 30.0))
+        provider = create_provider(override=config)
         if not provider:
             return {"ok": False, "error": "Invalid endpoint configuration"}
 
         async def _test() -> dict[str, Any]:
             try:
-                result = await provider.analyze("Reply with exactly the word: pong", "ping")
-                return {"ok": True, "response": result[:200]}
+                result = await asyncio.wait_for(
+                    provider.analyze("Reply with exactly: pong", "ping"),
+                    timeout=config.timeout + 1.0,
+                )
+                return {"ok": True, "response": str(result or "")[:200]}
+            except TimeoutError:
+                return {"ok": False, "error": f"Endpoint probe timed out after {config.timeout:g}s"}
             except Exception as e:
                 return {"ok": False, "error": str(e)[:300]}
             finally:
-                await provider.close()
+                try:
+                    await provider.close()
+                except Exception:
+                    # Transport cleanup must never replace the useful probe
+                    # result/error returned above.
+                    pass
 
         return _run_blocking(_test)
 
@@ -133,10 +183,10 @@ class AIEndpointsMixin:
         from argusai.core.ai_model_limits import extract_model_limits_from_models_payload
         from argusai.core.ai_provider_catalog import get_provider_preset
 
-        ep = AIEndpoint.from_dict(endpoint)
+        ep = AIEndpoint.from_dict(self._endpoint_probe_payload(endpoint))
         base_url = ep.base_url.rstrip("/")
         api_key = ep.api_key or ""
-        timeout = ep.timeout or 30.0
+        timeout = max(3.0, min(float(ep.timeout or 30.0), 30.0))
         extra_headers = ep.extra_headers or {}
 
         preset = get_provider_preset(ep.provider_id)
@@ -387,6 +437,12 @@ def _redact_api_key(api_key: str) -> str:
     if len(key) <= 4:
         return "****"
     return f"{'*' * 8}{key[-4:]}"
+
+
+def _is_redacted_api_key(api_key: str) -> bool:
+    """Recognise the public endpoint-row mask without guessing real keys."""
+    key = str(api_key or "").strip()
+    return key == "****" or (key.startswith("********") and len(key) == 12)
 
 
 def _public_endpoint_row(endpoint: Any, *, index: int, active: bool) -> dict[str, Any]:

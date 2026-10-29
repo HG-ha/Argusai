@@ -27,7 +27,7 @@ python scripts/wiki_docs.py export --output-dir build/wiki-export
 默认源码链接对应 `https://github.com/HG-ha/Argusai` 的 `main` 分支。需要对齐一个发布标签时：
 
 ```sh
-python scripts/wiki_docs.py export --output-dir build/wiki-v0.1.0 --ref v0.1.0
+python scripts/wiki_docs.py export --output-dir build/wiki-v0.1.1 --ref v0.1.1
 ```
 
 先检查导出结果，尤其是导航、源码链接和图片路径。导出操作不创建远端页面、不执行 Git 提交，也不推送。

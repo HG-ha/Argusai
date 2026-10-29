@@ -349,17 +349,24 @@ body.app-has-titlebar { --titlebar-h: 36px; }
   height: 36px; min-height: 36px;
   background: var(--chrome);
   border-bottom: 1px solid var(--border);
-  padding: 0 8px 0 14px;
-  -webkit-app-region: drag;
+  padding: 0 8px 0 0;
+  -webkit-app-region: no-drag;
   user-select: none;
   position: relative;
   z-index: 10500;
+}
+.titlebar-drag-surface {
+  align-self: stretch;
+  display: flex; align-items: center;
+  flex: 1 1 auto; min-width: 0;
+  padding-left: 14px;
+  -webkit-app-region: drag;
 }
 .titlebar-title {
   font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.8px;
   text-transform: uppercase;
 }
-.titlebar-spacer { flex: 1 1 auto; }
+.titlebar-spacer { flex: 1 1 auto; align-self: stretch; }
 .titlebar-btns {
   display: flex; align-items: center; gap: 1px;
   -webkit-app-region: no-drag;

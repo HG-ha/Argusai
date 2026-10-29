@@ -2,7 +2,7 @@
 
 [Wiki 首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
 
-发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.0`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
+发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.1`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
 
 ## 发行包
 
@@ -10,11 +10,11 @@
 
 | 平台 | 自动发布产物 | 额外运行环境 |
 | --- | --- | --- |
-| Windows x64 | `ArgusAI-0.1.0-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
-| Windows ARM64 | `ArgusAI-0.1.0-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
-| macOS Apple Silicon | `ArgusAI-0.1.0-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
-| Linux x64 | `ArgusAI-0.1.0-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
-| Linux ARM64 | `ArgusAI-0.1.0-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
+| Windows x64 | `ArgusAI-0.1.1-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
+| Windows ARM64 | `ArgusAI-0.1.1-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
+| macOS Apple Silicon | `ArgusAI-0.1.1-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
+| Linux x64 | `ArgusAI-0.1.1-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
+| Linux ARM64 | `ArgusAI-0.1.1-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
 
 这些是自动工作流目前配置的发布平台。其他架构应在对应环境中从源码运行或自行构建，不能仅修改文件名来转换架构。
 
@@ -25,8 +25,8 @@
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\ArgusAI-0.1.0-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\ArgusAI-0.1.0-win-x64-setup.exe.sha256
+Get-FileHash .\ArgusAI-0.1.1-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\ArgusAI-0.1.1-win-x64-setup.exe.sha256
 ```
 
 比较两者的哈希，不要把摘要文件中的文件名也纳入比较。
@@ -34,13 +34,13 @@ Get-Content .\ArgusAI-0.1.0-win-x64-setup.exe.sha256
 Linux：
 
 ```sh
-sha256sum -c ArgusAI-0.1.0-linux-x64.tar.gz.sha256
+sha256sum -c ArgusAI-0.1.1-linux-x64.tar.gz.sha256
 ```
 
 macOS：
 
 ```sh
-shasum -a 256 -c ArgusAI-0.1.0-macos-arm64.dmg.sha256
+shasum -a 256 -c ArgusAI-0.1.1-macos-arm64.dmg.sha256
 ```
 
 ### Windows
@@ -60,8 +60,8 @@ shasum -a 256 -c ArgusAI-0.1.0-macos-arm64.dmg.sha256
 解压 tar.gz 后进入版本目录，启动桌面：
 
 ```sh
-tar -xzf ArgusAI-0.1.0-linux-x64.tar.gz
-cd ArgusAI-0.1.0-linux-x64
+tar -xzf ArgusAI-0.1.1-linux-x64.tar.gz
+cd ArgusAI-0.1.1-linux-x64
 ./ArgusAI --gui
 ```
 

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-0967a6?style=flat-square" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/version-0.1.1-0967a6?style=flat-square" alt="Version 0.1.1">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows, macOS and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="License GPL-3.0-only"></a>
@@ -162,7 +162,7 @@ Alerts and remote state come from materials supplied by the user or configured t
 
 ## Quick start
 
-The current version is `0.1.0`. Source execution needs Python 3.12+, uv, Node.js 18+ and npm. From the repository root:
+The current version is `0.1.1`. Source execution needs Python 3.12+, uv, Node.js 18+ and npm. From the repository root:
 
 ```sh
 uv sync --locked

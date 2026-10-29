@@ -833,16 +833,18 @@ const naiveTheme = computed(() => theme.effective === 'dark' ? darkTheme : light
   <template v-if="showCustomTitlebar && !nativeWindowControls">
     <div v-for="edge in ['n','e','s','w','ne','nw','se','sw']" :key="edge" :class="['window-resize-zone', edge]" @pointerdown="startWindowResize(edge, $event)"></div>
   </template>
-  <div v-if="showCustomTitlebar" class="titlebar titlebar-drag" :class="{ 'titlebar-native-controls': nativeWindowControls }" :style="titlebarStyle" @dblclick="onTitlebarDblClick">
-    <span class="titlebar-title">{{ t('app.title') }}</span>
-    <div class="titlebar-spacer"></div>
-    <div class="titlebar-btns" @dblclick.stop>
+  <div v-if="showCustomTitlebar" class="titlebar" :class="{ 'titlebar-native-controls': nativeWindowControls }" :style="titlebarStyle">
+    <div class="titlebar-drag titlebar-drag-surface" @dblclick="onTitlebarDblClick">
+      <span class="titlebar-title">{{ t('app.title') }}</span>
+      <div class="titlebar-spacer"></div>
+    </div>
+    <div class="titlebar-btns" @pointerdown.stop @dblclick.stop>
       <button class="titlebar-btn" @click="openOnboarding" :title="t('onboarding.reopenTitle')">
         <span class="titlebar-help">?</span>
       </button>
       <LocaleSelect variant="titlebar" />
     </div>
-    <div v-if="!nativeWindowControls" class="titlebar-win-controls" @dblclick.stop>
+    <div v-if="!nativeWindowControls" class="titlebar-win-controls" @pointerdown.stop @dblclick.stop>
       <button class="win-btn" @click="minimize" title="Minimize">
         <svg viewBox="0 0 12 12" width="12" height="12"><path d="M2 6h8" stroke="currentColor" stroke-width="1"/></svg>
       </button>

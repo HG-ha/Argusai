@@ -43,7 +43,10 @@ def test_base_system_prompt_keeps_workflows_in_skills() -> None:
     assert "security assessment and reverse-engineering workbench expert" in prompt
     assert "web/API, mobile, native binaries, JavaScript/WASM, cloud, identity, network, proxy" in prompt
     assert "web security audit expert" not in prompt
-    assert "ArgusAI is developed by 一铭 (GitHub: https://github.com/HG-ha)." in prompt
+    assert (
+        "ArgusAI is developed by 一铭 (open-sourced by DAWA Technology, "
+        "https://dawahezhi.com/; repository: https://github.com/HG-ha/Argusai)."
+    ) in prompt
     assert "## Core Contract" in prompt
     assert "No ArgusAI-on-ArgusAI" in prompt
     assert "inspect, read, search, modify, build, test, run, stop, restart" in prompt

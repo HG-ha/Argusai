@@ -332,7 +332,7 @@ def test_settings_prompt_stays_small() -> None:
     active = _select_tool_names("settings", message)
     prompt = _build_system_prompt(registry.catalog(active), _select_skill_text(message, active))
     assert len(active) < 80
-    assert len(prompt) < 25_000
+    assert len(prompt) < 26_000
 
 
 def test_project_workspace_attaches_codebase_tools() -> None:

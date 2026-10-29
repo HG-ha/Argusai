@@ -290,6 +290,19 @@ def main() -> None:
     api._window = window
     api._window_maximized = geom.maximized
 
+    # Keep the bridge toggle in sync when Windows changes state outside the
+    # Vue button path (Snap Layouts, taskbar restore, Win+Arrow, etc.).  Without
+    # these events the next click could call maximize on an already-maximized
+    # window or restore an already-restored one.
+    def _mark_window_maximized() -> None:
+        api._window_maximized = True
+
+    def _mark_window_restored() -> None:
+        api._window_maximized = False
+
+    window.events.maximized += _mark_window_maximized
+    window.events.restored += _mark_window_restored
+
     # Wire the backend->frontend live-push bus so panels can update without
     # polling / manual refresh. Best-effort: if this fails the UI falls back to
     # its slow polls. Core subsystems stay UI-agnostic by pushing through

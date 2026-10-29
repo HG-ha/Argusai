@@ -135,7 +135,7 @@ jobs:
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
                       "scripts/packaging/python-pyobjc-12.1.LICENSE.txt",
-                      "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
+                      f"scripts/packaging/release-notes-{version}.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
           with tarfile.open(package, "r:gz") as archive:
@@ -537,7 +537,7 @@ jobs:
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
                       "scripts/packaging/python-pyobjc-12.1.LICENSE.txt",
-                      "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
+                      f"scripts/packaging/release-notes-{version}.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
           try:

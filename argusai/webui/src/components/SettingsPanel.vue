@@ -1931,8 +1931,11 @@ async function fetchModels(idx) {
   try {
     const extraHeaders = parseJsonObjectField(ep.extra_headers_json, 'extra_headers')
     const r = await api.listAIModels({
+      index: idx,
+      name: ep.name || '',
       base_url: ep.base_url,
       api_key: ep.api_key,
+      model: ep.model || '',
       timeout: ep.timeout,
       extra_headers: extraHeaders,
       provider_id: ep.provider_id || '',
@@ -1961,12 +1964,19 @@ async function fetchModels(idx) {
 }
 
 async function testEndpoint(idx) {
+  const ep = settings.ai_endpoints[idx]
+  if (!ep) return
   testingId.value = idx
-  const signature = endpointTestSignature(settings.ai_endpoints[idx])
+  const signature = endpointTestSignature(ep)
   const startedAt = performance.now()
   endpointHealth.value[idx] = { status: 'testing', signature, checkedAt: Date.now() }
   try {
-    const r = await api.testAIEndpoint(settings.ai_endpoints[idx])
+    const r = await api.testAIEndpoint({
+      ...ep,
+      index: idx,
+      extra_headers: parseJsonObjectField(ep.extra_headers_json, 'extra_headers'),
+      extra_body: parseJsonObjectField(ep.extra_body_json, 'extra_body'),
+    })
     const latencyMs = Math.max(0, Math.round(performance.now() - startedAt))
     if (r.ok) {
       endpointHealth.value[idx] = { status: 'success', signature, checkedAt: Date.now(), latencyMs }

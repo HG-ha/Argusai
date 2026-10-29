@@ -15,6 +15,7 @@ class _Harness(SessionLoopControlMixin):
         self.history: list = []
         self._cancel_requested = False
         self._user_decision_requested = False
+        self._team_room_passed = False
         self._last_partial_text = ""
         self._current_turn_id = "t"
         self._duplicate_skip_hint_injected = False
