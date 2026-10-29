@@ -446,6 +446,9 @@ def test_arm_desktop_runtime_and_real_backend_probe_precede_build(monkeypatch):
     runtime = next(step for step in steps if step.get("name") == "Install Windows ARM64 Desktop runtime")
     assert runtime["if"] == "matrix.runtime == 'win-arm64'"
     assert "-Runtime windowsdesktop -Channel 10.0 -Architecture arm64" in runtime["run"]
+    assert "Test-Path -LiteralPath $dotnet -PathType Leaf" in runtime["run"]
+    assert "$runtimes = & $dotnet --list-runtimes" in runtime["run"]
+    assert runtime["run"].index("$runtimeExitCode = $LASTEXITCODE") > runtime["run"].index("--list-runtimes")
     assert names.index(runtime["name"]) < names.index("Install locked Python dependencies")
     assert names.index("Smoke-test Windows ARM64 WinForms backend") < names.index("Build native package")
     calls = []
