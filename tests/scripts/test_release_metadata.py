@@ -468,6 +468,21 @@ def test_arm_desktop_runtime_and_real_backend_probe_precede_build(monkeypatch):
     assert calls[0][1]["check"] is True
 
 
+def test_linux_arm64_build_uses_lld_range_extension_thunks():
+    build = workflow()["jobs"]["build"]
+    linux_dependencies = next(
+        step for step in build["steps"] if step.get("name") == "Install Linux build dependencies"
+    )
+    assert "lld" in linux_dependencies["run"].split()
+
+    native_build = next(
+        step for step in build["steps"] if step.get("name") == "Build native package"
+    )
+    assert native_build["env"]["LDFLAGS"] == (
+        "${{ matrix.runtime == 'linux-arm64' && '-fuse-ld=lld' || '' }}"
+    )
+
+
 @pytest.mark.parametrize("present, same", [(False, True), (True, True), (True, False)])
 def test_manual_preflight_allows_new_tag_but_rejects_wrong_existing_target(source_repository, monkeypatch, present, same):
     _, commit = source_repository

@@ -230,7 +230,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config ccache patchelf \
+            build-essential pkg-config ccache patchelf lld \
             libgtk-3-dev libwebkit2gtk-4.1-dev
       - name: Ensure NSIS is available
         if: runner.os == 'Windows'
@@ -419,6 +419,10 @@ jobs:
       - name: Collect frontend third-party notices
         run: uv run --locked --group build python scripts/frontend_notices.py
       - name: Build native package
+        env:
+          # GNU ld can exhaust AArch64's +/-128 MiB CALL26/JUMP26 range for
+          # this large Nuitka binary. lld inserts range-extension thunks.
+          LDFLAGS: ${{ matrix.runtime == 'linux-arm64' && '-fuse-ld=lld' || '' }}
         run: uv run --locked --group build python build.py ${{ matrix.build_args }} --skip-webui
       - name: Smoke-test packaged CLI and version
         shell: python
