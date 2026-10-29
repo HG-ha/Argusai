@@ -30,6 +30,7 @@ SOURCE_FILES = {
     "scripts/python_notices.py": b"# Python notices fixture\n",
     "scripts/packaging/frontend-licenses.json": b"{}\n",
     "scripts/packaging/python-licenses.json": b"{}\n",
+    "scripts/packaging/python-pyobjc-12.1.LICENSE.txt": b"PyObjC license fixture\n",
     "scripts/packaging/release-notes-0.1.0.md": b"# ArgusAI v0.1.0\n\nRelease notes fixture.\n",
     "argusai/gui/windows-arm64.runtimeconfig.json": b'{"runtimeOptions":{"tfm":"net8.0-windows"}}\n',
     "argusai/vendor/sqlmap/LICENSE": b"GPL vendor license fixture\n",
@@ -241,8 +242,9 @@ def test_source_archive_uses_validated_commit_and_excludes_untracked_secrets(sou
     with tarfile.open(package, "r:gz") as archive:
         assert archive.pax_headers["comment"] == commit
         names = set(archive.getnames())
-        for name, original in SOURCE_FILES.items():
-            assert archive.extractfile(f"ArgusAI-0.1.0/{name}").read() == original
+        for name in SOURCE_FILES:
+            committed = subprocess.check_output(["git", "show", f"{commit}:{name}"])
+            assert archive.extractfile(f"ArgusAI-0.1.0/{name}").read() == committed
         assert not any(".git" in Path(name).parts for name in names)
         assert "ArgusAI-0.1.0/settings.json" not in names
         assert "ArgusAI-0.1.0/config/api-key.txt" not in names

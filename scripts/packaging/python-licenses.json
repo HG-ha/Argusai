@@ -27,6 +27,60 @@
       "file": "python-ordered-set-4.1.0.LICENSE.txt",
       "sha256": "0cf8f55f36dc1306b3fe89bf29e29a0c742f279f038d149244319e593ab16ca4"
     },
+    "pyobjc-core": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/b8/b6/d5612eb40be4fd5ef88c259339e6313f46ba67577a95d86c3470b951fce0/pyobjc_core-12.1.tar.gz",
+      "archive_sha256": "2bb3903f5387f72422145e1466b3ac3f7f0ef2e9960afa9bcd8961c5cbf8bd21",
+      "archive_member": "pyobjc_core-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-cocoa": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/02/a3/16ca9a15e77c061a9250afbae2eae26f2e1579eb8ca9462ae2d2c71e1169/pyobjc_framework_cocoa-12.1.tar.gz",
+      "archive_sha256": "5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640",
+      "archive_member": "pyobjc_framework_cocoa-12.1/LICENSE.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-quartz": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/94/18/cc59f3d4355c9456fc945eae7fe8797003c4da99212dd531ad1b0de8a0c6/pyobjc_framework_quartz-12.1.tar.gz",
+      "archive_sha256": "27f782f3513ac88ec9b6c82d9767eef95a5cf4175ce88a1e5a65875fee799608",
+      "archive_member": "pyobjc_framework_quartz-12.1/LICENSE.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-security": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/80/aa/796e09a3e3d5cee32ebeebb7dcf421b48ea86e28c387924608a05e3f668b/pyobjc_framework_security-12.1.tar.gz",
+      "archive_sha256": "7fecb982bd2f7c4354513faf90ba4c53c190b7e88167984c2d0da99741de6da9",
+      "archive_member": "pyobjc_framework_security-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-uniformtypeidentifiers": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/65/b8/dd9d2a94509a6c16d965a7b0155e78edf520056313a80f0cd352413f0d0b/pyobjc_framework_uniformtypeidentifiers-12.1.tar.gz",
+      "archive_sha256": "64510a6df78336579e9c39b873cfcd03371c4b4be2cec8af75a8a3d07dff607d",
+      "archive_member": "pyobjc_framework_uniformtypeidentifiers-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-webkit": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/14/10/110a50e8e6670765d25190ca7f7bfeecc47ec4a8c018cb928f4f82c56e04/pyobjc_framework_webkit-12.1.tar.gz",
+      "archive_sha256": "97a54dd05ab5266bd4f614e41add517ae62cdd5a30328eabb06792474b37d82a",
+      "archive_member": "pyobjc_framework_webkit-12.1/LICENSE.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
     "primp": {
       "kind": "missing-original",
       "version": "1.2.3",

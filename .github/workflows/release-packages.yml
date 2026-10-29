@@ -134,6 +134,7 @@ jobs:
                       "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "scripts/packaging/python-pyobjc-12.1.LICENSE.txt",
                       "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
@@ -275,7 +276,10 @@ jobs:
           if not installation:
               raise SystemExit("MSVC ARM64 tools are missing from the runner")
           developer = Path(installation) / "Common7/Tools/VsDevCmd.bat"
-          command = f'call "{developer}" -no_logo -arch=arm64 -host_arch=arm64 >nul && set'
+          # cmd /S strips the first and last quote. Wrap the complete command so
+          # the quoted batch-file path survives when Visual Studio lives under
+          # Program Files.
+          command = f'""{developer}" -no_logo -arch=arm64 -host_arch=arm64 >nul && set"'
           environment = subprocess.check_output([os.environ["COMSPEC"], "/d", "/s", "/c", command], text=True)
           for line in environment.splitlines():
               key, separator, value = line.partition("=")
@@ -507,6 +511,7 @@ jobs:
                       "argusai/webui/src/main.js", "argusai/webui/src/components/App.vue", "argusai/webui/src/api.js",
                       "scripts/frontend_notices.py", "scripts/python_notices.py", "scripts/bump_version.py",
                       "scripts/packaging/frontend-licenses.json", "scripts/packaging/python-licenses.json",
+                      "scripts/packaging/python-pyobjc-12.1.LICENSE.txt",
                       "scripts/packaging/release-notes-0.1.0.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
