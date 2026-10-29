@@ -343,6 +343,10 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
           $desktopRoot = Join-Path $env:RUNNER_TEMP 'dotnet-arm64'
           Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer
+          # windowsdesktop is an additive shared framework and does not include
+          # the dotnet host in its portable archive. Install the base runtime
+          # first so pythonnet can discover hostfxr and launch CoreCLR.
+          & $installer -Runtime dotnet -Channel 10.0 -Architecture arm64 -InstallDir $desktopRoot -NoPath
           & $installer -Runtime windowsdesktop -Channel 10.0 -Architecture arm64 -InstallDir $desktopRoot -NoPath
           # dotnet-install may leave LASTEXITCODE from an internal size probe
           # even after it installs successfully. Verify the installed runtime
@@ -354,8 +358,10 @@ jobs:
           $env:DOTNET_ROOT = $desktopRoot
           $runtimes = & $dotnet --list-runtimes
           $runtimeExitCode = $LASTEXITCODE
-          if ($runtimeExitCode -ne 0 -or -not ($runtimes -match 'Microsoft.WindowsDesktop.App 10\.')) {
-            throw 'ARM64 Microsoft.WindowsDesktop.App 10.x was not installed'
+          if ($runtimeExitCode -ne 0 -or
+              -not ($runtimes -match 'Microsoft.NETCore.App 10\.') -or
+              -not ($runtimes -match 'Microsoft.WindowsDesktop.App 10\.')) {
+            throw 'ARM64 .NETCore and WindowsDesktop 10.x runtimes were not installed together'
           }
           "DOTNET_ROOT=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "DOTNET_ROOT_ARM64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
