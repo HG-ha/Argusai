@@ -126,6 +126,8 @@ class _ApiBase:
         self._assistant_tool_broker = ArgusAIToolBroker()
         self._active_acp_turns: dict[str, Any] = {}
         self._assistant_run_lock = Lock()
+        self._update_manager_lock = Lock()
+        self._update_install_lock = Lock()
         self._assistant_running_sessions: set[str] = set()
         self._attention_lock = Lock()
         self._app_attention_state: dict[str, Any] = {
@@ -392,6 +394,9 @@ class _ApiBase:
         if getattr(self, "_background_shutdown_started", False):
             return
         self._background_shutdown_started = True
+        updater = getattr(self, "_update_manager_instance", None)
+        if updater is not None:
+            updater.cancel_download()
         try:
             for turn in list(getattr(self, "_active_acp_turns", {}).values()):
                 try:

@@ -46,6 +46,7 @@ ShowUnInstDetails show
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
 !insertmacro GetSize
+Var UpdatePID
 
 ; Match upstream x64.nsh on older NSIS releases without this helper.
 ; IsWow64Process2 returns the native IMAGE_FILE_MACHINE on Windows ARM64.
@@ -219,7 +220,20 @@ FunctionEnd
 Function .onInit
   Call RequireTargetArchitecture
   SetRegView 64
-  Call RestoreExistingInstallDir
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/UPDATEPID=" $UpdatePID
+  ${If} ${Errors}
+    StrCpy $UpdatePID ""
+    Call RestoreExistingInstallDir
+  ${Else}
+    ; Accept only the canonical positive PID passed by our update helper.
+    IntFmt $1 "%u" $UpdatePID
+    ${If} $1 != $UpdatePID
+    ${OrIf} $UpdatePID == 0
+      Abort "Invalid update process ID"
+    ${EndIf}
+  ${EndIf}
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 
@@ -240,9 +254,32 @@ FunctionEnd
   Pop $0
 !macroend
 
+Function WaitUpdateParent
+  ; Never kill other ArgusAI instances during an application update.
+  System::Call 'kernel32::OpenProcess(i 0x00100000, i 0, i $UpdatePID) p.r1'
+  ${If} $1 == 0
+    System::Call 'kernel32::GetLastError() i.r2'
+    ${If} $2 != 87 ; ERROR_INVALID_PARAMETER: parent has already exited
+      SetErrorLevel 1
+      Abort "Cannot verify that ArgusAI has exited"
+    ${EndIf}
+  ${Else}
+    System::Call 'kernel32::WaitForSingleObject(p r1, i 120000) i.r2'
+    System::Call 'kernel32::CloseHandle(p r1)'
+    ${If} $2 != 0
+      SetErrorLevel 1
+      Abort "ArgusAI did not exit; update cancelled"
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
 Section "$(SEC_APP)" SecApp
   SectionIn RO
-  !insertmacro KillArgusAI
+  ${If} $UpdatePID != ""
+    Call WaitUpdateParent
+  ${Else}
+    !insertmacro KillArgusAI
+  ${EndIf}
   SetOutPath "$INSTDIR"
 
   !if "${INSTALL_MODE}" == "onefile"

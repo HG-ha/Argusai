@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.3",
+  "published_at": "2026-10-30T14:19:49Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.3",
+  "notes": "# ArgusAI v0.1.3\n\n- 恢复 QQ 接入，支持官方扫码登录、Markdown 卡片与文件回复。\n- 完善渠道流式与分段回复，修复多条消息漏发和多余回执。\n- 支持 QQ、飞书合并转发，完善多渠道转发与附件留存，供 Agent 按需读取。\n- 修复桌面 Agent 重启后误打开渠道会话的问题。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.3/ArgusAI-0.1.3-win-x64-setup.exe",
+      "sha256": "a9957edca283950cb9ef36be2b2969928766669cac38b5c6e5c3db840675e309",
+      "size": 69825572
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.3/ArgusAI-0.1.3-win-arm64-setup.exe",
+      "sha256": "02e19b1e4314b20b4d27badd4218bfc88153c0a5fb5e2f3a7e67dd1aa13e93de",
+      "size": 58822542
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.3/ArgusAI-0.1.3-linux-x64.tar.gz",
+      "sha256": "db3836ef6bb3d5891c08e034b034de746b19ac2c22ff5f20918eafe00873a60d",
+      "size": 111512742
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.3/ArgusAI-0.1.3-linux-arm64.tar.gz",
+      "sha256": "91ce57738df2edd651273becfc3e5b13d012a6a3641ba11767bed59dabe73264",
+      "size": 103003971
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.3/ArgusAI-0.1.3-macos-arm64.dmg",
+      "sha256": "3abbf0caa791dbdb881dd399003d2304ae2b3f6dbc5b2ed81cc8fedea7ba2abd",
+      "size": 100294361
+    }
+  }
+}

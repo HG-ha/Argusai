@@ -36,11 +36,32 @@ Pages 会直接发布 `website/`。自定义域名使用 `argusai.sh`，可将 `
 
 新增的 agent-{light,dark}.webp、sandbox-{light,dark}.webp 来自本机开发版本的独立演示会话。Agent 实际调用沙盒写入与读取工具，生成并核验 demo-report.md；没有执行扫描。桌面权限提示已改为当前轮涉及桌面工具时才出现。
 
+`assets/screens/cli-{light,dark}.webp` 来自当前 v0.1.3 源码在 macOS 上运行的真实 CLI 会话：使用 168 列 × 46 行的 PTY，实际输入 `/sidebar on`、`/monitor both`、`/status`、`/file list`，捕获 ANSI 输出，由终端单元缓冲区忠实渲染为图片。图片是终端会话渲染，不是 macOS 窗口截屏；未拼造 Agent 回复、工具执行或业务结果。左右栏与主界面均是应用真实输出。演示使用独立临时数据目录和 `demo-cli` 会话，没有配置模型端点、读取用户会话或执行业务任务。截图中的三个文件由拍摄脚本人工准备，内容明确注明用于演示；`/file list` 读取的是这些真实存在的文件，不是伪造的工具执行结果。CLI 当前使用固定深色 night-ops 配色，官网明暗主题引用同一真实终端画面，不代表 CLI 提供浅色主题。大图 3020 × 1904，缩略图宽 960；录制脚本与原始 ANSI 仅保留在本地忽略目录中。
+
 本轮视觉采用 Agent 工作过程与真实界面主导，保留品牌图标、分页面和双主题；设计参考 Impeccable 的 hierarchy、craft-floor 与 redesign 指导。
 
 官网产品能力描述来自仓库 `README.md`。不要将包含私有端点、账号、路径、访问记录或凭据的截图加入公开静态资源。配置备份和演示数据必须保存在官网及 Git 仓库之外。
 
-更新版本时编辑 `changelog.html`，填写实际发布日期、摘要和对应 Release 链接，不根据未发布的提交推测版本内容。
+v0.1.3 更新日志已补录；从 v0.1.4 开始，更新日志中的生成区域由发布流程维护。较早版本的历史内容仍保留；不要根据未发布的提交提前修改稳定版清单。
+
+## 版本清单与发布同步
+
+桌面客户端从 `https://argusai.sh/updates/stable.json` 检查更新，安装包直接从对应 GitHub Release 下载。每份清单包含版本、实际发布时间、发布说明、五个平台的固定版本下载地址、文件大小和 SHA-256；源码包仍在 Release 提供。`updates/releases/<版本>.json` 保存发布后的不可变记录。
+
+`Release packages` 工作流在五个平台打包、源码归档和 Release 上传均成功后，才运行官网同步任务。它重新核验正式 Release、Git tag 的源提交、六个包与各自的校验文件，以及发布说明是否与源提交一致；随后在最新 `main` 上生成清单和更新日志，采用普通快进推送。主分支同期有新提交时会重新生成，稳定版不能回退，已发布版本的清单不能原地替换。
+
+官网继续使用现有 Pages Git 集成。也可在 Pages 控制台为 `main` 创建 Deploy Hook，把完整 URL 保存到仓库 Actions Secret `CLOUDFLARE_PAGES_DEPLOY_HOOK`；发布流程会在提交官网变更后主动触发它。Hook URL 是凭据，不要写入源码。该方式不需要向客户端提供 GitHub Token 或 CF 凭据。
+
+最后一步会轮询公网清单，确认部署内容与已验证 Release 一致。若 Git 集成未触发或部署失败，该步骤会失败，提示检查 Pages，而不会把“已提交源码”视为“已上线”。GitHub Token 产生的事件不会递归触发普通 Actions 工作流；Pages 是独立的 Git 集成，仍需以上线核验为准。
+
+本地维护或补同步一个已经完整发布的版本：
+
+```sh
+python scripts/release_feed.py --tag v0.1.3 --commit 2d8acd26bbd37afbb52e2d5150e12e3d3fb9aab9
+python scripts/release_feed.py --tag v0.1.3 --commit 2d8acd26bbd37afbb52e2d5150e12e3d3fb9aab9 --verify-live
+```
+
+第一条只生成本地文件，不会推送、部署或修改 Release。CI 通过环境变量 `GH_TOKEN` 读取仓库 API；本地公开仓库也可不提供 Token。更新说明沿用 Release 原文，英文翻译集中维护在 `i18n.js`，没有翻译的条目保留原文。稳定版清单缓存 60 秒，每个历史版本的清单长期缓存；客户端不访问 GitHub Release API。
 
 ## 图片交付
 

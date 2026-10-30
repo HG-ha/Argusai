@@ -73,6 +73,12 @@ export const api = {
   // Introspection
   listChecks: () => call("list_checks"),
   appInfo: () => call("app_info"),
+  checkForUpdates: (force = false) => call("check_for_updates", !!force),
+  updateStatus: () => call("update_status"),
+  downloadUpdate: () => call("download_update"),
+  cancelUpdateDownload: () => call("cancel_update_download"),
+  installUpdate: () => call("install_update"),
+  openUpdateFolder: () => call("open_update_folder"),
   setLocale: (locale) => call("set_locale", locale),
 
   // Task management

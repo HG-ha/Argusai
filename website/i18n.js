@@ -1,5 +1,13 @@
 (() => {
   const pairs = `
+在终端里，接着工作。|Keep working in the terminal.
+多轮 Agent 对话、会话与小队、待办和运行监控，都可以在命令行中使用。|Use multi-turn Agent conversations, sessions, teams, todos and runtime monitoring from the command line.
+命令行使用手册 ↗|CLI user guide ↗
+命令行工作台|CLI workspace
+放大查看命令行工作台|Enlarge the CLI workspace
+ArgusAI 真实终端会话，左侧待办与会话、中央命令和右侧运行监控|An actual ArgusAI terminal session: todos and session details on the left, commands in the center and runtime monitoring on the right
+真实终端会话渲染 · 左右侧栏已展开 · 本地演示文件与状态|Actual terminal session rendering · Both sidebars expanded · Local demo files and session status
+真实终端会话渲染 · 左右方向键切换 · Esc 关闭|Actual terminal session rendering · Arrow keys to browse · Esc to close
 首页|Home
 打开导航|Open navigation
 关闭导航|Close navigation
@@ -13,6 +21,11 @@
 工作台|Workspace
 使用场景|Use cases
 更新日志|Changelog
+更新|Update
+恢复 QQ 接入，支持官方扫码登录、Markdown 卡片与文件回复。|Restored QQ integration with official QR sign-in, Markdown cards and file replies.
+完善渠道流式与分段回复，修复多条消息漏发和多余回执。|Improved channel streaming and multi-message replies; fixed missing messages and redundant delivery receipts.
+支持 QQ、飞书合并转发，完善多渠道转发与附件留存，供 Agent 按需读取。|Added QQ and Feishu merged forwards and improved forwarded content and attachment retention across channels for on-demand Agent access.
+修复桌面 Agent 重启后误打开渠道会话的问题。|Fixed the desktop Agent reopening a channel conversation after restart.
 主导航|Main navigation
 网站主题|Color theme
 浅色|Light

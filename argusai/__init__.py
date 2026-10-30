@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """ArgusAI Security Workbench core package. See LICENSE for terms."""
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 from argusai.core.finding import Finding, Severity
 from argusai.core.target import Target, AuthConfig

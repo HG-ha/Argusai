@@ -34,6 +34,7 @@ import { useSandboxBrowser } from '../composables/useSandboxBrowser.js'
 import { useMediaPreview } from '../composables/useMediaPreview.js'
 import { useUiContextPublisher } from '../composables/useUiContextPublisher.js'
 import { useSidebarCollapse } from '../composables/useSidebarCollapse.js'
+import { useUpdates, startUpdateMonitor, stopUpdateMonitor } from '../composables/useUpdates.js'
 import argusIcon from '../../../../assets/brand/argusai-icon-Transparency.png'
 
 const ASSISTANT_FAB_POS_KEY = 'argusai.assistant.fab.position.v3'
@@ -91,6 +92,7 @@ const sandboxSessionId = computed(() =>
 )
 const { state: explainState, closeExplain } = useSandboxExplain()
 const { sidebarCollapsed } = useSidebarCollapse()
+const { updateState: appUpdate, noticeVisible: updateNoticeVisible, dismissUpdateNotice } = useUpdates()
 
 function onExplainSendToAssistant() {
   const pending = explainState.pending
@@ -708,6 +710,7 @@ watch(() => activeTab.value?.sessionId, scheduleAttentionStatePublish)
 watch(() => tabs.map(tab => tab.sessionId), scheduleAttentionStatePublish)
 
 onMounted(() => {
+  startUpdateMonitor()
   // The native launcher starts this probe before WebView boot. Calling the
   // idempotent ensure endpoint here also covers dev/Vite and embedded hosts.
   api.ensureMcpStartupProbe().catch(() => {})
@@ -725,6 +728,7 @@ onMounted(() => {
   scheduleAttentionStatePublish()
 })
 onUnmounted(() => {
+  stopUpdateMonitor()
   window.removeEventListener('argusai:close-assistant', handleCloseAssistantEvent)
   window.removeEventListener('argusai:open-assistant-session', handleOpenAssistantSessionEvent)
   window.removeEventListener('argusai:assistant-session-updated', handleAssistantSessionUpdatedEvent)
@@ -866,6 +870,11 @@ const naiveTheme = computed(() => theme.effective === 'dark' ? darkTheme : light
   >
     <Sidebar />
     <main class="main">
+      <div v-if="updateNoticeVisible && route.name !== 'about'" class="app-update-notice" role="status">
+        <span>{{ appUpdate.status === 'downloaded' ? t('updates.readyNotice', { version: appUpdate.version }) : t('updates.availableNotice', { version: appUpdate.version }) }}</span>
+        <button class="ghost tiny" type="button" @click="navigate('about')">{{ t('updates.viewUpdate') }}</button>
+        <button class="app-update-dismiss" type="button" :aria-label="t('updates.dismiss')" @click="dismissUpdateNotice">×</button>
+      </div>
       <div class="workbench-card">
         <component :is="currentView" :key="route?.raw || currentView" />
       </div>
@@ -1007,6 +1016,21 @@ const naiveTheme = computed(() => theme.effective === 'dark' ? darkTheme : light
 </template>
 
 <style scoped>
+.app-update-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font-size: 13px;
+}
+.app-update-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.app-update-dismiss { background: transparent; border: 0; color: var(--muted); cursor: pointer; padding: 3px 6px; font-size: 20px; }
 .window-resize-zone {
   position: fixed;
   /* Must sit ABOVE the titlebar (z=10500). The top edge / NW / NE corners

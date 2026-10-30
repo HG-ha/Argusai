@@ -2,7 +2,7 @@
 
 [项目首页](../README.md) · [English introduction](../README.en.md) · [项目仓库](https://github.com/HG-ha/Argusai) · [达瓦科技](https://dawahezhi.com/)
 
-这里是 ArgusAI `0.1.3` 的用户指南。**把目标交给 Agent，让它在 ArgusAI 中完成工作。** 扫描、代理、浏览器、逆向、知识与定时任务围绕同一个 Agent 工作流组织：你说明目标和范围，Agent 选择工具、推进步骤、保存证据并交付结果。
+这里是 ArgusAI `0.1.4` 的用户指南。**把目标交给 Agent，让它在 ArgusAI 中完成工作。** 扫描、代理、浏览器、逆向、知识与定时任务围绕同一个 Agent 工作流组织：你说明目标和范围，Agent 选择工具、推进步骤、保存证据并交付结果。
 
 从应用内的悬浮球唤出助手，或进入 **Agent 对话** 管理完整会话。Agent 能结合当前页面、任务和工作状态继续协助；各功能页面用于观察执行、核对证据和需要时介入。两种入口的用法见 [Agent 与会话](Agent-and-Sessions.md)。
 

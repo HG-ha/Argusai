@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { t } from '../i18n.js'
 import { state } from '../state.js'
+import UpdatePanel from './UpdatePanel.vue'
 
 const principles = computed(() => [
   { title: t('about.principles.agent.title'), body: t('about.principles.agent.body') },
@@ -58,6 +59,8 @@ const deniedItems = computed(() => [
           <span>{{ t('about.agentCoreBody') }}</span>
         </div>
       </header>
+
+      <UpdatePanel />
 
       <section class="about-section">
         <div class="about-section-heading">

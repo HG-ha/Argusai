@@ -63,6 +63,7 @@ _COMMAND_HELP: dict[tuple[str, ...], str] = {
     ("report",): "help_report",
     ("scan",): "help_scan",
     ("version",): "help_version",
+    ("update",): "help_update",
     ("kb",): "help_kb",
     ("kb", "list"): "help_kb_list",
     ("kb", "search"): "help_kb_search",
@@ -198,6 +199,8 @@ _OPTION_HELP: dict[str, str] = {
 
 # Command-scoped option help (wins over ``_OPTION_HELP`` when present).
 _OPTION_HELP_CTX: dict[tuple[str, ...], str] = {
+    ("update", "--check"): "help_opt_update_check",
+    ("update", "--download"): "help_opt_update_download",
     ("chat", "--file"): "help_opt_chat_file",
     ("kb", "purge", "--id"): "help_opt_kb_purge_id",
     ("channels", "grant", "--all"): "help_opt_channels_grant_all",

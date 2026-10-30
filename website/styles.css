@@ -476,3 +476,16 @@ main>* { min-width:0; }
  .page-intro h1,.deep-feature h2,.local-note h2 { overflow-wrap:break-word; }
 }
 @media(prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } *,*::before,*::after { transition:none!important; animation:none!important; } }
+
+/* The CLI has a fixed night-ops palette; both website themes show its real colors. */
+.cli-showcase { padding-block: 12px 70px; }
+.cli-heading { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:24px; }
+.cli-heading h2 { font-size:28px; margin:0 0 10px; }
+.cli-heading p { font-size:14px; line-height:1.7; color:var(--muted); margin:0; max-width:700px; }
+.cli-heading>a { flex-shrink:0; font-size:13px; }
+.cli-gallery-item { margin:0; }
+.cli-gallery-item .shot-link { position:relative; display:block; background:#101318; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.cli-gallery-item img { width:100%; height:auto; }
+.cli-gallery-item .gallery-zoom { opacity:1; }
+.cli-gallery-item figcaption { margin-top:12px; color:var(--muted); font-size:12px; line-height:1.7; }
+@media(max-width:760px) { .cli-showcase{padding-block:8px 42px;} .cli-heading{align-items:flex-start;flex-direction:column;gap:14px;} .cli-heading h2{font-size:25px;} }

@@ -11,6 +11,27 @@ import zhHant from './i18n/locales/zh-Hant.js'
 
 export const messages = {
   zh: {
+    updates: {
+      title: '软件更新', currentVersion: '当前版本 {version}', check: '检查更新', checking: '正在检查…',
+      download: '下载更新', retryDownload: '重试下载', cancelDownload: '取消下载', installRestart: '安装并重启',
+      releasePage: '查看发行页面', releaseNotes: '更新内容', openFolder: '打开下载目录',
+      autoCheck: '启动时自动检查更新', later: '稍后安装', dismiss: '暂时关闭更新提示', viewUpdate: '查看更新',
+      availableNotice: 'ArgusAI {version} 已发布', readyNotice: 'ArgusAI {version} 已下载，可安装',
+      sourceHint: '当前从源码运行。请前往发行页面下载适合的平台安装包，或更新本地源码。',
+      manualHint: '当前安装位置无法自动替换。下载完成后，请打开下载目录手动安装。',
+      behaviorHint: '检查更新不会自动下载或重启。下载完成后需要你确认安装；有任务运行时会暂缓安装。',
+      confirmTitle: '安装 ArgusAI {version} 并重启？',
+      confirmBody: '请先保存正在编辑的内容。确认后，ArgusAI 将退出并安装已校验的更新，然后重新启动。\n\n如果仍有 Agent、扫描或其他任务运行，应用会保留下载包并提示你稍后安装。',
+      busyError: '仍有任务正在运行，请等任务完成或自行停止后再安装。更新包已保留。',
+      checkFailed: '检查更新失败，请稍后重试。', downloadFailed: '下载更新失败，请检查网络后重试。',
+      cancelFailed: '取消下载失败，请稍后重试。', installFailed: '无法安装更新，已保留当前程序。',
+      folderFailed: '无法打开下载目录。', statusUnavailable: '暂时无法获取更新进度，请重新检查。', downloadProgress: '更新下载进度',
+      status: {
+        idle: '可手动检查新版本。', checking: '正在从官网检查新版本…', up_to_date: '当前已是最新版本。',
+        available: '发现新版本 {version}', downloading: '正在下载并校验更新…', downloaded: '更新包已下载，完整性校验通过。',
+        installing: '正在准备安装，应用即将退出…', error: '更新未完成，请重试。', unsupported: '当前平台暂不提供匹配的更新包。',
+      },
+    },
     app: {
       product: "ArgusAI",
       title: "ArgusAI 安全工作台",
@@ -3728,6 +3749,27 @@ export const messages = {
   },
 
   en: {
+    updates: {
+      title: 'Software updates', currentVersion: 'Current version {version}', check: 'Check for updates', checking: 'Checking…',
+      download: 'Download update', retryDownload: 'Retry download', cancelDownload: 'Cancel download', installRestart: 'Install and restart',
+      releasePage: 'View release', releaseNotes: 'What’s new', openFolder: 'Open download folder',
+      autoCheck: 'Check for updates on startup', later: 'Install later', dismiss: 'Dismiss update notice', viewUpdate: 'View update',
+      availableNotice: 'ArgusAI {version} is available', readyNotice: 'ArgusAI {version} is downloaded and ready',
+      sourceHint: 'Running from source. Download a package for your platform from the release page, or update your local source checkout.',
+      manualHint: 'This installation cannot be replaced automatically. After downloading, open the download folder to install it manually.',
+      behaviorHint: 'Checking never downloads or restarts automatically. Installation requires your confirmation and waits until running tasks finish.',
+      confirmTitle: 'Install ArgusAI {version} and restart?',
+      confirmBody: 'Save any content you are editing first. ArgusAI will close, install the verified update, and restart.\n\nIf an Agent, scan, or another task is still running, the download will be kept so you can install it later.',
+      busyError: 'Tasks are still running. Wait for them to finish or stop them before installing. The update package has been kept.',
+      checkFailed: 'Could not check for updates. Try again later.', downloadFailed: 'Could not download the update. Check your connection and retry.',
+      cancelFailed: 'Could not cancel the download. Try again.', installFailed: 'Could not install the update. Your current application has been kept.',
+      folderFailed: 'Could not open the download folder.', statusUnavailable: 'Update progress is temporarily unavailable. Check again.', downloadProgress: 'Update download progress',
+      status: {
+        idle: 'Check manually for a new version.', checking: 'Checking the website for updates…', up_to_date: 'You’re up to date.',
+        available: 'Version {version} is available', downloading: 'Downloading and verifying the update…', downloaded: 'Update downloaded and integrity verified.',
+        installing: 'Preparing installation. ArgusAI will close shortly…', error: 'The update did not complete. Please retry.', unsupported: 'No update package is available for this platform.',
+      },
+    },
     app: {
       product: "ArgusAI",
       title: "ArgusAI Security Workbench",

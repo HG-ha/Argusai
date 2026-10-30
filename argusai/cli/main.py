@@ -48,6 +48,7 @@ def _register_commands() -> None:
         scan,
         serve,
         todos,
+        update,
     )
 
     app.add_typer(channels.app, name="channels")
@@ -66,6 +67,7 @@ def _register_commands() -> None:
     app.command("report")(report.report)
     app.command("scan")(scan.scan)
     app.command("version")(version_cmd)
+    app.command("update")(update.update)
     _commands_registered = True
 
 

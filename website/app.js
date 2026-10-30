@@ -57,7 +57,7 @@ if (previewLinks.length) {
     status.textContent = '图片加载中…';
     picture.src = link.href;
   }
-  picture.addEventListener('load', () => { status.textContent = '真实应用截图 · 左右方向键切换 · Esc 关闭'; });
+  picture.addEventListener('load', () => { status.textContent = previewLinks[current]?.dataset.shotLink === 'cli' ? '真实终端会话渲染 · 左右方向键切换 · Esc 关闭' : '真实应用截图 · 左右方向键切换 · Esc 关闭'; });
   picture.addEventListener('error', () => { status.textContent = '图片加载失败，请关闭后重试。'; });
   previewLinks.forEach((link,index) => link.addEventListener('click',event => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;

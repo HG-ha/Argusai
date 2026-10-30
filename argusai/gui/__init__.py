@@ -36,6 +36,7 @@ from .ui_context import UiContextMixin
 from .user_todos import UserTodosMixin
 from .tasks import TasksMixin
 from .window import WindowMixin
+from .updates import UpdatesMixin
 
 
 class Api(
@@ -57,6 +58,7 @@ class Api(
     ChannelsMixin,
     HostServiceMixin,
     WindowMixin,
+    UpdatesMixin,
     TeamsMixin,
     AssistantMixin,
     _ApiBase,

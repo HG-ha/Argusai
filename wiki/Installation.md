@@ -2,7 +2,7 @@
 
 [Wiki 首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
 
-发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.3`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
+发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.4`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
 
 ## 发行包
 
@@ -10,11 +10,11 @@
 
 | 平台 | 自动发布产物 | 额外运行环境 |
 | --- | --- | --- |
-| Windows x64 | `ArgusAI-0.1.3-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
-| Windows ARM64 | `ArgusAI-0.1.3-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
-| macOS Apple Silicon | `ArgusAI-0.1.3-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
-| Linux x64 | `ArgusAI-0.1.3-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
-| Linux ARM64 | `ArgusAI-0.1.3-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
+| Windows x64 | `ArgusAI-0.1.4-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
+| Windows ARM64 | `ArgusAI-0.1.4-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
+| macOS Apple Silicon | `ArgusAI-0.1.4-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
+| Linux x64 | `ArgusAI-0.1.4-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
+| Linux ARM64 | `ArgusAI-0.1.4-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
 
 这些是自动工作流目前配置的发布平台。其他架构应在对应环境中从源码运行或自行构建，不能仅修改文件名来转换架构。
 
@@ -25,8 +25,8 @@
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\ArgusAI-0.1.3-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\ArgusAI-0.1.3-win-x64-setup.exe.sha256
+Get-FileHash .\ArgusAI-0.1.4-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\ArgusAI-0.1.4-win-x64-setup.exe.sha256
 ```
 
 比较两者的哈希，不要把摘要文件中的文件名也纳入比较。
@@ -34,13 +34,13 @@ Get-Content .\ArgusAI-0.1.3-win-x64-setup.exe.sha256
 Linux：
 
 ```sh
-sha256sum -c ArgusAI-0.1.3-linux-x64.tar.gz.sha256
+sha256sum -c ArgusAI-0.1.4-linux-x64.tar.gz.sha256
 ```
 
 macOS：
 
 ```sh
-shasum -a 256 -c ArgusAI-0.1.3-macos-arm64.dmg.sha256
+shasum -a 256 -c ArgusAI-0.1.4-macos-arm64.dmg.sha256
 ```
 
 ### Windows
@@ -60,8 +60,8 @@ shasum -a 256 -c ArgusAI-0.1.3-macos-arm64.dmg.sha256
 解压 tar.gz 后进入版本目录，启动桌面：
 
 ```sh
-tar -xzf ArgusAI-0.1.3-linux-x64.tar.gz
-cd ArgusAI-0.1.3-linux-x64
+tar -xzf ArgusAI-0.1.4-linux-x64.tar.gz
+cd ArgusAI-0.1.4-linux-x64
 ./ArgusAI --gui
 ```
 
@@ -74,6 +74,14 @@ sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev
 ```
 
 应在实际目标发行版上验证兼容性；缺少共享库时记录错误，不要用不同架构或其他发行版的二进制文件替代缺失库。 GTK 后端还涉及 GObject introspection；源码虚拟环境的 Python 依赖见下节。
+
+### 自动检查与安装更新
+
+包含自动更新功能的桌面发行包会在启动后检查官网版本清单；也可在“关于”页面点击“检查更新”。检查和下载可以在后台进行。确认新版本后下载安装包，程序会核对平台、文件大小和 SHA-256，校验失败时不会进入安装。
+
+下载完成后，选择“安装并重启”。有运行中的 Agent、扫描、代理或其他活动工作时，先完成或停止相应工作，再重试安装。Windows 会通过系统权限提示启动安装器；macOS 和 Linux 需要安装目录可写。安装过程保留旧程序备份，应用配置、会话与数据目录不随程序目录替换。若自定义数据位于安装目录内，先用设置中的迁移功能移到安装目录外。
+
+安装目录不可写、当前平台没有发行包，或使用源码环境时，按页面提示打开下载目录或 GitHub Release 手动更新；源码环境仍通过 Git 和依赖管理器升级。更新检查读取官网静态清单，安装包从对应 GitHub Release 下载，不需要配置 GitHub Token。早期发行包没有内置更新入口，需要先手动安装包含该功能的新版本。
 
 ## 从源码运行
 

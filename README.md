@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.3-0967a6?style=flat-square" alt="版本 0.1.3">
+  <img src="https://img.shields.io/badge/version-0.1.4-0967a6?style=flat-square" alt="版本 0.1.4">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows、macOS 与 Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="许可证 GPL-3.0-only"></a>
@@ -19,6 +19,7 @@
 <p align="center">
   <a href="wiki/Home.md"><strong>使用文档</strong></a> ·
   <a href="wiki/Quick-Start.md">快速开始</a> ·
+  <a href="#运行界面">运行界面</a> ·
   <a href="#持续执行与主动发现">持续执行</a> ·
   <a href="https://github.com/HG-ha/Argusai/releases">下载发行包</a> ·
   <a href="README.en.md">English</a> ·
@@ -34,6 +35,45 @@ ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全
 侧栏的完整对话与可拖动悬浮球都是任务入口，进入的是同一个 Agent 工作区。Agent 能理解当前应用页面、正在查看的任务或逆向作业，以及相关工作状态；引用具体材料后，它可以接着你正在做的工作继续执行。功能页与对话之间共享任务、样本和证据。
 
 项目面向企业安全团队、应用安全工程师、安全研究人员和明确授权的测试人员。底层 Agent 运行时也支持文件处理、日常信息整理和桌面协作，当前内置工具与工作流重点覆盖安全分析和逆向研究。
+
+## 运行界面
+
+<table>
+<tr>
+<td width="50%" align="center" valign="top">
+  <strong>桌面 Agent</strong><br>
+  <a href="website/assets/screens/agent-light.webp">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/agent-dark.webp">
+      <img src="website/assets/screens/agent-light.webp" width="100%" alt="ArgusAI 桌面 Agent 对话">
+    </picture>
+  </a>
+</td>
+<td width="50%" align="center" valign="top">
+  <strong>命令行</strong><br>
+  <a href="website/assets/screens/cli-dark.webp">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/cli-dark.webp">
+      <img src="website/assets/screens/cli-light.webp" width="100%" alt="ArgusAI 命令行，左右侧栏展开">
+    </picture>
+  </a>
+</td>
+</tr>
+</table>
+
+<details>
+<summary><strong>沙盒预览</strong></summary>
+
+<p align="center">
+  <a href="website/assets/screens/sandbox-light.webp">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="website/assets/screens/sandbox-dark.webp">
+      <img src="website/assets/screens/sandbox-light.webp" width="100%" alt="ArgusAI 沙盒文件预览">
+    </picture>
+  </a>
+</p>
+
+</details>
 
 ## 一个工作区，连接分析与执行
 
@@ -163,7 +203,7 @@ flowchart TB
 
 ## 快速开始
 
-当前版本为 `0.1.3`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
+当前版本为 `0.1.4`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
 
 ```sh
 uv sync --locked

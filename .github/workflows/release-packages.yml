@@ -367,7 +367,7 @@ jobs:
           "DOTNET_ROOT_ARM64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $desktopRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install locked Python dependencies
-        run: uv sync --locked --group build --python python
+        run: uv sync --locked --group build --group dev --python python
       - name: Verify native Python and Node architectures
         env:
           EXPECTED_ARCH: ${{ matrix.architecture }}
@@ -411,6 +411,10 @@ jobs:
           subprocess.run(["uv", "run", "--locked", "--group", "build", "python", "-c", probe], check=True, timeout=120)
       - name: Test release tooling
         run: uv run --locked --group build pytest tests/scripts/ -q
+      - name: Test update verification, native installer helpers and GUI handoff
+        env:
+          PYTEST_ADDOPTS: --timeout=240
+        run: uv run --locked --group build python -m pytest tests/core/test_updater.py tests/core/test_updater_native.py tests/gui/test_updates.py tests/scripts/test_release_feed.py -q --tb=short
       - name: Build frontend
         working-directory: argusai/webui
         run: |
@@ -611,3 +615,84 @@ jobs:
                   raise SystemExit("Release notes do not match the validated commit")
               subprocess.run(["gh", "release", "create", tag, "--target", commit,
                               "--title", f"ArgusAI v{version}", "--notes-file", str(notes), *assets], check=True)
+
+  update-website:
+    name: Synchronize and verify the public update feed
+    needs: [validate, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    concurrency:
+      group: website-release-feed
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+      CLOUDFLARE_PAGES_DEPLOY_HOOK: ${{ secrets.CLOUDFLARE_PAGES_DEPLOY_HOOK }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Generate metadata from the complete published Release and push static files
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          import time
+
+          def git(*args, **kwargs):
+              return subprocess.run(["git", *args], check=True, **kwargs)
+
+          git("config", "user.name", "github-actions[bot]")
+          git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+          generated = ["website/updates", "website/changelog.html"]
+          for attempt in range(4):
+              # This disposable runner only contains generated files. Rebuild them on
+              # the latest main rather than rebasing an old release checkout over it.
+              git("fetch", "origin", "main")
+              git("reset", "--hard", "FETCH_HEAD")
+              subprocess.run([sys.executable, "scripts/release_feed.py", "--tag", os.environ["RELEASE_TAG"],
+                              "--commit", os.environ["SOURCE_COMMIT"]], check=True)
+              git("add", "--", *generated)
+              changes = subprocess.run(["git", "diff", "--cached", "--quiet"])
+              if changes.returncode == 0:
+                  break
+              if changes.returncode != 1:
+                  raise SystemExit("Cannot inspect generated update files")
+              git("commit", "-m", f"docs: synchronize website for {os.environ['RELEASE_TAG']}")
+              pushed = subprocess.run(["git", "push", "origin", "HEAD:main"])
+              if pushed.returncode == 0:
+                  break
+              if attempt == 3:
+                  raise SystemExit("Could not fast-forward the website update; no force push was attempted")
+              time.sleep(3)
+      - name: Request Pages deployment when a deploy hook is configured
+        shell: python
+        run: |
+          import os
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlsplit
+          from urllib.request import Request, urlopen
+
+          hook = os.environ.get("CLOUDFLARE_PAGES_DEPLOY_HOOK", "")
+          if hook:
+              parsed = urlsplit(hook)
+              if parsed.scheme != "https" or parsed.hostname != "api.cloudflare.com" or not parsed.path.startswith("/client/v4/pages/webhooks/deploy_hooks/"):
+                  raise SystemExit("Unexpected Cloudflare Pages deploy hook URL")
+              try:
+                  with urlopen(Request(hook, data=b"", method="POST"), timeout=30) as response:
+                      if response.status >= 300:
+                          raise SystemExit("Cloudflare Pages did not accept the deployment request")
+              except (HTTPError, URLError, TimeoutError):
+                  raise SystemExit("Cloudflare Pages deploy hook failed; inspect the Pages dashboard") from None
+          else:
+              print("Using the existing Cloudflare Pages Git integration; verifying the deployed feed next.")
+      - name: Verify the public feed after deployment
+        run: python scripts/release_feed.py --tag "$RELEASE_TAG" --commit "$SOURCE_COMMIT" --verify-live

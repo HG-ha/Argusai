@@ -26,6 +26,20 @@ uv run argusai --chat
 
 无 TTY 环境不要依赖裸命令进入交互；脚本应选择明确的子命令。`--verbose` 可用于将日志镜像到 stderr，收集日志前先考虑脱敏。
 
+## 检查与下载更新
+
+CLI 只在主动执行更新命令时访问官网版本清单。普通命令、帮助、版本输出和交互式 Agent 启动都不会自动检查或插入更新提示。
+
+```sh
+uv run argusai update
+uv run argusai update --check --json
+argusai update --download
+```
+
+`update` 默认只检查并显示当前版本、最新版本、更新内容和发行页面；`--check` 显式执行相同行为。发行包用户加 `--download` 后下载当前系统与架构的包，并校验大小及 SHA-256，完成后显示包路径。此命令不会自行启动安装器或打开 GUI；可手动安装已校验的包，或进入桌面端「关于 → 安装并重启」。下载中按 Ctrl+C 取消。
+
+源码或包管理器安装按原有 Git、uv、pip 流程升级，更新命令不会覆盖仓库或 Python 环境。`--json` 提供机器可读结果；检查失败或下载失败返回非零退出码。
+
 ## Agent 对话
 
 ### 多轮对话与固定会话
