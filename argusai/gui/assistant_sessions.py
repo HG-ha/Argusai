@@ -12,6 +12,11 @@ _AGENT_COMPLETION_WAKE_PROMPT = (
     "不要声称这是用户发来的消息，也不要在未获用户确认的情况下执行有副作用的操作。"
 )
 
+_CONTEXT_MAX_MESSAGES = 2_000
+_CONTEXT_MAX_MESSAGE_CHARS = 100_000
+_CONTEXT_MAX_TOTAL_CHARS = 2_000_000
+_CONTEXT_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+
 
 class AssistantSessionsMixin:
     @property
@@ -710,24 +715,14 @@ class AssistantSessionsMixin:
             if "note" in patch:
                 note = str(patch.get("note") or "").strip()
                 data["note"] = note[:4000]
-            if "context_notes" in patch:
-                from argusai.core.assistant.session import MAX_CONTEXT_NOTES_CHARS
-
-                context_notes = str(patch.get("context_notes") or "").strip()
-                data["context_notes"] = context_notes[:MAX_CONTEXT_NOTES_CHARS]
             data["updated_at"] = time.time()
             p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            if "context_notes" in patch:
-                live = self._assistant_sessions.get(session_id)
-                if live is not None:
-                    live.set_context_notes(data["context_notes"])
             return {
                 "ok": True,
                 "session": {
                     "id": session_id,
                     "name": self._assistant_session_display_name(data, session_id),
                     "note": str(data.get("note") or ""),
-                    "context_notes": str(data.get("context_notes") or ""),
                     "updated_at": data.get("updated_at", 0),
                 },
             }
@@ -735,8 +730,183 @@ class AssistantSessionsMixin:
             return {"ok": False, "error": str(e)}
 
 
+    def _normalize_assistant_context_messages(self, raw: Any) -> list[dict[str, str]]:
+        if not isinstance(raw, list):
+            raise ValueError("context messages must be a list")
+        if len(raw) > _CONTEXT_MAX_MESSAGES:
+            raise ValueError(f"context has too many messages (maximum {_CONTEXT_MAX_MESSAGES})")
+        messages: list[dict[str, str]] = []
+        total_chars = 0
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("each context message must be an object")
+            role = str(item.get("role") or "").strip().lower()
+            if role == "agent":
+                role = "assistant"
+            if role not in {"user", "assistant"}:
+                raise ValueError("context message role must be user or assistant")
+            content = str(item.get("content") or item.get("text") or "").strip()
+            if not content:
+                continue
+            if len(content) > _CONTEXT_MAX_MESSAGE_CHARS:
+                raise ValueError(
+                    f"one context message is too long (maximum {_CONTEXT_MAX_MESSAGE_CHARS} characters)"
+                )
+            total_chars += len(content)
+            if total_chars > _CONTEXT_MAX_TOTAL_CHARS:
+                raise ValueError(
+                    f"context is too large (maximum {_CONTEXT_MAX_TOTAL_CHARS} characters)"
+                )
+            messages.append({"role": role, "content": content})
+        return messages
+
+
+    def _assistant_context_messages_from_history(self, history: Any) -> list[dict[str, str]]:
+        visible: list[dict[str, str]] = []
+        for message in history if isinstance(history, list) else []:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") not in {"user", "assistant"}:
+                continue
+            if message.get("hidden") or message.get("ui_hidden"):
+                continue
+            if self._looks_like_hidden_confirmation(message) or self._looks_like_cron_trigger(message):
+                continue
+            content = str(message.get("content") or "").strip()
+            if content:
+                visible.append({"role": str(message["role"]), "content": content})
+        return self._normalize_assistant_context_messages(visible)
+
+
+    def _assistant_context_is_busy(self, session_id: str) -> bool:
+        try:
+            with self._assistant_run_lock:
+                if session_id in self._assistant_running_sessions:
+                    return True
+        except Exception:
+            pass
+        return any(
+            stream.get("session_id") == session_id and not stream.get("done")
+            for stream in list(getattr(self, "_assistant_streams", {}).values())
+        )
+
+
+    def get_assistant_context(self, session_id: str) -> dict[str, Any]:
+        """Return the editable, model-visible conversation as role/content messages."""
+        try:
+            session_id = self._validate_session_id(session_id)
+            path = self._session_path(session_id)
+            if not path.exists():
+                return {"ok": False, "error": "session not found", "messages": []}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            live = self._assistant_sessions.get(session_id)
+            history = (
+                [message.to_dict() for message in live.history]
+                if live is not None
+                else data.get("history") or []
+            )
+            messages = self._assistant_context_messages_from_history(history)
+            rich_count = sum(
+                1
+                for message in history
+                if isinstance(message, dict)
+                and message.get("role") in {"user", "assistant", "tool"}
+                and any(
+                    message.get(key)
+                    for key in (
+                        "attachments", "voice", "selection_reference", "blocks",
+                        "tool_calls", "tool_call_id", "provider_content",
+                    )
+                )
+            )
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "messages": messages,
+                "message_count": len(messages),
+                "rich_message_count": rich_count,
+                "busy": self._assistant_context_is_busy(session_id),
+            }
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": str(exc), "messages": []}
+
+
+    def save_assistant_context(self, session_id: str, messages: Any) -> dict[str, Any]:
+        """Replace the model-visible conversation with a reviewed dialogue."""
+        try:
+            session_id = self._validate_session_id(session_id)
+            path = self._session_path(session_id)
+            if not path.exists():
+                return {"ok": False, "error": "session not found"}
+            if self._assistant_context_is_busy(session_id):
+                return {"ok": False, "error": "session is running; stop it before editing context"}
+            normalized = self._normalize_assistant_context_messages(messages)
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            session = self._ensure_session(session_id)
+            if getattr(session, "_pending", None):
+                return {"ok": False, "error": "resolve the pending confirmation before editing context"}
+            from argusai.core.assistant import ChatMessage
+
+            now = time.time()
+            session.history = [
+                ChatMessage(
+                    role=message["role"],
+                    content=message["content"],
+                    timestamp=now + (index / 1000),
+                )
+                for index, message in enumerate(normalized)
+            ]
+            # Summaries and context-size snapshots were derived from the old
+            # transcript and must never survive a manual rewrite.
+            session.memory_summary = ""
+            session.memory_index = []
+            session._memory_fingerprint = None
+            session.last_prompt_tokens_est = 0
+            session.last_prompt_bytes = 0
+            session.last_prompt_history_bytes = 0
+            self._save_session(
+                path,
+                session,
+                str(stored.get("name") or ""),
+            )
+            try:
+                self._notify_assistant_session_updated(session_id, reason="context_edited")
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "session_id": session_id,
+                "messages": normalized,
+                "message_count": len(normalized),
+            }
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
+    def _parse_assistant_context_markdown(self, raw: str) -> list[dict[str, str]]:
+        import re
+
+        heading = re.compile(
+            r"(?im)^#{1,6}\s*(user|assistant|agent|用户|助手)\s*$"
+        )
+        matches = list(heading.finditer(raw))
+        if not matches:
+            return self._normalize_assistant_context_messages(
+                [{"role": "user", "content": raw}]
+            )
+        messages: list[dict[str, str]] = []
+        for index, match in enumerate(matches):
+            label = match.group(1).lower()
+            role = "user" if label in {"user", "用户"} else "assistant"
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(raw)
+            content = raw[match.end():end].strip()
+            if content:
+                messages.append({"role": role, "content": content})
+        return self._normalize_assistant_context_messages(messages)
+
+
     def import_assistant_context(self, session_id: str) -> dict[str, Any]:
-        """Import persistent context from a user-selected text, Markdown, or JSON file."""
+        """Read a user-selected conversation context for review in the editor."""
         try:
             session_id = self._validate_session_id(session_id)
             if not self._session_path(session_id).exists():
@@ -755,70 +925,72 @@ class AssistantSessionsMixin:
             source = Path(str(picked.get("path") or "")).resolve()
             if not source.is_file():
                 return {"ok": False, "error": f"not a file: {source}"}
-            # A context note is capped at 12k characters. Leave room for JSON
-            # metadata while refusing unexpectedly large files selected by mistake.
-            if source.stat().st_size > 256_000:
-                return {"ok": False, "error": "context file is too large (maximum 256 KB)"}
+            if source.stat().st_size > _CONTEXT_IMPORT_MAX_BYTES:
+                return {"ok": False, "error": "context file is too large (maximum 5 MB)"}
             raw = source.read_text(encoding="utf-8-sig")
-            notes: Any = raw
             if source.suffix.lower() == ".json":
                 payload = json.loads(raw)
-                if isinstance(payload, str):
-                    notes = payload
-                elif isinstance(payload, dict):
-                    notes = next(
-                        (
-                            payload[key]
-                            for key in ("context_notes", "context", "notes")
-                            if key in payload
-                        ),
-                        None,
-                    )
-                    if notes is None:
-                        return {"ok": False, "error": "JSON context has no context_notes field"}
-                else:
-                    return {"ok": False, "error": "JSON context must be an object or string"}
-            updated = self.update_assistant_session(session_id, {"context_notes": notes})
-            if not updated.get("ok"):
-                return updated
+                if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+                    payload = payload["messages"]
+                elif isinstance(payload, dict) and payload.get("context_notes"):
+                    payload = [{"role": "user", "content": payload["context_notes"]}]
+                messages = self._normalize_assistant_context_messages(payload)
+            else:
+                messages = self._parse_assistant_context_markdown(raw)
             return {
-                **updated,
-                "context_notes": str(updated.get("session", {}).get("context_notes") or ""),
+                "ok": True,
+                "session_id": session_id,
+                "messages": messages,
+                "message_count": len(messages),
                 "source": str(source),
             }
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
             return {"ok": False, "error": str(exc)}
 
 
-    def export_assistant_context(self, session_id: str) -> dict[str, Any]:
-        """Export persistent context to a user-selected Markdown file."""
+    def export_assistant_context(self, session_id: str, messages: Any = None) -> dict[str, Any]:
+        """Export a reviewed conversation context as portable JSON or Markdown."""
         try:
             session_id = self._validate_session_id(session_id)
             path = self._session_path(session_id)
             if not path.exists():
                 return {"ok": False, "error": "session not found"}
-            data = json.loads(path.read_text(encoding="utf-8"))
-            live = self._assistant_sessions.get(session_id)
-            notes = str(
-                getattr(live, "context_notes", "")
-                if live is not None
-                else data.get("context_notes") or ""
-            )
+            if messages is None:
+                current = self.get_assistant_context(session_id)
+                if not current.get("ok"):
+                    return current
+                normalized = self._normalize_assistant_context_messages(current.get("messages"))
+            else:
+                normalized = self._normalize_assistant_context_messages(messages)
             picker = getattr(self, "_pick_save_file", None)
             if not callable(picker):
                 return {"ok": False, "error": "file picker is unavailable"}
-            picked = picker(save_filename=f"ArgusAI-context-{session_id[:32]}.md")
+            picked = picker(save_filename=f"ArgusAI-context-{session_id[:32]}.json")
             if not picked.get("ok"):
                 return picked
             target = Path(str(picked.get("path") or "")).expanduser()
-            target.write_text(notes + ("\n" if notes else ""), encoding="utf-8")
+            if target.suffix.lower() in {".md", ".markdown", ".txt"}:
+                chunks = ["# ArgusAI Conversation Context"]
+                for message in normalized:
+                    label = "User" if message["role"] == "user" else "Assistant"
+                    chunks.extend(["", f"## {label}", "", message["content"]])
+                target.write_text("\n".join(chunks).rstrip() + "\n", encoding="utf-8")
+            else:
+                payload = {
+                    "format": "argusai-conversation-context",
+                    "version": 1,
+                    "messages": normalized,
+                }
+                target.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             return {
                 "ok": True,
                 "path": str(target),
-                "context_notes": notes,
-                "char_count": len(notes),
+                "message_count": len(normalized),
             }
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
             return {"ok": False, "error": str(exc)}
 
 
@@ -865,7 +1037,6 @@ class AssistantSessionsMixin:
                 "session_id": session_id,
                 "name": self._assistant_session_display_name(data, session_id),
                 "note": str(data.get("note") or ""),
-                "context_notes": str(data.get("context_notes") or ""),
                 "runtime": binding.to_dict(),
                 "history": history,
             }
@@ -1054,11 +1225,6 @@ class AssistantSessionsMixin:
             "session_id": hist.get("session_id"),
             "name": hist.get("name"),
             "note": hist.get("note") or "",
-            "context_notes": str(
-                getattr(session, "context_notes", "")
-                if session is not None
-                else hist.get("context_notes") or ""
-            ),
             "message_count": len(hist.get("history") or []),
             "memory_summary": summary,
             "memory_count": memory_count,

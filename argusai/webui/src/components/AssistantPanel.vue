@@ -34,7 +34,7 @@ const confirmDialog = useConfirm()
 const mediaPreview = useMediaPreview()
 const voiceInput = useAssistantVoiceInput()
 const HISTORY_LOAD_TIMEOUT_MS = 30_000
-const CONTEXT_NOTES_MAX_CHARS = 12_000
+const CONTEXT_EDITOR_MAX_MESSAGES = 2_000
 const showNewSessionModal = ref(false)
 const agentRuntimeInventory = ref([])
 const agentRuntimesLoading = ref(false)
@@ -372,8 +372,12 @@ const messageContextMenu = reactive({ open: false, x: 0, y: 0, uid: null })
 const tabContextMenu = reactive({ open: false, x: 0, y: 0, sessionId: '' })
 const contextEditorOpen = ref(false)
 const contextEditorSessionId = ref('')
-const contextEditorDraft = ref('')
+const contextEditorMessages = ref([])
+const contextEditorRichMessageCount = ref(0)
 const contextEditorSaving = ref(false)
+const contextEditorImporting = ref(false)
+const contextEditorExporting = ref(false)
+let contextEditorMessageSeq = 0
 const editingUserMessageUid = ref(null)
 const editingUserMessageText = ref('')
 const messageContextActions = computed(() => {
@@ -4952,30 +4956,119 @@ function openTabContextMenu(event, tab) {
   tabContextMenu.sessionId = tab.sessionId
 }
 
-async function openContextEditor(tab) {
+function makeContextEditorMessage(raw = {}) {
+  const role = String(raw?.role || '').toLowerCase() === 'assistant' ? 'assistant' : 'user'
+  return {
+    _uid: `context-${Date.now()}-${++contextEditorMessageSeq}`,
+    role,
+    content: String(raw?.content ?? raw?.text ?? ''),
+  }
+}
+
+function normalizeContextEditorMessages(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .slice(0, CONTEXT_EDITOR_MAX_MESSAGES)
+    .filter(item => item && typeof item === 'object')
+    .map(makeContextEditorMessage)
+}
+
+function serializedContextEditorMessages() {
+  return contextEditorMessages.value
+    .map(item => ({
+      role: item.role === 'assistant' ? 'assistant' : 'user',
+      content: String(item.content || '').trim(),
+    }))
+    .filter(item => item.content)
+}
+
+async function openContextEditor(tab, importedMessages = null) {
   if (!tab?.sessionId) return
-  let notes = tab.contextNotes
-  if (notes == null) {
+  let messages = importedMessages
+  let richMessageCount = 0
+  if (!Array.isArray(messages)) {
     const result = await withTimeout(
-      api.getAssistantSession(tab.sessionId),
+      api.getAssistantContext(tab.sessionId),
       HISTORY_LOAD_TIMEOUT_MS,
       null,
     )
     if (!result) throw new Error(t('assistant.historyLoadTimeout'))
     if (!result.ok) throw new Error(result.error || t('assistant.contextLoadFailed'))
-    notes = String(result.context_notes || '')
-    tab.contextNotes = notes
+    messages = result.messages
+    richMessageCount = Number(result.rich_message_count || 0)
   }
   contextEditorSessionId.value = tab.sessionId
-  contextEditorDraft.value = String(notes || '')
+  contextEditorMessages.value = normalizeContextEditorMessages(messages)
+  contextEditorRichMessageCount.value = richMessageCount
   contextEditorOpen.value = true
 }
 
 function closeContextEditor() {
-  if (contextEditorSaving.value) return
+  if (contextEditorSaving.value || contextEditorImporting.value || contextEditorExporting.value) return
   contextEditorOpen.value = false
   contextEditorSessionId.value = ''
-  contextEditorDraft.value = ''
+  contextEditorMessages.value = []
+  contextEditorRichMessageCount.value = 0
+}
+
+function addContextEditorMessage(role = 'user') {
+  if (contextEditorMessages.value.length >= CONTEXT_EDITOR_MAX_MESSAGES) return
+  contextEditorMessages.value.push(makeContextEditorMessage({ role, content: '' }))
+  nextTick(() => {
+    const fields = document.querySelectorAll('.assistant-context-message textarea')
+    fields[fields.length - 1]?.focus?.()
+  })
+}
+
+function removeContextEditorMessage(index) {
+  contextEditorMessages.value.splice(index, 1)
+}
+
+function moveContextEditorMessage(index, delta) {
+  const target = index + delta
+  if (target < 0 || target >= contextEditorMessages.value.length) return
+  const [message] = contextEditorMessages.value.splice(index, 1)
+  contextEditorMessages.value.splice(target, 0, message)
+}
+
+async function importContextIntoEditor(tab) {
+  if (!tab?.sessionId || contextEditorImporting.value) return
+  contextEditorImporting.value = true
+  try {
+    const result = await api.importAssistantContext(tab.sessionId)
+    if (result?.cancelled) return
+    if (!result?.ok) throw new Error(result?.error || t('assistant.contextImportFailed'))
+    await openContextEditor(tab, result.messages || [])
+    showToast(t('assistant.contextImportedReview'), 'ok')
+  } finally {
+    contextEditorImporting.value = false
+  }
+}
+
+async function importContextFromEditor() {
+  const tab = tabs.find(item => item.sessionId === contextEditorSessionId.value)
+  if (!tab) return
+  try {
+    await importContextIntoEditor(tab)
+  } catch (error) {
+    showToast(t('toast.error', { msg: error?.message || error }), 'error')
+  }
+}
+
+async function exportContextFromEditor() {
+  const id = contextEditorSessionId.value
+  if (!id || contextEditorExporting.value) return
+  contextEditorExporting.value = true
+  try {
+    const result = await api.exportAssistantContext(id, serializedContextEditorMessages())
+    if (result?.cancelled) return
+    if (!result?.ok) throw new Error(result?.error || t('assistant.contextExportFailed'))
+    showToast(t('assistant.contextExported'), 'ok')
+  } catch (error) {
+    showToast(t('toast.error', { msg: error?.message || error }), 'error')
+  } finally {
+    contextEditorExporting.value = false
+  }
 }
 
 async function saveContextEditor() {
@@ -4983,13 +5076,14 @@ async function saveContextEditor() {
   if (!id || contextEditorSaving.value) return
   contextEditorSaving.value = true
   try {
-    const notes = String(contextEditorDraft.value || '').trim().slice(0, CONTEXT_NOTES_MAX_CHARS)
-    const result = await api.updateAssistantSession(id, { context_notes: notes })
+    const messages = serializedContextEditorMessages()
+    const result = await api.saveAssistantContext(id, messages)
     if (!result?.ok) throw new Error(result?.error || t('assistant.contextSaveFailed'))
-    const saved = String(result.session?.context_notes ?? notes)
     const tab = tabs.find(item => item.sessionId === id)
-    if (tab) tab.contextNotes = saved
-    contextEditorDraft.value = saved
+    if (tab) {
+      tab._historyLoaded = false
+      await hydrateIfNeeded(tab)
+    }
     showToast(t('assistant.contextSaved'), 'ok')
     contextEditorOpen.value = false
   } catch (error) {
@@ -5018,11 +5112,7 @@ async function handleTabContextAction(actionId) {
   }
   if (actionId === 'import-context') {
     try {
-      const result = await api.importAssistantContext(id)
-      if (result?.cancelled) return
-      if (!result?.ok) throw new Error(result?.error || t('assistant.contextImportFailed'))
-      tab.contextNotes = String(result.context_notes || '')
-      showToast(t('assistant.contextImported'), 'ok')
+      await importContextIntoEditor(tab)
     } catch (error) {
       showToast(t('toast.error', { msg: error?.message || error }), 'error')
     }
@@ -5984,7 +6074,6 @@ async function loadHistory() {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
-      tab.contextNotes = String(r.context_notes || '')
       if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
@@ -6354,7 +6443,6 @@ async function hydrateIfNeeded(tab) {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
-      tab.contextNotes = String(r.context_notes || '')
       if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
@@ -6394,7 +6482,6 @@ async function onAssistantSessionUpdatedEvent(ev) {
     applySessionAssistantPolicy(r, tab)
     tab.webSearchAllowed = Boolean(r.allow_web_search)
     tab.engagement = r.engagement_declaration || null
-    tab.contextNotes = String(r.context_notes || '')
     if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
     if (r.name) tab.name = r.name
     tab._historyLoaded = true
@@ -8095,21 +8182,62 @@ watch(input, (newVal) => {
     :open="contextEditorOpen"
     :title="t('assistant.contextEditorTitle')"
     :description="t('assistant.contextEditorDescription')"
-    size="md"
-    :busy="contextEditorSaving"
+    size="xl"
+    :busy="contextEditorSaving || contextEditorImporting || contextEditorExporting"
     @close="closeContextEditor"
   >
     <div class="assistant-context-editor">
-      <textarea
-        v-model="contextEditorDraft"
-        autofocus
-        :maxlength="CONTEXT_NOTES_MAX_CHARS"
-        :placeholder="t('assistant.contextEditorPlaceholder')"
-        rows="12"
-      ></textarea>
+      <div class="assistant-context-editor-toolbar">
+        <div>
+          <button class="ghost" type="button" :disabled="contextEditorImporting" @click="importContextFromEditor">
+            {{ contextEditorImporting ? t('common.loading') : t('assistant.tabImportContext') }}
+          </button>
+          <button class="ghost" type="button" :disabled="contextEditorExporting" @click="exportContextFromEditor">
+            {{ contextEditorExporting ? t('common.loading') : t('assistant.tabExportContext') }}
+          </button>
+        </div>
+        <span>{{ t('assistant.contextMessageCount', { count: contextEditorMessages.length }) }}</span>
+      </div>
+      <p v-if="contextEditorRichMessageCount" class="assistant-context-editor-warning">
+        {{ t('assistant.contextRichContentWarning', { count: contextEditorRichMessageCount }) }}
+      </p>
+      <div v-if="contextEditorMessages.length" class="assistant-context-stream">
+        <article
+          v-for="(message, index) in contextEditorMessages"
+          :key="message._uid"
+          class="assistant-context-message"
+          :class="message.role"
+        >
+          <div class="assistant-context-message-head">
+            <select v-model="message.role" :aria-label="t('assistant.contextRoleLabel')">
+              <option value="user">{{ t('assistant.contextUser') }}</option>
+              <option value="assistant">{{ t('assistant.contextAssistant') }}</option>
+            </select>
+            <span>#{{ index + 1 }}</span>
+            <div>
+              <button type="button" :disabled="index === 0" :title="t('assistant.contextMoveUp')" @click="moveContextEditorMessage(index, -1)">↑</button>
+              <button type="button" :disabled="index === contextEditorMessages.length - 1" :title="t('assistant.contextMoveDown')" @click="moveContextEditorMessage(index, 1)">↓</button>
+              <button type="button" :title="t('assistant.contextRemoveMessage')" @click="removeContextEditorMessage(index)">×</button>
+            </div>
+          </div>
+          <textarea
+            v-model="message.content"
+            :placeholder="t('assistant.contextMessagePlaceholder')"
+            rows="3"
+          ></textarea>
+        </article>
+      </div>
+      <div v-else class="assistant-context-empty">{{ t('assistant.contextEmpty') }}</div>
+      <div class="assistant-context-add-row">
+        <button class="ghost" type="button" :disabled="contextEditorMessages.length >= CONTEXT_EDITOR_MAX_MESSAGES" @click="addContextEditorMessage('user')">
+          + {{ t('assistant.contextAddUser') }}
+        </button>
+        <button class="ghost" type="button" :disabled="contextEditorMessages.length >= CONTEXT_EDITOR_MAX_MESSAGES" @click="addContextEditorMessage('assistant')">
+          + {{ t('assistant.contextAddAssistant') }}
+        </button>
+      </div>
       <div class="assistant-context-editor-meta">
         <span>{{ t('assistant.contextEditorSafety') }}</span>
-        <span>{{ contextEditorDraft.length }} / {{ CONTEXT_NOTES_MAX_CHARS }}</span>
       </div>
     </div>
     <template #footer>
@@ -8145,31 +8273,152 @@ watch(input, (newVal) => {
 .assistant-context-editor {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
-.assistant-context-editor textarea {
-  width: 100%;
-  min-height: 260px;
-  resize: vertical;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--input-bg, var(--bg-sunken));
-  color: var(--fg);
-  font: 12px/1.6 var(--mono);
-  outline: none;
-}
-.assistant-context-editor textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
-}
-.assistant-context-editor-meta {
+.assistant-context-editor-toolbar,
+.assistant-context-editor-toolbar > div,
+.assistant-context-add-row,
+.assistant-context-message-head,
+.assistant-context-message-head > div {
   display: flex;
+  align-items: center;
+}
+.assistant-context-editor-toolbar {
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   color: var(--muted-2);
   font-size: 11px;
 }
+.assistant-context-editor-toolbar > div,
+.assistant-context-add-row,
+.assistant-context-message-head > div {
+  gap: 7px;
+}
+.assistant-context-editor-toolbar button,
+.assistant-context-add-row button {
+  min-height: 30px;
+}
+.assistant-context-editor-warning {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--warning, #d99b32) 42%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning, #d99b32) 8%, var(--card-bg));
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.assistant-context-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(62vh, 620px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+}
+.assistant-context-message {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: min(86%, 760px);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--card-bg);
+  box-shadow: 0 3px 14px color-mix(in srgb, #000 7%, transparent);
+}
+.assistant-context-message.user {
+  align-self: flex-end;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+}
+.assistant-context-message.assistant {
+  align-self: flex-start;
+}
+.assistant-context-message-head {
+  min-height: 26px;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-2);
+  font: 10px/1.2 var(--mono);
+}
+.assistant-context-message-head select {
+  flex: 0 0 108px;
+  width: 108px;
+  min-width: 94px;
+  height: 26px;
+  padding: 0 24px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--input-bg, var(--bg-sunken));
+  color: var(--fg);
+  font: 11px/1.2 var(--mono);
+}
+.assistant-context-message-head > span {
+  flex: 1;
+}
+.assistant-context-message-head button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.assistant-context-message-head button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg));
+  color: var(--fg);
+}
+.assistant-context-message-head button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+.assistant-context-message textarea {
+  width: 100%;
+  min-height: 74px;
+  resize: vertical;
+  box-sizing: border-box;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg, var(--bg-sunken));
+  color: var(--fg);
+  font: 12px/1.55 var(--mono);
+  outline: none;
+}
+.assistant-context-message textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.assistant-context-empty {
+  padding: 38px 20px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--bg-sunken);
+  color: var(--muted-2);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.assistant-context-add-row {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.assistant-context-editor-meta {
+  display: flex;
+  justify-content: flex-start;
+  gap: 16px;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.5;
+}
+@media(max-width:620px){.assistant-context-message{width:100%}.assistant-context-editor-toolbar{align-items:flex-start;flex-direction:column}.assistant-context-editor-toolbar>div{flex-wrap:wrap}}
 .new-agent-session{display:flex;flex-direction:column;gap:16px}.new-agent-flow{display:flex;align-items:center;gap:8px;overflow:auto;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:var(--bg-sunken)}.new-agent-flow span{flex:none;padding:6px 9px;border:1px solid var(--border);border-radius:7px;background:var(--card-bg);font:11px/1.2 var(--mono)}.new-agent-flow span.accent{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--accent)}.new-agent-flow b{color:var(--muted-2);font-weight:400}.new-agent-field{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:12px}.workspace-choices{display:grid;grid-template-columns:1fr 1fr;gap:9px}.workspace-choices>label{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--card-bg);cursor:pointer}.workspace-choices>label.active{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}.workspace-choices input{margin-top:2px;accent-color:var(--accent)}.workspace-choices span{display:flex;flex-direction:column;gap:4px}.workspace-choices strong{color:var(--fg-strong);font-size:12px}.workspace-choices small{color:var(--muted-2);font-size:11px;line-height:1.4}.project-picker{display:flex;align-items:center;gap:8px}.project-picker code{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg);font:11px/1.2 var(--mono)}.runtime-lock-note{margin:0;padding:10px 12px;border-left:2px solid var(--accent);background:var(--accent-soft);color:var(--muted);font-size:11px;line-height:1.5}
 @media(max-width:620px){.workspace-choices{grid-template-columns:1fr}.project-picker{align-items:stretch;flex-direction:column}.project-picker button{width:100%}}
 .acp-model-picker { display: flex; flex-direction: column; gap: 12px; }

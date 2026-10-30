@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -186,25 +187,43 @@ def test_update_session_metadata_roundtrip(tmp_path) -> None:
     assert detail["note"] == "important note"
 
 
-def test_update_session_context_notes_roundtrip_and_live_state(tmp_path) -> None:
+def test_editable_context_roundtrip_rewrites_the_conversation(tmp_path) -> None:
     api = _Api(tmp_path)
     session = AssistantSession()
-    session.history.append(ChatMessage(role="user", content="hello"))
+    session.history.extend([
+        ChatMessage(role="user", content="old question", timestamp=1.0),
+        ChatMessage(role="assistant", content="old answer", timestamp=2.0),
+        ChatMessage(role="tool", content="old tool output", timestamp=3.0),
+    ])
+    session.memory_summary = "summary from old history"
     path = api._session_path("sess-context")
     api._save_session(path, session, "context")
     api._assistant_sessions["sess-context"] = session
 
-    updated = api.update_assistant_session(
+    editable = api.get_assistant_context("sess-context")
+    assert editable["ok"] is True
+    assert editable["messages"] == [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+    ]
+
+    updated = api.save_assistant_context(
         "sess-context",
-        {"context_notes": "Keep the target limited to staging.example."},
+        [
+            {"role": "user", "content": "new question"},
+            {"role": "assistant", "content": "new answer"},
+        ],
     )
 
     assert updated["ok"] is True
-    assert updated["session"]["context_notes"] == "Keep the target limited to staging.example."
-    assert session.context_notes == "Keep the target limited to staging.example."
+    assert [(item.role, item.content) for item in session.history] == [
+        ("user", "new question"),
+        ("assistant", "new answer"),
+    ]
+    assert "old history" not in session.memory_summary
     api._assistant_sessions.clear()
-    detail = api.get_assistant_session("sess-context")
-    assert detail["context_notes"] == "Keep the target limited to staging.example."
+    reloaded = api.get_assistant_context("sess-context")
+    assert reloaded["messages"] == updated["messages"]
 
 
 def test_import_and_export_session_context(tmp_path) -> None:
@@ -216,7 +235,9 @@ def test_import_and_export_session_context(tmp_path) -> None:
 
     imported = tmp_path / "imported-context.json"
     imported.write_text(
-        '{"context_notes":"Keep evidence under ticket IR-42."}',
+        '{"format":"argusai-conversation-context","version":1,"messages":['
+        '{"role":"user","content":"Keep evidence under ticket IR-42."},'
+        '{"role":"assistant","content":"Understood."}]}',
         encoding="utf-8",
     )
     api._pick_open_file = lambda **_kwargs: {"ok": True, "path": str(imported)}
@@ -224,17 +245,27 @@ def test_import_and_export_session_context(tmp_path) -> None:
     import_result = api.import_assistant_context("sess-context-io")
 
     assert import_result["ok"] is True
-    assert import_result["context_notes"] == "Keep evidence under ticket IR-42."
-    assert session.context_notes == "Keep evidence under ticket IR-42."
+    assert import_result["messages"] == [
+        {"role": "user", "content": "Keep evidence under ticket IR-42."},
+        {"role": "assistant", "content": "Understood."},
+    ]
+    # Import is review-only. The current conversation changes only after save.
+    assert session.history == []
 
-    exported = tmp_path / "exported-context.md"
+    exported = tmp_path / "exported-context.json"
     api._pick_save_file = lambda **_kwargs: {"ok": True, "path": str(exported)}
 
-    export_result = api.export_assistant_context("sess-context-io")
+    export_result = api.export_assistant_context(
+        "sess-context-io",
+        import_result["messages"],
+    )
 
     assert export_result["ok"] is True
-    assert export_result["char_count"] == len("Keep evidence under ticket IR-42.")
-    assert exported.read_text(encoding="utf-8") == "Keep evidence under ticket IR-42.\n"
+    assert export_result["message_count"] == 2
+    payload = json.loads(exported.read_text(encoding="utf-8"))
+    assert payload["format"] == "argusai-conversation-context"
+    assert payload["version"] == 1
+    assert payload["messages"] == import_result["messages"]
 
 
 def test_save_session_preserves_existing_note(tmp_path) -> None:

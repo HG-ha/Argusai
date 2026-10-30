@@ -448,8 +448,10 @@ export const api = {
   clearAllAssistantSessions: () => call("clear_all_assistant_sessions"),
   renameAssistantSession: (id, name) => call("rename_assistant_session", id, name),
   updateAssistantSession: (id, patch) => call("update_assistant_session", id, patch || {}),
+  getAssistantContext: (id) => call("get_assistant_context", id || ""),
+  saveAssistantContext: (id, messages) => call("save_assistant_context", id || "", messages || []),
   importAssistantContext: (id) => call("import_assistant_context", id || ""),
-  exportAssistantContext: (id) => call("export_assistant_context", id || ""),
+  exportAssistantContext: (id, messages = null) => call("export_assistant_context", id || "", messages),
 
   // User-level todos (cross-session)
   userTodoList: (status, tag, limit) => call("user_todo_list", status || "", tag || "", limit || 100),
