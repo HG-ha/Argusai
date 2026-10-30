@@ -403,7 +403,7 @@ html { scrollbar-color:var(--subtle) var(--bg); }
  .principles>div { grid-template-columns:1fr; gap:10px; }
  .channels { margin-top:20px; }
 }
-.mobile-theme-toggle,.mobile-menu-toggle,.mobile-github { display:none; }
+.mobile-theme-toggle,.mobile-menu-toggle,.header nav .mobile-github { display:none; }
 @media(min-width:761px) and (max-width:1050px) {
  .header { gap:20px; }
  .header nav { gap:16px; font-size:12px; }
