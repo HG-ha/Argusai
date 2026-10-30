@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="了解 ArgusAI 的 Agent 执行、扫描、代理、逆向分析、多模型与通讯接入。"><meta name="theme-color" content="#fafaf8">
+<meta property="og:title" content="工作台 · ArgusAI"><meta property="og:image" content="https://argusai.sh/assets/brand/argusai-icon.png">
+<link rel="canonical" href="https://argusai.sh/product.html"><link rel="icon" href="assets/brand/argusai-icon.png">
+<script src="theme.js"></script><script src="i18n.js" defer></script><link rel="stylesheet" href="styles.css"><title>工作台 · ArgusAI</title>
+</head>
+<body>
+<header class="header wrap">
+  <a class="brand" href="index.html"><img src="assets/brand/argusai-icon.png" alt="">ArgusAI</a>
+  <nav aria-label="主导航"><a href="index.html">首页</a><a href="product.html" aria-current="page">工作台</a><a href="scenarios.html">使用场景</a><a href="changelog.html">更新日志</a></nav>
+  <div class="header-tools"><div class="theme-switch" role="group" aria-label="网站主题"><button type="button" data-theme-option="light" aria-label="浅色" title="浅色" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg></button><button type="button" data-theme-option="dark" aria-label="深色" title="深色" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13a8.5 8.5 0 0 1-9.5-9.5A8.5 8.5 0 1 0 20.5 13Z"/></svg></button><button type="button" data-theme-option="auto" aria-label="跟随系统" title="跟随系统" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg></button></div><a class="source" href="https://github.com/HG-ha/Argusai">GitHub ↗</a></div>
+</header>
+<main>
+<section class="page-intro wrap"><h1>Agent 的工作现场</h1><p class="intro">Agent 是入口，浏览器、流量、逆向和沙盒是它的工作环境。<br>沿着一个任务，看看这些能力怎样接在一起。</p></section>
+<section class="agent-workflow wrap" aria-labelledby="workflow-title">
+ <div class="workflow-heading"><h2 id="workflow-title">Agent 怎么工作</h2><p>选择一个环节，查看它使用的材料、操作与产物。</p></div>
+ <div class="task-selector" role="tablist" aria-label="Agent 工作环节">
+  <button id="task-traffic" role="tab" aria-selected="true" aria-controls="task-panel" data-task="traffic">捕获与分析流量</button>
+  <button id="task-sandbox" role="tab" aria-selected="false" aria-controls="task-panel" tabindex="-1" data-task="sandbox">沙盒执行与验证</button>
+  <button id="task-reverse" role="tab" aria-selected="false" aria-controls="task-panel" tabindex="-1" data-task="reverse">样本逆向</button>
+  <button id="task-continuity" role="tab" aria-selected="false" aria-controls="task-panel" tabindex="-1" data-task="continuity">协作与持续任务</button>
+ </div>
+ <div class="task-sheet" id="task-panel" role="tabpanel" aria-labelledby="task-traffic" tabindex="0">
+  <div class="task-question"><span>你交给 Agent 的任务</span><p data-task-prompt>梳理测试站点的登录与 API 请求，找出需要复核的权限边界。</p><small>工作流示意 · 非实时执行结果</small></div>
+  <div class="task-process"><ol data-task-steps><li><b>在浏览器中观察业务</b><p>在授权范围内操作页面，结合代理捕获请求与响应。</p></li><li><b>沿请求继续调查</b><p>检索接口、身份和参数，调用请求工具做受控复核。</p></li><li><b>把结论连回证据</b><p>保存相关流量、发现和复现材料，交付可复查的结果。</p></li></ol><div class="task-output"><span>留下的材料</span><p data-task-output>请求与响应 / 复核记录 / 风险与证据</p></div></div>
+ </div>
+</section>
+<section class="capability-gallery wrap"><h2>看看实际工作界面</h2><p class="gallery-intro">独立演示环境实拍，点击图片查看细节。</p><div class="gallery-grid"><figure class="gallery-item"><a class="shot-link" href="assets/screens/agent-light.webp" data-shot-link="agent" data-preview-title="Agent 对话" aria-label="放大查看Agent 对话"><img class="shot-light" src="assets/screens/thumbs/agent-light.webp" alt="Agent 对话浅色主题实拍" loading="lazy"><img class="shot-dark" src="assets/screens/thumbs/agent-dark.webp" alt="Agent 对话深色主题实拍" loading="lazy"><span class="gallery-zoom" aria-hidden="true">放大查看</span></a><figcaption><h3>Agent 对话</h3><p>任务描述、工具调用与执行结果。</p></figcaption></figure><figure class="gallery-item"><a class="shot-link" href="assets/screens/sandbox-light.webp" data-shot-link="sandbox" data-preview-title="Agent 沙盒" aria-label="放大查看Agent 沙盒"><img class="shot-light" src="assets/screens/thumbs/sandbox-light.webp" alt="Agent 沙盒浅色主题实拍" loading="lazy"><img class="shot-dark" src="assets/screens/thumbs/sandbox-dark.webp" alt="Agent 沙盒深色主题实拍" loading="lazy"><span class="gallery-zoom" aria-hidden="true">放大查看</span></a><figcaption><h3>Agent 沙盒</h3><p>Agent 实际生成的文件与 Markdown 预览。</p></figcaption></figure><figure class="gallery-item"><a class="shot-link" href="assets/screens/scan-light.webp" data-shot-link="scan" data-preview-title="安全检查" aria-label="放大查看安全检查"><img class="shot-light" src="assets/screens/thumbs/scan-light.webp" alt="安全检查浅色主题实拍" loading="lazy"><img class="shot-dark" src="assets/screens/thumbs/scan-dark.webp" alt="安全检查深色主题实拍" loading="lazy"><span class="gallery-zoom" aria-hidden="true">放大查看</span></a><figcaption><h3>安全检查</h3><p>授权范围、执行环境与扫描检查项。</p></figcaption></figure><figure class="gallery-item"><a class="shot-link" href="assets/screens/models-light.webp" data-shot-link="models" data-preview-title="模型接入" aria-label="放大查看模型接入"><img class="shot-light" src="assets/screens/thumbs/models-light.webp" alt="模型接入浅色主题实拍" loading="lazy"><img class="shot-dark" src="assets/screens/thumbs/models-dark.webp" alt="模型接入深色主题实拍" loading="lazy"><span class="gallery-zoom" aria-hidden="true">放大查看</span></a><figcaption><h3>模型接入</h3><p>官方端点、模型路由与上下文设置。</p></figcaption></figure></div></section><section class="deep-feature wrap" id="traffic"><div><h2>Agent 在流量里找线索。</h2><p>Agent 可以结合浏览器操作与 MITM 代理捕获业务流量，检索请求、读取响应、组织重放与受控验证。已有 HAR 或 Burp 日志，也能作为分析材料。</p><p>功能页用于观察和介入；Agent 对话接着当前任务继续调查，省去在多个工具之间反复搬运材料。</p><a class="text-link" href="https://github.com/HG-ha/Argusai/wiki/Web-Audit-and-Proxy">浏览器与代理使用文档 ↗</a></div><aside class="material-list"><h3>分析材料</h3><p>页面与交互</p><p>HTTP / HTTP2 / WebSocket</p><p>请求、响应与身份上下文</p><p>HAR / Burp 日志</p></aside></section>
+<section class="deep-feature wrap" id="sandbox"><div><h2>需要验证，就写代码运行。</h2><p>每个 Agent 会话有自己的文件工作区。它可以编写 Python、Node.js 或 Shell 脚本，执行后检查结果，再修改、复测，把报告、截图和中间文件留在同一个任务里。</p><p>运行时按需准备，操作遵循工具授权。会话沙盒用于组织文件和执行环境，实际访问权限由工具与宿主机共同决定。</p></div><aside class="sandbox-example"><span>会话工作区 · 文件组织示意</span><pre><code>analysis/
+  request-signing.py
+  response-check.py
+evidence/
+  requests.har
+  verification.json
+report.md</code></pre><a class="text-link" href="https://github.com/HG-ha/Argusai/wiki/Agent-and-Sessions">会话、沙盒与文件 ↗</a></aside></section>
+
+<section class="deep-feature wrap" id="reverse"><div><h2>逆向是一个可推进的任务。</h2><p>导入 JS、WASM、APK、IPA、PE、ELF 或 HAR，建立 ReverseJob。Agent 围绕样本安排静态初筛、解包、反编译和动态观察，编写复现代码，再用输入与输出核对结论。</p><p>按环境连接 JADX、APKTool、Ghidra、Frida 等工具，样本、日志和证据保留在同一个作业中。</p><a class="text-link" href="https://github.com/HG-ha/Argusai/wiki/Reverse-Workbench">逆向工作台使用文档 ↗</a></div><aside class="reverse-chain" aria-label="逆向分析流程"><span>代码 / 应用 / 二进制样本</span><i aria-hidden="true">↓</i><strong>Agent + ReverseJob</strong><i aria-hidden="true">↓</i><span>定位逻辑 · 工具分析 · 代码复现</span><i aria-hidden="true">↓</i><span>验证记录与产物</span></aside></section>
+<section class="deep-feature wrap" id="continuity"><div><h2>任务可以持续，也可以分工。</h2><p>主 Agent 可以拆分子任务，持久小队按角色、模型和工具范围协作。待办、检查点与证据记录帮助长任务持续推进。</p><p>固定间隔、Cron、Webhook 或文件变化可以触发后续工作。指定会话接上历史；任务完成后收束计划。调度执行需要 ArgusAI 和所需资源保持可用。</p><a class="text-link" href="https://github.com/HG-ha/Argusai/wiki/Automation">持续任务与调度 ↗</a></div><aside class="continuity-note"><h3>工作留下来，下次接着做。</h3><p>目标与计划<br>会话与检查点<br>文件与证据<br>基线与变化</p></aside></section>
+<section class="model-section wrap"><div class="section-heading"><h2>模型由你选。</h2><p>多端点回退、模型切换、自动上下文预算与手动覆盖。支持官方服务和本地模型。</p></div></section>
+<section class="channels wrap" id="channels"><div><h2>在熟悉的聊天软件里用 Agent。</h2><p>配对后发送任务和文件，接收执行结果与产物。电脑或服务器上的 ArgusAI 负责执行；渠道的消息格式、文件和交互能力随平台而异。</p></div><div class="channel-names"><span>QQ</span><span>飞书</span><span>Telegram</span><span>Slack</span></div></section>
+<section class="open-source wrap"><div><h2>也是你的通用 Agent 底座。</h2><p>用 Python Check、Agent Tool、Markdown Skill 和 MCP 扩展能力，连接本地 ACP Agent 与已有工具。</p></div><a class="button primary" href="https://github.com/HG-ha/Argusai">查看源码 ↗</a></section>
+</main>
+<footer class="wrap footer"><a class="brand" href="index.html"><img src="assets/brand/argusai-icon.png" alt="">ArgusAI</a><span>开源安全工作台</span><div><a href="https://github.com/HG-ha/Argusai/wiki">使用文档 ↗</a><a href="changelog.html">更新日志</a><a href="https://github.com/HG-ha/Argusai/issues">反馈问题 ↗</a><a href="https://github.com/HG-ha/Argusai/blob/main/LICENSE">GPL-3.0</a></div><small>仅用于自有系统或明确授权的安全评估。</small></footer>
+<script src="app.js" defer></script>
+</body>
+</html>
