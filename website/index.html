@@ -3,397 +3,201 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#07090d" />
-    <meta
-      name="description"
-      content="ArgusAI 是 Agent 原生安全工作台：把 AI 助手、浏览器、代理流量、扫描、逆向、证据与持续任务连接在同一个本地工作区。"
-    />
-    <meta
-      name="keywords"
-      content="ArgusAI, Agent, 网络安全, Web 安全, 逆向工程, 被动代理, AI 安全助手, 本地大模型"
-    />
+    <meta name="theme-color" content="#f2efe7" />
+    <meta name="description" content="ArgusAI 是开源的 Agent 原生安全工作台，把 AI 助手、扫描、浏览器、代理流量、逆向、证据与持续任务连接在同一个本地工作区。" />
+    <meta name="keywords" content="ArgusAI, Agent, 网络安全, Web 安全, 逆向工程, 被动代理, AI 安全助手, 本地大模型" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="ArgusAI" />
-    <meta property="og:title" content="ArgusAI — Agent 原生安全工作台" />
-    <meta
-      property="og:description"
-      content="不是给安全工具加一个聊天框，而是让 Agent 真正进入工作台执行。"
-    />
+    <meta property="og:title" content="ArgusAI — 会执行的 Agent 原生安全工作台" />
+    <meta property="og:description" content="不是给安全工具加一个聊天框，而是让 Agent 真正进入工作台执行。" />
     <meta property="og:url" content="https://argusai.sh/" />
     <meta property="og:image" content="https://argusai.sh/assets/screens/proxy-workbench.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://argusai.sh/" />
     <link rel="icon" type="image/png" href="assets/brand/argusai-icon.png" />
     <link rel="preconnect" href="https://api.github.com" />
-    <link rel="preconnect" href="https://github.com" />
-    <title>ArgusAI — Agent 原生安全工作台</title>
+    <title>ArgusAI — 会执行的 Agent 原生安全工作台</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="page-noise" aria-hidden="true"></div>
-    <div class="cursor-glow" aria-hidden="true"></div>
+    <div class="grain" aria-hidden="true"></div>
 
-    <header class="site-header" data-elevated="false">
+    <header class="site-header">
       <a class="brand" href="#top" aria-label="ArgusAI 首页">
-        <img src="assets/brand/argusai-icon.png" alt="" width="42" height="42" />
-        <span>ARGUS<span class="brand-ai">AI</span></span>
+        <img src="assets/brand/argusai-icon.png" alt="" width="44" height="44" />
+        <span>ARGUSAI</span>
       </a>
       <nav class="desktop-nav" aria-label="主导航">
-        <a href="#product">产品</a>
-        <a href="#runtime">运行方式</a>
-        <a href="#scenarios">应用场景</a>
-        <a href="#enterprise">企业部署</a>
+        <a href="#difference">为什么不同</a><a href="#product">产品现场</a><a href="#coverage">能力范围</a><a href="#deploy">企业部署</a>
       </nav>
-      <div class="header-actions">
-        <a
-          class="icon-link"
-          href="https://github.com/HG-ha/Argusai"
-          target="_blank"
-          rel="noreferrer"
-          aria-label="打开 GitHub"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.24.7-3.92-1.38-3.92-1.38-.53-1.35-1.3-1.71-1.3-1.71-1.06-.73.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.1-.76.4-1.28.74-1.57-2.58-.3-5.3-1.29-5.3-5.69 0-1.26.45-2.29 1.2-3.1-.12-.3-.52-1.47.11-3.06 0 0 .98-.31 3.16 1.18A10.97 10.97 0 0 1 12 6.05c.98 0 1.95.13 2.86.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.06.75.81 1.2 1.84 1.2 3.1 0 4.42-2.72 5.39-5.31 5.68.42.36.79 1.07.79 2.16v3.29c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
-        </a>
-        <a class="button button-small" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">
-          下载
-        </a>
-        <button class="menu-toggle" type="button" aria-expanded="false" aria-label="打开菜单">
-          <span></span><span></span>
-        </button>
+      <div class="header-meta">
+        <a class="github-link" href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer"><span>GITHUB</span><b data-stars>OPEN SOURCE</b></a>
+        <a class="download-link" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">下载 <span>↗</span></a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-label="打开菜单"><span></span><span></span></button>
       </div>
       <nav class="mobile-nav" aria-label="移动导航">
-        <a href="#product">产品</a>
-        <a href="#runtime">运行方式</a>
-        <a href="#scenarios">应用场景</a>
-        <a href="#enterprise">企业部署</a>
-        <a href="https://github.com/HG-ha/Argusai">GitHub</a>
+        <a href="#difference">为什么不同</a><a href="#product">产品现场</a><a href="#coverage">能力范围</a><a href="#deploy">企业部署</a><a href="https://github.com/HG-ha/Argusai">GitHub</a>
       </nav>
     </header>
 
     <main id="top">
-      <section class="hero section-shell">
-        <div class="hero-grid" aria-hidden="true"></div>
-        <div class="orb orb-one" aria-hidden="true"></div>
-        <div class="orb orb-two" aria-hidden="true"></div>
-
-        <div class="hero-copy reveal">
-          <div class="eyebrow"><span class="live-dot"></span> Open-source · Local-first · Agent-native</div>
-          <h1>
-            安全工作，<br />
-            不该困在<span class="gradient-text">一问一答</span>里。
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="hero-index reveal"><span>01—06</span><span>AGENT NATIVE SECURITY WORKSPACE</span></div>
+          <h1 class="hero-title" aria-label="把安全工作交给会执行的 Agent">
+            <span class="title-line"><i>把安全工作</i></span>
+            <span class="title-line"><i>交给会执行的</i></span>
+            <span class="title-line title-accent"><i>AGENT.</i></span>
           </h1>
-          <p class="hero-lead">
-            ArgusAI 把 Agent 放进真实工作台：它能组织扫描、浏览器、代理流量、逆向工具、证据与定时任务，围绕一个目标持续推进，直到形成可复核的交付。
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">
-              <span>获取 ArgusAI</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 17 10-10M8 7h9v9"/></svg>
-            </a>
-            <a class="button button-ghost" href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">
-              <svg class="github-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.24c-3.24.7-3.92-1.38-3.92-1.38-.53-1.35-1.3-1.71-1.3-1.71-1.06-.73.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.79 2.73 1.27 3.4.97.1-.76.4-1.28.74-1.57-2.58-.3-5.3-1.29-5.3-5.69 0-1.26.45-2.29 1.2-3.1-.12-.3-.52-1.47.11-3.06 0 0 .98-.31 3.16 1.18A10.97 10.97 0 0 1 12 6.05c.98 0 1.95.13 2.86.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.06.75.81 1.2 1.84 1.2 3.1 0 4.42-2.72 5.39-5.31 5.68.42.36.79 1.07.79 2.16v3.29c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
-              <span>查看源码</span>
-              <span class="github-stars" data-stars>GPL-3.0</span>
-            </a>
+          <div class="hero-bottom reveal" data-delay="180">
+            <p>ArgusAI 把扫描、浏览器、代理流量、逆向工具、证据和定时任务放进同一个工作区。你给目标与边界，Agent 持续把事情往前推。</p>
+            <div class="hero-actions">
+              <a class="button button-dark" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">获取 ArgusAI <span>↗</span></a>
+              <a class="button button-line" href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">查看源码 <span>↗</span></a>
+            </div>
           </div>
-          <div class="hero-meta">
-            <span>Windows</span><i></i><span>macOS</span><i></i><span>Linux</span><i></i><span>Python 3.12+</span>
-          </div>
+          <div class="platform-line reveal" data-delay="240"><span>WINDOWS</span><span>MACOS</span><span>LINUX</span><span>GPL-3.0</span><span>LOCAL-FIRST</span></div>
         </div>
 
-        <div class="product-stage reveal" data-delay="120">
-          <div class="stage-glow" aria-hidden="true"></div>
-          <div class="window-chrome">
-            <div class="traffic-lights"><i></i><i></i><i></i></div>
-            <span>ArgusAI · 安全工作台</span>
-            <div class="window-state"><span></span> AGENT ACTIVE</div>
+        <div class="hero-wall" aria-label="ArgusAI 实际产品界面拼贴">
+          <div class="wall-column wall-up">
+            <figure class="wall-tile tile-tall"><img src="assets/screens/proxy-workbench.png" alt="ArgusAI 被动代理界面" /></figure>
+            <div class="wall-tile tile-blue"><span>WEB</span><b>AUDIT</b><small>浏览器 / 扫描 / 证据</small></div>
+            <figure class="wall-tile tile-wide crop-right"><img src="assets/screens/model-routing.png" alt="ArgusAI 模型路由界面" /></figure>
+            <div class="wall-tile tile-ink"><span>01</span><b>目标进入工作区</b><small>URL · HAR · JS · APK · LOG</small></div>
+            <figure class="wall-tile tile-tall"><img src="assets/screens/proxy-workbench.png" alt="ArgusAI 流量分析工作台" /></figure>
+            <div class="wall-tile tile-blue"><span>WEB</span><b>AUDIT</b><small>浏览器 / 扫描 / 证据</small></div>
           </div>
-          <div class="stage-screen">
-            <img
-              src="assets/screens/proxy-workbench.png"
-              alt="ArgusAI 被动代理与流量分析工作台实际界面"
-              width="2940"
-              height="1724"
-              fetchpriority="high"
-            />
-            <div class="screen-scanline" aria-hidden="true"></div>
+          <div class="wall-column wall-down">
+            <div class="wall-tile tile-orange"><span>AGENT</span><b>不只回答。<br />真的执行。</b><small>PLAN → ACT → VERIFY</small></div>
+            <figure class="wall-tile tile-wide crop-center"><img src="assets/screens/model-routing.png" alt="ArgusAI 多模型配置界面" /></figure>
+            <div class="wall-tile tile-paper"><span>CONTINUOUS</span><b>长时单轮<br />跨轮续跑</b><small>INTERVAL / CRON / WEBHOOK</small></div>
+            <figure class="wall-tile tile-tall crop-left"><img src="assets/screens/proxy-workbench.png" alt="ArgusAI 代理请求详情界面" /></figure>
+            <div class="wall-tile tile-orange"><span>AGENT</span><b>不只回答。<br />真的执行。</b><small>PLAN → ACT → VERIFY</small></div>
+            <figure class="wall-tile tile-wide crop-center"><img src="assets/screens/model-routing.png" alt="ArgusAI AI 端点界面" /></figure>
           </div>
-          <div class="stage-callout callout-agent">
-            <span class="callout-icon">A</span>
-            <div><b>Agent 正在分析</b><small>已关联请求、响应与安全发现</small></div>
-          </div>
-          <div class="stage-callout callout-evidence">
-            <span class="status-ok"></span>
-            <div><b>证据已归档</b><small>可复查 · 可续跑 · 可交付</small></div>
-          </div>
-        </div>
-
-        <div class="trust-bar reveal" data-delay="220">
-          <span>一个工作区，连接完整安全执行面</span>
-          <div class="trust-items" aria-label="已连接能力">
-            <span>AGENT</span><span>BROWSER</span><span>PROXY</span><span>REVERSE</span><span>EVIDENCE</span><span>AUTOMATION</span>
-          </div>
+          <div class="hero-wall-label">REAL PRODUCT / LIVE WORKSPACE</div>
         </div>
       </section>
 
-      <section id="product" class="section-shell thesis-section">
-        <div class="section-kicker reveal"><span>01</span> 与普通 AI 安全工具的区别</div>
-        <div class="thesis-grid">
-          <div class="thesis-copy reveal">
-            <h2>不是给工具加一个聊天框。<br /><span>是让 Agent 真正进入工作。</span></h2>
-            <p>
-              大多数“AI 逆向工具”停在解释代码、生成建议。ArgusAI 的 Agent 能看到当前任务、浏览器、代理流量、逆向样本和历史证据，并在授权边界内调用工具继续执行。
-            </p>
+      <div class="marquee" aria-label="ArgusAI 核心能力"><div class="marquee-track">
+        <span>AGENT RUNTIME</span><i>✦</i><span>WEB AUDIT</span><i>✦</i><span>PASSIVE PROXY</span><i>✦</i><span>REVERSE ENGINEERING</span><i>✦</i><span>EVIDENCE</span><i>✦</i><span>AUTOMATION</span><i>✦</i>
+        <span>AGENT RUNTIME</span><i>✦</i><span>WEB AUDIT</span><i>✦</i><span>PASSIVE PROXY</span><i>✦</i><span>REVERSE ENGINEERING</span><i>✦</i><span>EVIDENCE</span><i>✦</i><span>AUTOMATION</span><i>✦</i>
+      </div></div>
+
+      <section id="difference" class="manifesto section-pad">
+        <div class="section-label reveal"><span>01</span><b>WHY ARGUSAI</b><small>不是聊天框，是执行系统</small></div>
+        <div class="manifesto-copy reveal">
+          <p class="manifesto-small">市面上的“AI 安全工具”通常做到这里：</p>
+          <p class="manifesto-muted">上传一段材料 → 模型解释 → 人工接手。</p>
+          <p class="manifesto-main">ArgusAI 让 Agent 看见现场、调用工具、保存证据，<em>下一轮还能接着做。</em></p>
+        </div>
+        <div class="manifesto-proof reveal"><span>这不是 Copilot 模式</span><div class="proof-arrow">→</div><b>这是 Agent 进入执行面的工作方式</b></div>
+      </section>
+
+      <section id="product" class="product-story">
+        <div class="story-visual">
+          <div class="story-screen story-screen-active" data-screen="observe">
+            <div class="screen-top"><span>ARGUSAI / PASSIVE PROXY</span><b>LIVE</b></div>
+            <img src="assets/screens/proxy-workbench.png" alt="ArgusAI 被动代理与流量分析实际界面" width="2940" height="1724" />
           </div>
-          <div class="comparison reveal" data-delay="100">
-            <div class="comparison-row comparison-muted">
-              <span class="comparison-label">常见 AI 工具</span>
-              <span>上传片段</span><i>→</i><span>模型回答</span><i>→</i><span>人工接手</span>
-            </div>
-            <div class="comparison-row comparison-active">
-              <span class="comparison-label">ArgusAI</span>
-              <span>目标与范围</span><i>→</i><span>自主执行</span><i>→</i><span>证据交付</span><i>↻</i><span>持续续跑</span>
+          <div class="story-screen" data-screen="route">
+            <div class="screen-top"><span>ARGUSAI / MODEL ROUTING</span><b>CONTROLLED</b></div>
+            <img src="assets/screens/model-routing.png" alt="ArgusAI 多模型端点配置实际界面" width="2688" height="1444" />
+          </div>
+          <div class="story-screen story-diagram" data-screen="continue">
+            <div class="screen-top"><span>ARGUSAI / CONTINUOUS RUNTIME</span><b>RUNNING</b></div>
+            <div class="runtime-board">
+              <div class="runtime-source"><span>INPUT</span><b>目标 / 材料 / 授权边界</b><small>URL · HAR · JS · APK · LOG</small></div>
+              <div class="runtime-line"><i></i></div>
+              <div class="runtime-core"><img src="assets/brand/argusai-icon.png" alt="" /><span>ARGUS AGENT</span><b>计划 · 工具 · Skills · 确认</b></div>
+              <div class="runtime-line"><i></i></div>
+              <div class="runtime-tools"><span>BROWSER</span><span>PROXY</span><span>REVERSE</span><span>EVIDENCE</span></div>
+              <div class="runtime-loop">↻ <b>CHECKPOINT</b><small>按事件继续</small></div>
             </div>
           </div>
         </div>
-
-        <div class="capability-ribbon reveal">
-          <article>
-            <span class="metric">01</span>
-            <h3>理解现场</h3>
-            <p>理解当前页面、任务、样本和工作状态，不必反复复制上下文。</p>
-          </article>
-          <article>
-            <span class="metric">02</span>
-            <h3>调用执行面</h3>
-            <p>扫描、浏览器、代理、文件、逆向 CLI 与桌面协作统一编排。</p>
-          </article>
-          <article>
-            <span class="metric">03</span>
-            <h3>长时推进</h3>
-            <p>单轮可持续多次模型与工具调用，待办、检查点和证据跨轮延续。</p>
-          </article>
-          <article>
-            <span class="metric">04</span>
-            <h3>留下证据</h3>
-            <p>Case、Artifact、Evidence 与发现相互关联，结论能够回到原始材料。</p>
-          </article>
+        <div class="story-copy">
+          <div class="section-label label-light"><span>02</span><b>INSIDE THE WORKSPACE</b><small>一套完整执行现场</small></div>
+          <div class="story-step is-active" data-target="observe" tabindex="0"><span class="story-number">01</span><div><h2>看见真实现场</h2><p>Agent 理解当前页面、任务、代理流量、逆向样本和已有证据，不用每轮重新复制上下文。</p></div></div>
+          <div class="story-step" data-target="route" tabindex="0"><span class="story-number">02</span><div><h2>模型与边界由你控制</h2><p>多端点路由、故障转移、上下文自动适配与高风险工具确认，都在工作区内明确配置。</p></div></div>
+          <div class="story-step" data-target="continue" tabindex="0"><span class="story-number">03</span><div><h2>没有做完，就继续</h2><p>长时单轮、待办、检查点和事件驱动调度，让调查、巡检与多阶段任务跨轮推进。</p></div></div>
+          <p class="story-hint">悬停或点击章节查看实际工作状态</p>
         </div>
       </section>
 
-      <section id="runtime" class="runtime-section">
-        <div class="section-shell">
-          <div class="section-heading reveal">
-            <div class="section-kicker"><span>02</span> Agent 原生运行方式</div>
-            <h2>从一句目标，到一条持续运转的安全链路。</h2>
-            <p>你给目标、材料和边界。Agent 负责拆解、执行、观察、归档，并在需要时向你请求确认。</p>
-          </div>
+      <section class="execution section-pad">
+        <div class="section-label reveal"><span>03</span><b>HOW IT MOVES</b><small>从目标到交付</small></div>
+        <div class="execution-head reveal"><h2>一句目标，<br />进入一条执行链。</h2><p>你负责目标、材料和授权范围。Agent 负责组织动作、检查进展、保存证据，并在需要时向你请求确认。</p></div>
+        <ol class="execution-list">
+          <li class="reveal"><span>01</span><b>理解目标</b><p>读取当前工作区、历史、待办与材料。</p><i>DISCOVER</i></li>
+          <li class="reveal"><span>02</span><b>建立计划</b><p>把目标拆成可执行步骤与检查点。</p><i>PLAN</i></li>
+          <li class="reveal"><span>03</span><b>调用工具</b><p>在授权边界内连接扫描、浏览器、代理与逆向。</p><i>ACT</i></li>
+          <li class="reveal"><span>04</span><b>保存证据</b><p>把请求、响应、样本、发现与结论关联起来。</p><i>PROVE</i></li>
+          <li class="reveal"><span>05</span><b>继续或交付</b><p>未完成则按检查点续跑，完成则形成报告和复测记录。</p><i>CONTINUE</i></li>
+        </ol>
+      </section>
 
-          <div class="runtime-map reveal" aria-label="ArgusAI Agent 执行链路图">
-            <div class="map-grid" aria-hidden="true"></div>
-            <div class="map-source">
-              <span>INPUT</span>
-              <b>目标 / 样本 / 授权范围</b>
-              <small>URL · HAR · JS · APK · 日志 · 文件</small>
-            </div>
-            <svg class="map-lines" viewBox="0 0 1000 420" preserveAspectRatio="none" aria-hidden="true">
-              <path d="M205 210 C280 210 280 210 355 210" />
-              <path d="M500 210 C590 210 575 85 670 85" />
-              <path d="M500 210 C590 210 575 170 670 170" />
-              <path d="M500 210 C590 210 575 250 670 250" />
-              <path d="M500 210 C590 210 575 335 670 335" />
-              <path class="return-path" d="M830 335 C930 335 940 210 855 210" />
-            </svg>
-            <div class="map-agent">
-              <div class="agent-core"><img src="assets/brand/argusai-icon.png" alt="" /></div>
-              <span>ARGUS AGENT RUNTIME</span>
-              <b>计划 · 工具 · Skills · 确认</b>
-              <small>上下文预算 / 进展检查 / 证据归档</small>
-            </div>
-            <div class="map-tools">
-              <div><i class="tool-dot cyan"></i><b>浏览器与扫描</b><small>观察、接管、受控验证</small></div>
-              <div><i class="tool-dot blue"></i><b>代理与流量</b><small>MITM、WebSocket、重放</small></div>
-              <div><i class="tool-dot orange"></i><b>逆向与样本</b><small>JS、WASM、APK、二进制</small></div>
-              <div><i class="tool-dot green"></i><b>知识与自动化</b><small>记忆、检查点、定时续跑</small></div>
-            </div>
-            <div class="map-output">
-              <span>OUTPUT</span><b>证据链 / 报告 / 整改复测</b>
-            </div>
-          </div>
-
-          <div class="continuity-strip reveal">
-            <div class="continuity-lead">
-              <span class="pulse-ring"></span>
-              <div><b>任务没有结束，Agent 就可以继续。</b><small>长时单轮 + 跨轮检查点 + 事件驱动唤醒</small></div>
-            </div>
-            <div class="continuity-events">
-              <span>固定间隔</span><span>Cron</span><span>Webhook</span><span>文件变化</span>
-            </div>
-          </div>
+      <section id="coverage" class="coverage">
+        <div class="coverage-title reveal">
+          <div class="section-label label-light"><span>04</span><b>ONE FOUNDATION</b><small>覆盖完整安全工作</small></div>
+          <h2>从 WEB<br />到二进制。<br />从一次分析<br />到持续防护。</h2>
+        </div>
+        <div class="coverage-list">
+          <article class="coverage-row reveal"><span>01</span><h3>Web 与应用安全</h3><p>主动检查、浏览器观察、代理重放、身份与访问控制复核。</p><b>WEB / BROWSER / MITM / POC</b></article>
+          <article class="coverage-row reveal"><span>02</span><h3>逆向与样本研究</h3><p>JS、WASM、APK、IPA、PE、ELF 与 HAR 进入统一 ReverseJob。</p><b>JS / WASM / MOBILE / BINARY</b></article>
+          <article class="coverage-row reveal"><span>03</span><h3>企业防护与溯源</h3><p>整理主机、日志、流量和告警，关联时间、账号、IP 与进程。</p><b>INTRANET / TRACE / BASELINE</b></article>
+          <article class="coverage-row reveal"><span>04</span><h3>持续攻防</h3><p>长时执行、周期任务、事件触发、变化发现与整改复测。</p><b>CRON / WEBHOOK / CONTINUOUS</b></article>
+          <article class="coverage-row reveal"><span>05</span><h3>通用 Agent 底座</h3><p>Python Check、Agent Tool、Markdown Skill、MCP 与本地 Agent。</p><b>OPEN / SCRIPTABLE / EXTENSIBLE</b></article>
         </div>
       </section>
 
-      <section class="proof-section section-shell">
-        <div class="proof-layout">
-          <div class="proof-copy reveal">
-            <div class="section-kicker"><span>03</span> 真实产品，不是概念 Demo</div>
-            <h2>模型、工具和安全边界，都由你掌控。</h2>
-            <p>
-              可配置多个 AI 端点与模型路由，按模型能力自动适配上下文预算，并保留手动覆盖。任务、数据、工具权限和确认策略留在你的工作区。
-            </p>
-            <ul class="check-list">
-              <li><span>✓</span>多端点优先级与故障转移</li>
-              <li><span>✓</span>模型切换与上下文自动适配</li>
-              <li><span>✓</span>高风险工具强制二次确认</li>
-              <li><span>✓</span>本地模型与离线环境可接入</li>
-            </ul>
+      <section id="deploy" class="deployment">
+        <div class="deployment-copy reveal">
+          <div class="section-label"><span>05</span><b>YOUR DATA. YOUR BOUNDARY.</b><small>本地优先与离线部署</small></div>
+          <h2>敏感业务，<br />不必离开你的环境。</h2>
+          <p>接入自有 AI 端点、本地大模型与内网工具。代码、流量、样本、会话和调查材料可以保留在受控数据目录中。</p>
+          <div class="deployment-tags"><span>LOCAL LLM</span><span>PRIVATE ENDPOINT</span><span>OFFLINE</span><span>TOOL POLICY</span></div>
+        </div>
+        <div class="boundary-map reveal" aria-label="ArgusAI 本地和企业部署说明图">
+          <div class="boundary-frame">
+            <span class="frame-label">YOUR ENVIRONMENT</span>
+            <div class="map-node map-argus"><img src="assets/brand/argusai-icon.png" alt="" /><b>ArgusAI</b><small>DESKTOP / SERVER</small></div>
+            <div class="map-node map-data"><b>CASES & EVIDENCE</b><small>LOCAL STORAGE</small></div>
+            <div class="map-node map-tools"><b>INTERNAL TOOLS</b><small>BROWSER / CLI / MCP</small></div>
+            <svg viewBox="0 0 600 420" aria-hidden="true"><path d="M205 135H300V215H395"/><path d="M205 285H300V215"/></svg>
           </div>
-          <div class="proof-screen reveal" data-delay="100">
-            <div class="screen-label"><span></span> 实际界面 · AI 端点与模型路由</div>
-            <img
-              src="assets/screens/model-routing.png"
-              alt="ArgusAI AI 端点与多模型配置实际界面"
-              width="2688"
-              height="1444"
-              loading="lazy"
-            />
-          </div>
+          <div class="boundary-gate"><i></i><span>CONTROLLED MODEL ROUTING</span><i></i></div>
+          <div class="model-options"><div><span>A</span><b>LOCAL MODEL</b><small>OFFLINE / PRIVATE</small></div><div><span>B</span><b>CLOUD API</b><small>OPTIONAL</small></div></div>
         </div>
       </section>
 
-      <section id="scenarios" class="scenarios-section">
-        <div class="section-shell">
-          <div class="section-heading heading-split reveal">
-            <div>
-              <div class="section-kicker"><span>04</span> 一个底座，覆盖完整安全工作</div>
-              <h2>从 Web 到二进制，<br />从单次分析到持续防护。</h2>
-            </div>
-            <p>能力不是散落的功能列表。每个方向都可以被 Agent 组织成一条有目标、有边界、有证据的工作流。</p>
-          </div>
-
-          <div class="scenario-deck">
-            <article class="scenario-card scenario-web reveal">
-              <div class="scenario-index">01 / WEB</div>
-              <h3>Web 与应用安全</h3>
-              <p>主动检查、浏览器观察、代理重放与访问控制复核围绕同一目标协作。</p>
-              <div class="scenario-tags"><span>Web Audit</span><span>Browser</span><span>MITM</span><span>PoC</span></div>
-              <div class="mini-terminal" aria-hidden="true">
-                <div><i></i><span>scope</span><b>app.example.com</b></div>
-                <div><i></i><span>finding</span><b class="warn">access-control</b></div>
-                <div><i></i><span>evidence</span><b>archived ✓</b></div>
-              </div>
-            </article>
-            <article class="scenario-card scenario-reverse reveal" data-delay="80">
-              <div class="scenario-index">02 / REVERSE</div>
-              <h3>逆向与样本研究</h3>
-              <p>JS、WASM、APK、IPA、PE、ELF 和 HAR 进入统一 ReverseJob 与证据链。</p>
-              <div class="binary-field" aria-hidden="true">
-                <span>4A 53 56 4D</span><span>41 50 4B 00</span><span>7F 45 4C 46</span><span>4D 5A 90 00</span>
-              </div>
-              <div class="scenario-tags"><span>Deobfuscate</span><span>Frida</span><span>Ghidra</span><span>WASM</span></div>
-            </article>
-            <article class="scenario-card scenario-defense reveal" data-delay="160">
-              <div class="scenario-index">03 / DEFENSE</div>
-              <h3>企业防护与溯源</h3>
-              <p>整理日志、流量与告警，关联时间、账号、IP、进程和请求标识，持续对比基线。</p>
-              <div class="timeline-visual" aria-hidden="true">
-                <i></i><i></i><i class="hot"></i><i></i><i></i>
-              </div>
-              <div class="scenario-tags"><span>Intranet</span><span>Trace</span><span>Baseline</span><span>Evidence</span></div>
-            </article>
-            <article class="scenario-card scenario-platform reveal" data-delay="240">
-              <div class="scenario-index">04 / PLATFORM</div>
-              <h3>通用 Agent 底座</h3>
-              <p>Python Check、Agent Tool、Markdown Skill、MCP 与本地 Agent 可以继续扩展。</p>
-              <div class="platform-stack" aria-hidden="true"><span>SKILLS</span><span>TOOLS</span><span>MCP</span><span>AGENTS</span></div>
-              <div class="scenario-tags"><span>Open Source</span><span>Python</span><span>Extensible</span></div>
-            </article>
-          </div>
+      <section class="channels section-pad">
+        <div class="channels-top reveal">
+          <div class="section-label"><span>06</span><b>ANYWHERE YOU WORK</b><small>通讯渠道</small></div>
+          <h2>工作台在桌面。<br />Agent 可以跟着你走。</h2>
+          <p>通过配对渠道继续同一个任务、接收结果和发送文件。完整执行上下文与证据仍然保留在 ArgusAI 工作区。</p>
+        </div>
+        <div class="channel-strip reveal">
+          <div><span>01</span><b>QQ</b><small>私聊机器人 / 分段回复</small></div>
+          <div><span>02</span><b>飞书</b><small>消息 / 卡片 / 文件</small></div>
+          <div><span>03</span><b>Telegram</b><small>流式回复 / 文件</small></div>
+          <div><span>04</span><b>Slack</b><small>Workspace / Thread</small></div>
         </div>
       </section>
 
-      <section id="enterprise" class="enterprise-section section-shell">
-        <div class="enterprise-card reveal">
-          <div class="enterprise-glow" aria-hidden="true"></div>
-          <div class="enterprise-copy">
-            <div class="section-kicker"><span>05</span> 数据留在你的边界里</div>
-            <h2>能接云端模型，也能在离线环境里运行。</h2>
-            <p>
-              ArgusAI 是本地优先的桌面工作台。企业可以接入自有端点、本地大模型和内网工具，把敏感代码、流量、样本和调查材料留在受控环境中。
-            </p>
-            <div class="enterprise-points">
-              <span><i></i>本地数据目录</span><span><i></i>自定义模型端点</span><span><i></i>离线环境</span><span><i></i>权限与确认分层</span>
-            </div>
-          </div>
-          <div class="deployment-visual" aria-label="ArgusAI 企业部署说明图">
-            <div class="deployment-zone zone-local">
-              <span>YOUR ENVIRONMENT</span>
-              <div class="device-node"><img src="assets/brand/argusai-icon.png" alt="" /><b>ArgusAI</b><small>Desktop / Server</small></div>
-              <div class="data-node"><b>Cases & Evidence</b><small>Local storage</small></div>
-            </div>
-            <div class="deployment-gate"><span>CONTROLLED GATEWAY</span><i></i></div>
-            <div class="deployment-zone zone-model">
-              <span>MODEL ROUTING</span>
-              <div><b>Local LLM</b><small>Offline / Private</small></div>
-              <div><b>Cloud API</b><small>Optional</small></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="channels-section section-shell">
-        <div class="channels-grid">
-          <div class="channels-copy reveal">
-            <div class="section-kicker"><span>06</span> Agent 不只待在桌面窗口</div>
-            <h2>在你习惯的通讯渠道里，继续同一件事。</h2>
-            <p>通过配对通信渠道接入 Agent，接收结果、继续任务、发送文件；桌面端依然保存完整执行上下文和证据。</p>
-            <a class="text-link" href="https://github.com/HG-ha/Argusai/blob/main/wiki/Integrations.md" target="_blank" rel="noreferrer">
-              查看渠道与集成说明 <span>↗</span>
-            </a>
-          </div>
-          <div class="channel-orbit reveal" data-delay="100" aria-label="支持的通讯渠道">
-            <div class="orbit-ring ring-one" aria-hidden="true"></div>
-            <div class="orbit-ring ring-two" aria-hidden="true"></div>
-            <div class="orbit-core"><img src="assets/brand/argusai-icon.png" alt="ArgusAI" /><span>ONE RUNTIME</span></div>
-            <div class="channel-node node-qq"><b>QQ</b><small>私聊机器人</small></div>
-            <div class="channel-node node-feishu"><b>飞书</b><small>消息与卡片</small></div>
-            <div class="channel-node node-telegram"><b>Telegram</b><small>Stream reply</small></div>
-            <div class="channel-node node-slack"><b>Slack</b><small>Workspace</small></div>
-          </div>
-        </div>
-      </section>
-
-      <section class="cta-section section-shell">
-        <div class="cta-card reveal">
-          <div class="cta-lines" aria-hidden="true"></div>
-          <img src="assets/brand/argusai-icon.png" alt="" />
-          <div>
-            <span class="cta-overline">OPEN SOURCE · GPL-3.0</span>
-            <h2>把下一个目标，交给真正会执行的 Agent。</h2>
-            <p>下载 ArgusAI，或者从源码开始构建你的安全工作台。</p>
-          </div>
-          <div class="cta-actions">
-            <a class="button button-primary" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">下载最新版本</a>
-            <a class="button button-ghost" href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">GitHub 源码</a>
-          </div>
-        </div>
+      <section class="closing">
+        <div class="closing-mark"><img src="assets/brand/argusai-icon.png" alt="" /></div>
+        <div class="closing-copy reveal"><span>ARGUSAI / OPEN SOURCE / GPL-3.0</span><h2>下一个目标，<br />交给会执行的 Agent。</h2><p>Windows · macOS · Linux</p></div>
+        <div class="closing-actions reveal"><a class="button button-paper" href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">下载最新版本 <span>↗</span></a><a class="button button-blue" href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">GitHub 源码 <span>↗</span></a></div>
       </section>
     </main>
 
-    <footer class="site-footer section-shell">
-      <div class="footer-brand">
-        <img src="assets/brand/argusai-icon.png" alt="" />
-        <div><b>ArgusAI</b><span>Agent 原生安全工作台</span></div>
-      </div>
-      <div class="footer-links">
-        <a href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">GitHub</a>
-        <a href="https://github.com/HG-ha/Argusai/wiki" target="_blank" rel="noreferrer">文档</a>
-        <a href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">下载</a>
-        <a href="https://github.com/HG-ha/Argusai/issues" target="_blank" rel="noreferrer">反馈</a>
-      </div>
+    <footer class="site-footer">
+      <div class="footer-brand"><img src="assets/brand/argusai-icon.png" alt="" /><b>ARGUSAI</b></div>
+      <div class="footer-links"><a href="https://github.com/HG-ha/Argusai" target="_blank" rel="noreferrer">GitHub</a><a href="https://github.com/HG-ha/Argusai/wiki" target="_blank" rel="noreferrer">文档</a><a href="https://github.com/HG-ha/Argusai/releases" target="_blank" rel="noreferrer">下载</a><a href="https://github.com/HG-ha/Argusai/issues" target="_blank" rel="noreferrer">反馈</a></div>
       <p>© <span data-year></span> ArgusAI · 仅用于自有系统、明确授权的安全评估与隔离实验环境。</p>
     </footer>
-
     <script src="app.js" defer></script>
   </body>
 </html>
