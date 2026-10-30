@@ -735,6 +735,93 @@ class AssistantSessionsMixin:
             return {"ok": False, "error": str(e)}
 
 
+    def import_assistant_context(self, session_id: str) -> dict[str, Any]:
+        """Import persistent context from a user-selected text, Markdown, or JSON file."""
+        try:
+            session_id = self._validate_session_id(session_id)
+            if not self._session_path(session_id).exists():
+                return {"ok": False, "error": "session not found"}
+            picker = getattr(self, "_pick_open_file", None)
+            if not callable(picker):
+                return {"ok": False, "error": "file picker is unavailable"}
+            picked = picker(
+                file_types=(
+                    "Context files (*.md;*.markdown;*.txt;*.json)",
+                    "All files (*.*)",
+                ),
+            )
+            if not picked.get("ok"):
+                return picked
+            source = Path(str(picked.get("path") or "")).resolve()
+            if not source.is_file():
+                return {"ok": False, "error": f"not a file: {source}"}
+            # A context note is capped at 12k characters. Leave room for JSON
+            # metadata while refusing unexpectedly large files selected by mistake.
+            if source.stat().st_size > 256_000:
+                return {"ok": False, "error": "context file is too large (maximum 256 KB)"}
+            raw = source.read_text(encoding="utf-8-sig")
+            notes: Any = raw
+            if source.suffix.lower() == ".json":
+                payload = json.loads(raw)
+                if isinstance(payload, str):
+                    notes = payload
+                elif isinstance(payload, dict):
+                    notes = next(
+                        (
+                            payload[key]
+                            for key in ("context_notes", "context", "notes")
+                            if key in payload
+                        ),
+                        None,
+                    )
+                    if notes is None:
+                        return {"ok": False, "error": "JSON context has no context_notes field"}
+                else:
+                    return {"ok": False, "error": "JSON context must be an object or string"}
+            updated = self.update_assistant_session(session_id, {"context_notes": notes})
+            if not updated.get("ok"):
+                return updated
+            return {
+                **updated,
+                "context_notes": str(updated.get("session", {}).get("context_notes") or ""),
+                "source": str(source),
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
+    def export_assistant_context(self, session_id: str) -> dict[str, Any]:
+        """Export persistent context to a user-selected Markdown file."""
+        try:
+            session_id = self._validate_session_id(session_id)
+            path = self._session_path(session_id)
+            if not path.exists():
+                return {"ok": False, "error": "session not found"}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            live = self._assistant_sessions.get(session_id)
+            notes = str(
+                getattr(live, "context_notes", "")
+                if live is not None
+                else data.get("context_notes") or ""
+            )
+            picker = getattr(self, "_pick_save_file", None)
+            if not callable(picker):
+                return {"ok": False, "error": "file picker is unavailable"}
+            picked = picker(save_filename=f"ArgusAI-context-{session_id[:32]}.md")
+            if not picked.get("ok"):
+                return picked
+            target = Path(str(picked.get("path") or "")).expanduser()
+            target.write_text(notes + ("\n" if notes else ""), encoding="utf-8")
+            return {
+                "ok": True,
+                "path": str(target),
+                "context_notes": notes,
+                "char_count": len(notes),
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return {"ok": False, "error": str(exc)}
+
+
     def _assistant_session_display_name(self, data: dict[str, Any], fallback: str = "") -> str:
         """Return a useful display name without mutating the session file."""
         raw = str(data.get("name") or "").strip()

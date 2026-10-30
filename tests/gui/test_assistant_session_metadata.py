@@ -207,6 +207,36 @@ def test_update_session_context_notes_roundtrip_and_live_state(tmp_path) -> None
     assert detail["context_notes"] == "Keep the target limited to staging.example."
 
 
+def test_import_and_export_session_context(tmp_path) -> None:
+    api = _Api(tmp_path / "sessions")
+    session = AssistantSession()
+    session_path = api._session_path("sess-context-io")
+    api._save_session(session_path, session, "context io")
+    api._assistant_sessions["sess-context-io"] = session
+
+    imported = tmp_path / "imported-context.json"
+    imported.write_text(
+        '{"context_notes":"Keep evidence under ticket IR-42."}',
+        encoding="utf-8",
+    )
+    api._pick_open_file = lambda **_kwargs: {"ok": True, "path": str(imported)}
+
+    import_result = api.import_assistant_context("sess-context-io")
+
+    assert import_result["ok"] is True
+    assert import_result["context_notes"] == "Keep evidence under ticket IR-42."
+    assert session.context_notes == "Keep evidence under ticket IR-42."
+
+    exported = tmp_path / "exported-context.md"
+    api._pick_save_file = lambda **_kwargs: {"ok": True, "path": str(exported)}
+
+    export_result = api.export_assistant_context("sess-context-io")
+
+    assert export_result["ok"] is True
+    assert export_result["char_count"] == len("Keep evidence under ticket IR-42.")
+    assert exported.read_text(encoding="utf-8") == "Keep evidence under ticket IR-42.\n"
+
+
 def test_save_session_preserves_existing_note(tmp_path) -> None:
     api = _Api(tmp_path)
     session = AssistantSession()

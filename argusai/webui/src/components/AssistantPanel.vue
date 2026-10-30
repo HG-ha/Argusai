@@ -386,6 +386,8 @@ const messageContextActions = computed(() => {
 })
 const tabContextActions = computed(() => [
   { id: 'edit-context', label: t('assistant.tabEditContext') },
+  { id: 'import-context', label: t('assistant.tabImportContext') },
+  { id: 'export-context', label: t('assistant.tabExportContext') },
   { id: 'close-tab', label: t('assistant.tabCloseTitle'), disabled: tabs.length <= 1 },
 ])
 
@@ -5009,6 +5011,29 @@ async function handleTabContextAction(actionId) {
   if (actionId === 'edit-context') {
     try {
       await openContextEditor(tab)
+    } catch (error) {
+      showToast(t('toast.error', { msg: error?.message || error }), 'error')
+    }
+    return
+  }
+  if (actionId === 'import-context') {
+    try {
+      const result = await api.importAssistantContext(id)
+      if (result?.cancelled) return
+      if (!result?.ok) throw new Error(result?.error || t('assistant.contextImportFailed'))
+      tab.contextNotes = String(result.context_notes || '')
+      showToast(t('assistant.contextImported'), 'ok')
+    } catch (error) {
+      showToast(t('toast.error', { msg: error?.message || error }), 'error')
+    }
+    return
+  }
+  if (actionId === 'export-context') {
+    try {
+      const result = await api.exportAssistantContext(id)
+      if (result?.cancelled) return
+      if (!result?.ok) throw new Error(result?.error || t('assistant.contextExportFailed'))
+      showToast(t('assistant.contextExported'), 'ok')
     } catch (error) {
       showToast(t('toast.error', { msg: error?.message || error }), 'error')
     }
