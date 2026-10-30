@@ -11,6 +11,24 @@ import './assets/theme.css'
 // received even before any panel subscribes.
 import './livebus.js'
 
+function applyAppInfo(info) {
+  if (!info || typeof info !== 'object') return
+  state.version = info.version || state.version || ''
+  state.platform = info.platform || state.platform || ''
+  state.framelessWindow = !!info.frameless_window
+  // custom_titlebar is newer; fall back to frameless so older hosts behave.
+  state.customTitlebar = info.custom_titlebar ?? !!info.frameless_window
+  state.nativeWindowControls = !!info.native_window_controls
+  state.titlebarInsetLeft = Number(info.titlebar_inset_left) || 0
+}
+
+// Packaged macOS can finish resolving the native NSWindow just after the
+// bridge becomes available. Register before the first appInfo call so neither
+// side of that startup race can lose the final titlebar state.
+window.addEventListener('argusai:app-info-updated', event => {
+  applyAppInfo(event?.detail)
+})
+
 async function boot() {
   try {
     const info = await api.appInfo()
@@ -20,13 +38,7 @@ async function boot() {
     // currently only distinguishes zh vs en, so it must not clobber ja/ko/….
     if (!stored && info?.locale === 'zh' && i18n.locale === 'en') setLocale('zh')
     api.setLocale(i18n.locale).catch(() => {})
-    state.version = info?.version || ''
-    state.platform = info?.platform || ''
-    state.framelessWindow = !!info?.frameless_window
-    // custom_titlebar is newer; fall back to frameless so older hosts behave.
-    state.customTitlebar = info?.custom_titlebar ?? !!info?.frameless_window
-    state.nativeWindowControls = !!info?.native_window_controls
-    state.titlebarInsetLeft = Number(info?.titlebar_inset_left) || 0
+    applyAppInfo(info)
   } catch (_) {}
 
   const app = createApp(App)

@@ -710,14 +710,24 @@ class AssistantSessionsMixin:
             if "note" in patch:
                 note = str(patch.get("note") or "").strip()
                 data["note"] = note[:4000]
+            if "context_notes" in patch:
+                from argusai.core.assistant.session import MAX_CONTEXT_NOTES_CHARS
+
+                context_notes = str(patch.get("context_notes") or "").strip()
+                data["context_notes"] = context_notes[:MAX_CONTEXT_NOTES_CHARS]
             data["updated_at"] = time.time()
             p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            if "context_notes" in patch:
+                live = self._assistant_sessions.get(session_id)
+                if live is not None:
+                    live.set_context_notes(data["context_notes"])
             return {
                 "ok": True,
                 "session": {
                     "id": session_id,
                     "name": self._assistant_session_display_name(data, session_id),
                     "note": str(data.get("note") or ""),
+                    "context_notes": str(data.get("context_notes") or ""),
                     "updated_at": data.get("updated_at", 0),
                 },
             }
@@ -768,6 +778,7 @@ class AssistantSessionsMixin:
                 "session_id": session_id,
                 "name": self._assistant_session_display_name(data, session_id),
                 "note": str(data.get("note") or ""),
+                "context_notes": str(data.get("context_notes") or ""),
                 "runtime": binding.to_dict(),
                 "history": history,
             }
@@ -956,6 +967,11 @@ class AssistantSessionsMixin:
             "session_id": hist.get("session_id"),
             "name": hist.get("name"),
             "note": hist.get("note") or "",
+            "context_notes": str(
+                getattr(session, "context_notes", "")
+                if session is not None
+                else hist.get("context_notes") or ""
+            ),
             "message_count": len(hist.get("history") or []),
             "memory_summary": summary,
             "memory_count": memory_count,

@@ -148,14 +148,14 @@ Python 版本源是 `argusai/__init__.py` 的 `__version__`，pyproject 动态�
 
 ```sh
 python scripts/bump_version.py
-python scripts/bump_version.py --check --tag v0.1.1
+python scripts/bump_version.py --check --tag v0.1.2
 ```
 
 发布下一版时，先更新版本再校验匹配标签，例如：
 
 ```sh
-python scripts/bump_version.py 0.1.1
-python scripts/bump_version.py --check --tag v0.1.1
+python scripts/bump_version.py 0.1.2
+python scripts/bump_version.py --check --tag v0.1.2
 ```
 
 随后检查 README、Wiki、产物示例和变更说明中的版本是否也需要更新。校验命令不会修改文件。
@@ -179,7 +179,7 @@ flowchart TD
     G -->|否| I[保留 artifacts，不发布附件]
 ```
 
-- Release 发布事件要求标签与 Python、前端版本一致；支持匹配的版本标签，如 `v0.1.1`。
+- Release 发布事件要求标签与 Python、前端版本一致；支持匹配的版本标签，如 `v0.1.2`。
 - 五个原生构建目标和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
 - 前端构建后收集第三方许可声明，再在原生构建前核验；声明随应用资源分发。
 - 包装后的 CLI 必须启动并报告预期版本，才能上传平台 artifact。
@@ -194,18 +194,18 @@ flowchart TD
 
 ArgusAI 自有代码采用 [GPL-3.0-only](../LICENSE)，第三方组件保留各自许可，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。正式 Release 的附件会同时提供：
 
-- `ArgusAI-0.1.1-source.tar.gz`
-- `ArgusAI-0.1.1-source.tar.gz.sha256`
+- `ArgusAI-0.1.2-source.tar.gz`
+- `ArgusAI-0.1.2-source.tar.gz.sha256`
 
-独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.1/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
+独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.2/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
 
 归档从已跟踪的提交内容生成，不读取工作区未提交修改、未跟踪文件或 `.git` 数据。用户配置、密钥、会话与流量资料应保持未跟踪；发布前仍要检查待发布提交，避免把私有材料误提交到其他路径。
 
 下载后先将本地计算的 SHA-256 与旁边的 `.sha256` 文件核对，再解压。在仓库根目录按本文构建前提准备工具后执行对应平台命令。例如：
 
 ```sh
-tar -xzf ArgusAI-0.1.1-source.tar.gz
-cd ArgusAI-0.1.1
+tar -xzf ArgusAI-0.1.2-source.tar.gz
+cd ArgusAI-0.1.2
 uv sync --locked --group build
 uv run --locked --group build python build.py --dry-run --jobs 2
 ```

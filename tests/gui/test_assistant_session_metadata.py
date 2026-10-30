@@ -186,6 +186,27 @@ def test_update_session_metadata_roundtrip(tmp_path) -> None:
     assert detail["note"] == "important note"
 
 
+def test_update_session_context_notes_roundtrip_and_live_state(tmp_path) -> None:
+    api = _Api(tmp_path)
+    session = AssistantSession()
+    session.history.append(ChatMessage(role="user", content="hello"))
+    path = api._session_path("sess-context")
+    api._save_session(path, session, "context")
+    api._assistant_sessions["sess-context"] = session
+
+    updated = api.update_assistant_session(
+        "sess-context",
+        {"context_notes": "Keep the target limited to staging.example."},
+    )
+
+    assert updated["ok"] is True
+    assert updated["session"]["context_notes"] == "Keep the target limited to staging.example."
+    assert session.context_notes == "Keep the target limited to staging.example."
+    api._assistant_sessions.clear()
+    detail = api.get_assistant_session("sess-context")
+    assert detail["context_notes"] == "Keep the target limited to staging.example."
+
+
 def test_save_session_preserves_existing_note(tmp_path) -> None:
     api = _Api(tmp_path)
     session = AssistantSession()

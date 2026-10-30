@@ -33,6 +33,8 @@ import argusIcon from '../../../../assets/brand/argusai-icon-Transparency.png'
 const confirmDialog = useConfirm()
 const mediaPreview = useMediaPreview()
 const voiceInput = useAssistantVoiceInput()
+const HISTORY_LOAD_TIMEOUT_MS = 30_000
+const CONTEXT_NOTES_MAX_CHARS = 12_000
 const showNewSessionModal = ref(false)
 const agentRuntimeInventory = ref([])
 const agentRuntimesLoading = ref(false)
@@ -367,6 +369,11 @@ const engagementScopeSummary = computed(() => {
 })
 const greenlightBusy = ref(false)
 const messageContextMenu = reactive({ open: false, x: 0, y: 0, uid: null })
+const tabContextMenu = reactive({ open: false, x: 0, y: 0, sessionId: '' })
+const contextEditorOpen = ref(false)
+const contextEditorSessionId = ref('')
+const contextEditorDraft = ref('')
+const contextEditorSaving = ref(false)
 const editingUserMessageUid = ref(null)
 const editingUserMessageText = ref('')
 const messageContextActions = computed(() => {
@@ -377,6 +384,10 @@ const messageContextActions = computed(() => {
     { id: 'copy', label: t('assistant.copy') },
   ]
 })
+const tabContextActions = computed(() => [
+  { id: 'edit-context', label: t('assistant.tabEditContext') },
+  { id: 'close-tab', label: t('assistant.tabCloseTitle'), disabled: tabs.length <= 1 },
+])
 
 async function openMacosPrivacySettings(pane) {
   try {
@@ -4923,6 +4934,87 @@ function closeMessageContextMenu() {
   messageContextMenu.uid = null
 }
 
+function closeTabContextMenu() {
+  tabContextMenu.open = false
+  tabContextMenu.sessionId = ''
+}
+
+function openTabContextMenu(event, tab) {
+  if (!tab?.sessionId) return
+  event?.preventDefault?.()
+  event?.stopPropagation?.()
+  closeMessageContextMenu()
+  tabContextMenu.open = true
+  tabContextMenu.x = Number(event?.clientX || 0)
+  tabContextMenu.y = Number(event?.clientY || 0)
+  tabContextMenu.sessionId = tab.sessionId
+}
+
+async function openContextEditor(tab) {
+  if (!tab?.sessionId) return
+  let notes = tab.contextNotes
+  if (notes == null) {
+    const result = await withTimeout(
+      api.getAssistantSession(tab.sessionId),
+      HISTORY_LOAD_TIMEOUT_MS,
+      null,
+    )
+    if (!result) throw new Error(t('assistant.historyLoadTimeout'))
+    if (!result.ok) throw new Error(result.error || t('assistant.contextLoadFailed'))
+    notes = String(result.context_notes || '')
+    tab.contextNotes = notes
+  }
+  contextEditorSessionId.value = tab.sessionId
+  contextEditorDraft.value = String(notes || '')
+  contextEditorOpen.value = true
+}
+
+function closeContextEditor() {
+  if (contextEditorSaving.value) return
+  contextEditorOpen.value = false
+  contextEditorSessionId.value = ''
+  contextEditorDraft.value = ''
+}
+
+async function saveContextEditor() {
+  const id = contextEditorSessionId.value
+  if (!id || contextEditorSaving.value) return
+  contextEditorSaving.value = true
+  try {
+    const notes = String(contextEditorDraft.value || '').trim().slice(0, CONTEXT_NOTES_MAX_CHARS)
+    const result = await api.updateAssistantSession(id, { context_notes: notes })
+    if (!result?.ok) throw new Error(result?.error || t('assistant.contextSaveFailed'))
+    const saved = String(result.session?.context_notes ?? notes)
+    const tab = tabs.find(item => item.sessionId === id)
+    if (tab) tab.contextNotes = saved
+    contextEditorDraft.value = saved
+    showToast(t('assistant.contextSaved'), 'ok')
+    contextEditorOpen.value = false
+  } catch (error) {
+    showToast(t('toast.error', { msg: error?.message || error }), 'error')
+  } finally {
+    contextEditorSaving.value = false
+  }
+}
+
+async function handleTabContextAction(actionId) {
+  const id = tabContextMenu.sessionId
+  closeTabContextMenu()
+  const tab = tabs.find(item => item.sessionId === id)
+  if (!tab) return
+  if (actionId === 'close-tab') {
+    await closeTabSafe(id)
+    return
+  }
+  if (actionId === 'edit-context') {
+    try {
+      await openContextEditor(tab)
+    } catch (error) {
+      showToast(t('toast.error', { msg: error?.message || error }), 'error')
+    }
+  }
+}
+
 function messageByUid(uid, tab = activeTab.value) {
   if (!tab || uid == null) return null
   return (tab.messages || []).find(message => message?._uid === uid) || null
@@ -5857,7 +5949,7 @@ async function loadHistory() {
   const tab = activeTab.value
   if (!tab) return
   try {
-    const r = await withTimeout(api.getAssistantSession(tab.sessionId), 1500, null)
+    const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (!r) throw new Error(t('assistant.historyLoadTimeout'))
     if (r.ok) {
       tab.messages = normalizeHistory(r.history)
@@ -5867,6 +5959,7 @@ async function loadHistory() {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
+      tab.contextNotes = String(r.context_notes || '')
       if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
@@ -6162,6 +6255,11 @@ function onGlobalKey(e) {
     closeMessageContextMenu()
     return
   }
+  if (e.key === 'Escape' && tabContextMenu.open) {
+    e.preventDefault()
+    closeTabContextMenu()
+    return
+  }
   // Ctrl+T (or Cmd+T) opens a new tab when the panel is visible. We don't
   // hijack the browser shortcut unless the assistant panel currently has
   // focus, so users can still open IDE/OS-level tabs elsewhere.
@@ -6222,7 +6320,7 @@ async function hydrateIfNeeded(tab) {
     return
   }
   try {
-    const r = await withTimeout(api.getAssistantSession(tab.sessionId), 1500, null)
+    const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (r && r.ok) {
       tab.messages = normalizeHistory(r.history)
       hydrateHistoryAttachments(tab.messages, tab.sessionId)
@@ -6231,6 +6329,7 @@ async function hydrateIfNeeded(tab) {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
+      tab.contextNotes = String(r.context_notes || '')
       if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
@@ -6261,7 +6360,7 @@ async function onAssistantSessionUpdatedEvent(ev) {
     return
   }
   try {
-    const r = await withTimeout(api.getAssistantSession(sessionId), 1500, null)
+    const r = await withTimeout(api.getAssistantSession(sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (!r?.ok) return
     tab.messages = normalizeHistory(r.history)
     hydrateHistoryAttachments(tab.messages, tab.sessionId)
@@ -6270,6 +6369,7 @@ async function onAssistantSessionUpdatedEvent(ev) {
     applySessionAssistantPolicy(r, tab)
     tab.webSearchAllowed = Boolean(r.allow_web_search)
     tab.engagement = r.engagement_declaration || null
+    tab.contextNotes = String(r.context_notes || '')
     if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
     if (r.name) tab.name = r.name
     tab._historyLoaded = true
@@ -6403,6 +6503,7 @@ watch(() => props.visible, (v) => {
     })
   } else {
     closeMessageContextMenu()
+    closeTabContextMenu()
     cancelEditUserMessage()
     persistTabs()
   }
@@ -6411,6 +6512,7 @@ watch(() => props.visible, (v) => {
 watch(activeTabId, async (sid) => {
   showModelModal.value = false
   closeMessageContextMenu()
+  closeTabContextMenu()
   cancelEditUserMessage()
   showThinkingMenu.value = false
   showTokenUsage.value = false
@@ -6553,6 +6655,7 @@ watch(input, (newVal) => {
             }"
             :title="tabDisplayName(tab)"
             @click="selectTab(tab.sessionId)"
+            @contextmenu.prevent.stop="openTabContextMenu($event, tab)"
           >
             <span
               v-if="tabBadgeStatus(tab)"
@@ -7963,6 +8066,46 @@ watch(input, (newVal) => {
     </template>
   </WorkbenchModal>
 
+  <WorkbenchModal
+    :open="contextEditorOpen"
+    :title="t('assistant.contextEditorTitle')"
+    :description="t('assistant.contextEditorDescription')"
+    size="md"
+    :busy="contextEditorSaving"
+    @close="closeContextEditor"
+  >
+    <div class="assistant-context-editor">
+      <textarea
+        v-model="contextEditorDraft"
+        autofocus
+        :maxlength="CONTEXT_NOTES_MAX_CHARS"
+        :placeholder="t('assistant.contextEditorPlaceholder')"
+        rows="12"
+      ></textarea>
+      <div class="assistant-context-editor-meta">
+        <span>{{ t('assistant.contextEditorSafety') }}</span>
+        <span>{{ contextEditorDraft.length }} / {{ CONTEXT_NOTES_MAX_CHARS }}</span>
+      </div>
+    </div>
+    <template #footer>
+      <button class="ghost" type="button" :disabled="contextEditorSaving" @click="closeContextEditor">
+        {{ t('common.cancel') }}
+      </button>
+      <button class="primary" type="button" :disabled="contextEditorSaving" @click="saveContextEditor">
+        {{ contextEditorSaving ? t('common.loading') : t('common.save') }}
+      </button>
+    </template>
+  </WorkbenchModal>
+
+  <SandboxContextMenu
+    :open="tabContextMenu.open"
+    :x="tabContextMenu.x"
+    :y="tabContextMenu.y"
+    :actions="tabContextActions"
+    @close="closeTabContextMenu"
+    @action="handleTabContextAction"
+  />
+
   <SandboxContextMenu
     :open="messageContextMenu.open"
     :x="messageContextMenu.x"
@@ -7974,6 +8117,34 @@ watch(input, (newVal) => {
 </template>
 
 <style scoped>
+.assistant-context-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-context-editor textarea {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--input-bg, var(--bg-sunken));
+  color: var(--fg);
+  font: 12px/1.6 var(--mono);
+  outline: none;
+}
+.assistant-context-editor textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.assistant-context-editor-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted-2);
+  font-size: 11px;
+}
 .new-agent-session{display:flex;flex-direction:column;gap:16px}.new-agent-flow{display:flex;align-items:center;gap:8px;overflow:auto;padding:11px 12px;border:1px solid var(--border);border-radius:9px;background:var(--bg-sunken)}.new-agent-flow span{flex:none;padding:6px 9px;border:1px solid var(--border);border-radius:7px;background:var(--card-bg);font:11px/1.2 var(--mono)}.new-agent-flow span.accent{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--accent)}.new-agent-flow b{color:var(--muted-2);font-weight:400}.new-agent-field{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:12px}.workspace-choices{display:grid;grid-template-columns:1fr 1fr;gap:9px}.workspace-choices>label{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--card-bg);cursor:pointer}.workspace-choices>label.active{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}.workspace-choices input{margin-top:2px;accent-color:var(--accent)}.workspace-choices span{display:flex;flex-direction:column;gap:4px}.workspace-choices strong{color:var(--fg-strong);font-size:12px}.workspace-choices small{color:var(--muted-2);font-size:11px;line-height:1.4}.project-picker{display:flex;align-items:center;gap:8px}.project-picker code{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg);font:11px/1.2 var(--mono)}.runtime-lock-note{margin:0;padding:10px 12px;border-left:2px solid var(--accent);background:var(--accent-soft);color:var(--muted);font-size:11px;line-height:1.5}
 @media(max-width:620px){.workspace-choices{grid-template-columns:1fr}.project-picker{align-items:stretch;flex-direction:column}.project-picker button{width:100%}}
 .acp-model-picker { display: flex; flex-direction: column; gap: 12px; }

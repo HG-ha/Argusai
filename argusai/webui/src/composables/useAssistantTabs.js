@@ -98,6 +98,7 @@ function makeTab(sessionId, opts = {}) {
     thinkingEnabled: false,
     thinkingEffort: 'high',
     engagement: null,
+    contextNotes: null,
     runtime: opts.runtime && typeof opts.runtime === 'object'
       ? { ...opts.runtime }
       : { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false },
@@ -264,6 +265,7 @@ function replaceActiveTabSession(sessionId) {
   target.webSearchAllowed = true
   target.thinkingEnabled = false
   target.thinkingEffort = 'high'
+  target.contextNotes = null
   target.runtime = { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false }
   target.autoAllowTools = []
   target.autoApproveMode = false

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.1-0967a6?style=flat-square" alt="版本 0.1.1">
+  <img src="https://img.shields.io/badge/version-0.1.2-0967a6?style=flat-square" alt="版本 0.1.2">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows、macOS 与 Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="许可证 GPL-3.0-only"></a>
@@ -162,7 +162,7 @@ flowchart TB
 
 ## 快速开始
 
-当前版本为 `0.1.1`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
+当前版本为 `0.1.2`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
 
 ```sh
 uv sync --locked

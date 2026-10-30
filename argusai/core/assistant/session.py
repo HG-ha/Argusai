@@ -50,6 +50,8 @@ _TOKEN_USAGE_FIELDS = (
     "calls",
 )
 
+MAX_CONTEXT_NOTES_CHARS = 12_000
+
 from .attachments import *
 from .messages import *
 from .output import *
@@ -139,6 +141,10 @@ class AssistantSession(
         # Default on; ``/live off`` still waits for the end-of-turn reply.
         self.channel_live: bool = True
         self.runtime_binding = SessionRuntimeBinding()
+        # User-maintained persistent context for this conversation. It is
+        # attached to the live user turn (never promoted to system authority)
+        # and therefore cannot override authorization or tool-layer controls.
+        self.context_notes: str = ""
         # Frozen tools[] for OpenAI/Codex prefix cache. Extra catalogue tools
         # are discovered via tool_search results and run with invoke_catalogue_tool.
         self._prompt_tool_names: list[str] = []
@@ -338,6 +344,7 @@ class AssistantSession(
             "thinking_effort": str(self.thinking_effort or "high"),
             "channel_live": bool(self.channel_live),
             "runtime": self.runtime_binding.to_dict(),
+            "context_notes": self.context_notes,
             "engagement_declaration": self.engagement_declaration,
             "auto_approve_mode": bool(self._user_auto_approve_mode),
             "native_model_selection": dict(self.native_model_selection),
@@ -403,6 +410,7 @@ class AssistantSession(
             s.last_prompt_history_bytes = 0
         s.channel_live = bool(d.get("channel_live", True))
         s.runtime_binding = normalize_session_runtime_binding(d.get("runtime"))
+        s.context_notes = str(d.get("context_notes") or "").strip()[:MAX_CONTEXT_NOTES_CHARS]
         eng_raw = d.get("engagement_declaration")
         if isinstance(eng_raw, dict):
             from .engagement import normalize_engagement
@@ -472,6 +480,11 @@ class AssistantSession(
         payload.setdefault("declared_at", time.time())
         self.engagement_declaration = normalize_engagement(payload)
         return self.engagement_declaration
+
+    def set_context_notes(self, raw: Any) -> str:
+        """Replace the persistent user context attached to future turns."""
+        self.context_notes = str(raw or "").strip()[:MAX_CONTEXT_NOTES_CHARS]
+        return self.context_notes
 
     def engagement_prompt_note(self) -> str:
         from .engagement import engagement_prompt_section

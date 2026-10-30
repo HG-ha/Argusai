@@ -444,6 +444,14 @@ def main() -> None:
             from argusai.gui.macos_titlebar import apply_unified_titlebar
 
             api._macos_titlebar = apply_unified_titlebar(w)
+            # ``app_info`` may have been read while packaged pywebview was
+            # still registering its Cocoa BrowserView.  Publish the final host
+            # state so an already-mounted Vue shell can add the unified header.
+            app_info_json = json.dumps(api.app_info(), ensure_ascii=False)
+            w.evaluate_js(
+                "window.dispatchEvent(new CustomEvent('argusai:app-info-updated', "
+                f"{{detail:{app_info_json}}}));"
+            )
         except Exception:
             log.debug("gui.boot macos titlebar apply failed", exc_info=True)
         try:

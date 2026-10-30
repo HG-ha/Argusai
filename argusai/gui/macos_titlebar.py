@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
+import time
 from typing import Any
 
 log = logging.getLogger("argusai.gui.titlebar")
@@ -29,23 +31,94 @@ _NS_TITLE_HIDDEN = 1                   # NSWindowTitleHidden
 TRAFFIC_LIGHT_INSET = 78
 
 
-def _resolve_nswindow(window: Any) -> Any:
-    """Best-effort: find the Cocoa ``NSWindow`` behind a pywebview window."""
-    candidate = getattr(window, "native", None)
-    if candidate is not None and hasattr(candidate, "setStyleMask_"):
-        return candidate
-    try:
-        from webview.platforms import cocoa  # type: ignore
-
-        instances = getattr(cocoa.BrowserView, "instances", {}) or {}
-        inst = instances.get(getattr(window, "uid", None)) or next(iter(instances.values()), None)
-        for attr in ("window", "_window"):
-            nswin = getattr(inst, attr, None)
-            if nswin is not None and hasattr(nswin, "setStyleMask_"):
-                return nswin
-    except Exception:
-        log.debug("cocoa NSWindow lookup failed", exc_info=True)
+def _native_window_from(value: Any) -> Any:
+    """Return an ``NSWindow`` from either the window or its BrowserView host."""
+    if value is not None and hasattr(value, "setStyleMask_"):
+        return value
+    for attr in ("window", "_window"):
+        candidate = getattr(value, attr, None)
+        if candidate is not None and hasattr(candidate, "setStyleMask_"):
+            return candidate
     return None
+
+
+def _resolve_nswindow(window: Any, *, wait_seconds: float = 0.0) -> Any:
+    """Best-effort: find the Cocoa ``NSWindow`` behind a pywebview window.
+
+    Packaged pywebview starts the user callback on a helper thread while the
+    Cocoa ``BrowserView`` may still be registering itself.  Source/dev runs
+    usually hit the callback on the main thread after registration, which hid
+    this race.  A helper thread may therefore wait briefly; the AppKit main
+    thread must never be slept while it is constructing the window.
+    """
+    deadline = time.monotonic() + max(0.0, float(wait_seconds or 0.0))
+    while True:
+        candidate = _native_window_from(getattr(window, "native", None))
+        if candidate is not None:
+            return candidate
+        try:
+            from webview.platforms import cocoa  # type: ignore
+
+            uid = getattr(window, "uid", None)
+            inst = None
+            getter = getattr(cocoa.BrowserView, "get_instance", None)
+            if callable(getter) and uid is not None:
+                inst = getter("uid", uid)
+            if inst is None:
+                instances = getattr(cocoa.BrowserView, "instances", {}) or {}
+                inst = instances.get(uid) or next(iter(instances.values()), None)
+            candidate = _native_window_from(inst)
+            if candidate is not None:
+                return candidate
+        except Exception:
+            log.debug("cocoa NSWindow lookup failed", exc_info=True)
+            return None
+        if threading.current_thread() is threading.main_thread() or time.monotonic() >= deadline:
+            return None
+        time.sleep(0.05)
+
+
+def _apply_style_on_main_thread(nswin: Any, *, timeout_seconds: float = 3.0) -> bool:
+    """Apply AppKit mutations on the Cocoa main thread and report completion."""
+    def apply() -> None:
+        nswin.setTitlebarAppearsTransparent_(True)
+        nswin.setTitleVisibility_(_NS_TITLE_HIDDEN)
+        nswin.setStyleMask_(nswin.styleMask() | _NS_FULL_SIZE_CONTENT_VIEW)
+        # Dragging is handled by the web ``.titlebar-drag`` region, not the
+        # whole background, so selection in the content still works.
+        nswin.setMovableByWindowBackground_(False)
+
+    if threading.current_thread() is threading.main_thread():
+        apply()
+        return True
+
+    done = threading.Event()
+    outcome = {"ok": False, "cancelled": False}
+
+    def invoke() -> None:
+        if outcome["cancelled"]:
+            done.set()
+            return
+        try:
+            apply()
+            outcome["ok"] = True
+        except Exception:
+            log.debug("macos titlebar styling failed on main thread", exc_info=True)
+        finally:
+            done.set()
+
+    try:
+        from PyObjCTools import AppHelper  # type: ignore
+
+        AppHelper.callAfter(invoke)
+    except Exception:
+        log.debug("macos titlebar main-thread dispatch failed", exc_info=True)
+        return False
+    if not done.wait(max(0.1, float(timeout_seconds or 0.0))):
+        outcome["cancelled"] = True
+        log.warning("macos titlebar: main-thread styling timed out")
+        return False
+    return bool(outcome["ok"])
 
 
 def apply_unified_titlebar(window: Any) -> dict[str, Any] | None:
@@ -56,17 +129,14 @@ def apply_unified_titlebar(window: Any) -> dict[str, Any] | None:
     """
     if sys.platform != "darwin":
         return None
-    nswin = _resolve_nswindow(window)
+    wait_seconds = 4.0 if threading.current_thread() is not threading.main_thread() else 0.0
+    nswin = _resolve_nswindow(window, wait_seconds=wait_seconds)
     if nswin is None:
         log.info("macos titlebar: native NSWindow not reachable; keeping native frame")
         return None
     try:
-        nswin.setTitlebarAppearsTransparent_(True)
-        nswin.setTitleVisibility_(_NS_TITLE_HIDDEN)
-        nswin.setStyleMask_(nswin.styleMask() | _NS_FULL_SIZE_CONTENT_VIEW)
-        # Dragging is handled by the web ``.titlebar-drag`` region, not the
-        # whole background, so selection in the content still works.
-        nswin.setMovableByWindowBackground_(False)
+        if not _apply_style_on_main_thread(nswin):
+            return None
     except Exception:
         log.debug("macos titlebar styling failed", exc_info=True)
         return None

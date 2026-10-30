@@ -27,3 +27,14 @@ def test_titlebar_drag_selector_targets_only_the_dedicated_surface() -> None:
     assert 'DRAG_REGION_SELECTOR"] = ".titlebar-drag"' in launch
     assert ".titlebar-drag-surface" in theme
     assert "-webkit-app-region: no-drag" in theme
+
+
+def test_macos_titlebar_state_is_pushed_after_native_window_resolution() -> None:
+    launch = (ROOT / "argusai/gui/launch.py").read_text(encoding="utf-8")
+    main = (ROOT / "argusai/webui/src/main.js").read_text(encoding="utf-8")
+    macos = (ROOT / "argusai/gui/macos_titlebar.py").read_text(encoding="utf-8")
+
+    assert "argusai:app-info-updated" in launch
+    assert "argusai:app-info-updated" in main
+    assert "AppHelper.callAfter(invoke)" in macos
+    assert "wait_seconds = 4.0" in macos
