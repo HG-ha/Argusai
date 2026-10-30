@@ -81,9 +81,23 @@ def _resolve_nswindow(window: Any, *, wait_seconds: float = 0.0) -> Any:
 def _apply_style_on_main_thread(nswin: Any, *, timeout_seconds: float = 3.0) -> bool:
     """Apply AppKit mutations on the Cocoa main thread and report completion."""
     def apply() -> None:
+        nswin.setStyleMask_(nswin.styleMask() | _NS_FULL_SIZE_CONTENT_VIEW)
         nswin.setTitlebarAppearsTransparent_(True)
         nswin.setTitleVisibility_(_NS_TITLE_HIDDEN)
-        nswin.setStyleMask_(nswin.styleMask() | _NS_FULL_SIZE_CONTENT_VIEW)
+        # pywebview explicitly paints its non-frameless NSTitlebarView with
+        # ``NSColor.windowBackgroundColor()`` during BrowserView creation.
+        # Changing NSWindow's transparent-titlebar flag afterwards does not
+        # remove that opaque layer, so the Vue header is present but hidden
+        # underneath a grey native strip. Clear the same titlebar view that
+        # pywebview painted while keeping the native traffic-light buttons.
+        try:
+            from AppKit import NSColor  # type: ignore
+
+            titlebar_view = nswin.contentView().superview().subviews().lastObject()
+            if titlebar_view is not None and hasattr(titlebar_view, "setBackgroundColor_"):
+                titlebar_view.setBackgroundColor_(NSColor.clearColor())
+        except Exception:
+            log.debug("macos titlebar background clear failed", exc_info=True)
         # Dragging is handled by the web ``.titlebar-drag`` region, not the
         # whole background, so selection in the content still works.
         nswin.setMovableByWindowBackground_(False)

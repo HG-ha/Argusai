@@ -36,5 +36,9 @@ def test_macos_titlebar_state_is_pushed_after_native_window_resolution() -> None
 
     assert "argusai:app-info-updated" in launch
     assert "argusai:app-info-updated" in main
+    assert "TITLEBAR_RECONCILE_DELAYS_MS" in main
+    assert "reconcileMacTitlebarState()" in main
+    assert "await refreshAppInfo()" in main
     assert "AppHelper.callAfter(invoke)" in macos
     assert "wait_seconds = 4.0" in macos
+    assert "NSColor.clearColor()" in macos

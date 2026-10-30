@@ -22,6 +22,33 @@ function applyAppInfo(info) {
   state.titlebarInsetLeft = Number(info.titlebar_inset_left) || 0
 }
 
+const TITLEBAR_RECONCILE_DELAYS_MS = [100, 500, 1500, 3500, 7000, 10_000]
+
+async function refreshAppInfo() {
+  try {
+    const info = await api.appInfo()
+    applyAppInfo(info)
+    return info
+  } catch (_) {
+    return null
+  }
+}
+
+function reconcileMacTitlebarState() {
+  // The packaged Cocoa host can take several seconds to register its native
+  // NSWindow. An evaluate_js event sent before this module is ready is not
+  // replayed, so re-read the persisted backend state after mount until the
+  // unified titlebar is available. Calls stop immediately on other platforms
+  // or once the final state has been observed.
+  for (const delay of TITLEBAR_RECONCILE_DELAYS_MS) {
+    window.setTimeout(async () => {
+      if (state.platform && state.platform !== 'darwin') return
+      if (state.customTitlebar) return
+      await refreshAppInfo()
+    }, delay)
+  }
+}
+
 // Packaged macOS can finish resolving the native NSWindow just after the
 // bridge becomes available. Register before the first appInfo call so neither
 // side of that startup race can lose the final titlebar state.
@@ -79,6 +106,7 @@ async function boot() {
   app.config.globalProperties.$naiveTheme = theme
 
   app.mount('#app')
+  reconcileMacTitlebarState()
 }
 
 boot()
