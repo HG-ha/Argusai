@@ -1,6 +1,11 @@
 (() => {
   const pairs = `
 首页|Home
+打开导航|Open navigation
+关闭导航|Close navigation
+切换主题|Switch color theme
+放大图片|Zoom image
+适应屏幕|Fit to screen
 执行|Execution
 控制|Control
 连续性|Continuity

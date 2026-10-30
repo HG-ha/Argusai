@@ -1,3 +1,27 @@
+const header = document.querySelector('.header');
+const navigation = header?.querySelector('nav');
+if (navigation) {
+  navigation.id='main-navigation';
+  const toggle=document.createElement('button');
+  toggle.type='button';toggle.className='mobile-menu-toggle';
+  toggle.setAttribute('aria-controls','main-navigation');
+  toggle.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+  function menu(open) {
+    header.dataset.menuOpen=String(open);
+    toggle.setAttribute('aria-expanded',String(open));
+    toggle.setAttribute('aria-label',open?'关闭导航':'打开导航');
+  }
+  menu(false);
+  header.querySelector('.header-tools').append(toggle);
+  const source=document.createElement('a');
+  source.href='https://github.com/HG-ha/Argusai';source.textContent='GitHub ↗';source.className='mobile-github';
+  navigation.append(source);
+  toggle.addEventListener('click',()=>menu(header.dataset.menuOpen!=='true'));
+  navigation.addEventListener('click',()=>menu(false));
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&header.dataset.menuOpen==='true'){menu(false);toggle.focus();}});
+  document.addEventListener('click',event=>{if(!header.contains(event.target))menu(false);});
+  matchMedia('(min-width: 761px)').addEventListener('change',()=>menu(false));
+}
 const previewLinks = [...document.querySelectorAll('[data-shot-link]')];
 if (previewLinks.length) {
   const dialog = document.createElement('dialog');
@@ -6,11 +30,25 @@ if (previewLinks.length) {
   dialog.innerHTML = '<div class="preview-toolbar"><h2 id="preview-title"></h2><span class="preview-count" aria-live="polite"></span><button type="button" data-previous aria-label="上一张图片" title="上一张（←）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button><button type="button" data-next aria-label="下一张图片" title="下一张（→）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button><button type="button" data-close aria-label="关闭图片预览" title="关闭（Esc）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div><img class="preview-image" alt=""><p class="preview-status" role="status"></p>';
   document.body.append(dialog);
   const picture = dialog.querySelector('img');
+  const stage=document.createElement('div');
+  stage.className='preview-stage';picture.replaceWith(stage);stage.append(picture);
+  const zoom=document.createElement('button');
+  zoom.type='button';zoom.setAttribute('aria-label','放大图片');zoom.title='放大图片';zoom.setAttribute('aria-pressed','false');
+  zoom.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5M7 10h6m-3-3v6"/></svg>';
+  dialog.querySelector('[data-close]').before(zoom);
+  function resetZoom() { stage.classList.remove('is-zoomed');zoom.setAttribute('aria-pressed','false');zoom.setAttribute('aria-label','放大图片');zoom.title='放大图片';stage.scrollTop=0;stage.scrollLeft=0; }
+  zoom.addEventListener('click',()=>{
+    const enlarged=stage.classList.toggle('is-zoomed');
+    zoom.setAttribute('aria-pressed',String(enlarged));
+    zoom.setAttribute('aria-label',enlarged?'适应屏幕':'放大图片');
+    zoom.title=enlarged?'适应屏幕':'放大图片';
+  });
   const title = dialog.querySelector('h2');
   const count = dialog.querySelector('.preview-count');
   const status = dialog.querySelector('.preview-status');
   let current = 0, opener = null, previousOverflow = '';
   function show(index) {
+    resetZoom();
     current = (index + previewLinks.length) % previewLinks.length;
     const link = previewLinks[current];
     title.textContent = link.dataset.previewTitle || link.getAttribute('aria-label') || '应用界面';
@@ -41,6 +79,15 @@ if (previewLinks.length) {
     }
   });
   dialog.addEventListener('close',()=>{ document.body.style.overflow=previousOverflow;opener?.focus(); });
+  let touchStart;
+  stage.addEventListener('pointerdown',event=>{if(event.pointerType==='touch')touchStart={x:event.clientX,y:event.clientY};});
+  stage.addEventListener('pointerup',event=>{
+    if(!touchStart||stage.classList.contains('is-zoomed')){touchStart=null;return;}
+    const dx=event.clientX-touchStart.x,dy=event.clientY-touchStart.y;
+    touchStart=null;
+    if(Math.abs(dx)>60&&Math.abs(dy)<50)show(current+(dx<0?1:-1));
+  });
+  stage.addEventListener('pointercancel',()=>{touchStart=null;});
   new MutationObserver(()=>{if(dialog.open)show(current);}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 }
 
