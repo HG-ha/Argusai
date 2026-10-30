@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.4",
+  "published_at": "2026-10-30T18:02:04Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.4",
+  "notes": "# ArgusAI v0.1.4\n\n- 新增桌面更新检查、后台下载和确认安装重启。\n- 新增 CLI 更新命令，支持主动检查与下载校验。\n- 发布后自动同步官网更新清单与日志，补齐 v0.1.3 记录。\n- 更新官网与 README 运行图，完善双侧栏命令行展示。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/ArgusAI-0.1.4-win-x64-setup.exe",
+      "sha256": "773573e5f26844ef67c76cf534b22d3625a0eddf3522aa431044181d7394271f",
+      "size": 69903001
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/ArgusAI-0.1.4-win-arm64-setup.exe",
+      "sha256": "26e1343f1e1389391c3ce20cf42bd7ece149b5de3e3c87d6dcdf2366f7491654",
+      "size": 58885633
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/ArgusAI-0.1.4-linux-x64.tar.gz",
+      "sha256": "d7b60824412052d26eefaf66f27cadd6890abfe8663c095ae2532b360f8fef19",
+      "size": 111636593
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/ArgusAI-0.1.4-linux-arm64.tar.gz",
+      "sha256": "8919a5ac2179cfa05c600810efec5f4112df7b21e99858a503fdc75b9e25c8f6",
+      "size": 103121759
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/ArgusAI-0.1.4-macos-arm64.dmg",
+      "sha256": "dc4510fb29e6d47daa5bc9a57fe7ba0b81658a047e7a386c7172b83ed80db01f",
+      "size": 100403287
+    }
+  }
+}
