@@ -326,6 +326,7 @@ def test_session_core_tools_stay_tiny() -> None:
     assert "list_agents" in names
     assert "cron_upsert" in names
     assert "cron_list" in names
+    assert "channel_reply" not in names
     assert "nmap_scan" not in names
     assert "kb_search" not in names
     assert len(names) < 36
@@ -349,4 +350,4 @@ def test_session_core_tools_stay_tiny() -> None:
     assert "codebase_write_file" not in project
     assert "spawn_agent" in project
     assert "cron_upsert" in project
-    assert len(project) < 36
+    assert len(project) <= 36

@@ -1,11 +1,11 @@
 ---
 name: user-notification
-description: Notify the user about meaningful completion, failure, or attention-required events through a local desktop notification or a paired communication channel. Use when the user asks to be notified, alerted, reminded when work finishes, or sent a result through Feishu, Telegram, Discord, Slack, DingTalk, WeCom, or Webhook.
+description: Notify the user about meaningful completion, failure, or attention-required events through a local desktop notification or a paired communication channel. Use when the user asks to be notified, alerted, reminded when work finishes, or sent a result through QQ, Feishu, Telegram, Discord, Slack, DingTalk, WeCom, WeChat, or Webhook.
 inject-priority: 8
 trigger-keywords:
   - "\\b(notify me|notification|alert me|remind me when|send me an alert)\\b"
   - "通知我|提醒我|桌面通知|系统通知|消息推送|结果推送|完成后.*(通知|提醒|告诉)|失败时.*通知"
-  - "(飞书|钉钉|企业微信|电报|通讯渠道).*(通知|提醒|推送)"
+  - "(QQ|飞书|钉钉|企业微信|微信|电报|通讯渠道).*(通知|提醒|推送)"
 trigger-tools:
   - desktop_notify
   - channel_list_targets
@@ -21,7 +21,7 @@ GUI and ArgusAI is hidden or unfocused. Do not notify for routine progress.
 
 ## Choose the route
 
-1. Check the turn source first. If it came from Feishu, Telegram, Discord,
+1. Check the turn source first. If it came from QQ, Feishu, Telegram, Discord,
    Slack, DingTalk, WeCom, Webhook, or another communication channel, do not
    call any notification tool. The normal final reply is already the notification.
 2. If the turn came from the GUI but ArgusAI is still focused and visible, do

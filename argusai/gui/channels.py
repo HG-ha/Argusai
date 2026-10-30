@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import mimetypes
@@ -63,6 +64,12 @@ def _live_block_key(block: dict[str, Any]) -> str:
 
 
 _CHANNEL_PROVIDER_META = {
+    "qq": {
+        "name": "QQ",
+        "transport": "websocket",
+        "secrets": ["app_id", "client_secret"],
+        "card_mode": "native",
+    },
     "telegram": {
         "name": "Telegram",
         "transport": "long_polling",
@@ -387,6 +394,7 @@ class ChannelsMixin:
         """Run a channel turn, optionally pushing live segments/cards mid-turn."""
         session_id = str(params.get("session_id") or "")
         identity_id = str(params.get("message_source_ref") or "")
+
         live = False
         if session_id and identity_id:
             try:
@@ -402,6 +410,25 @@ class ChannelsMixin:
 
         gateway = self._channels_gateway()
         buffer = {"text": "", "delivered": False}
+        channel = params.get("channel") if isinstance(params.get("channel"), dict) else {}
+        runtime = getattr(self, "_channel_runtime_instance", None)
+        capability = getattr(runtime, "stream_capability", None)
+        mode = "native" if str(channel.get("provider") or "").lower() == "qq" else "staged"
+        if callable(capability):
+            try:
+                mode = capability(identity_id)
+            except Exception:
+                mode = "staged"
+        native_stream = {
+            "enabled": (
+                mode != "staged"
+                and bool(str(channel.get("message_id") or "").strip())
+                and bool(identity_id)
+            ),
+            "text": "",
+            "last_push": 0.0,
+            "attempted": False,
+        }
         pushed_keys: set[str] = set()
         _LIVE_CARD_TYPES = {
             "confirm",
@@ -431,12 +458,51 @@ class ChannelsMixin:
             buffer["text"] = ""
             buffer["delivered"] = True
 
+        def push_native_stream(*, final: bool = False) -> bool:
+            """Update one provider stream; keep outbox fallback intact."""
+            if not native_stream["enabled"]:
+                return False
+            text = str(native_stream["text"] or "")
+            if not text.strip():
+                return False
+            runtime = getattr(self, "_channel_runtime_instance", None)
+            sender = getattr(runtime, "stream_live_update", None)
+            if not callable(sender):
+                return False
+            try:
+                sent = bool(sender(
+                    identity_id,
+                    source_message_id=str(channel.get("message_id") or ""),
+                    text=text,
+                    final=final,
+                ))
+            except Exception as exc:
+                debug_log(
+                    f"channel_native_stream_failed identity_id={identity_id} "
+                    f"final={final} error={exc}"
+                )
+                return False
+            if sent:
+                native_stream["attempted"] = True
+                native_stream["last_push"] = time.monotonic()
+            return sent
+
         def on_delta(text: str) -> None:
             if text:
                 buffer["text"] = str(buffer["text"] or "") + str(text)
+                native_stream["text"] = str(native_stream["text"] or "") + str(text)
+                # Adapters additionally coalesce frames to their rate budget.
+                if (
+                    native_stream["enabled"]
+                    and time.monotonic() - float(native_stream["last_push"] or 0) >= 0.45
+                ):
+                    push_native_stream()
 
         def on_segment(_round: int) -> None:
-            flush_text()
+            if not native_stream["enabled"]:
+                flush_text()
+            elif not native_stream["attempted"]:
+                push_native_stream()
 
         def on_block(block: dict[str, Any]) -> None:
             if not isinstance(block, dict):
@@ -458,13 +524,23 @@ class ChannelsMixin:
             if delivered:
                 pushed_keys.add(key)
 
-        result = self._run_assistant_chat(
-            params,
-            on_delta=on_delta,
-            on_block=on_block,
-            on_segment=on_segment,
-        )
-        flush_text()
+        try:
+            result = self._run_assistant_chat(
+                params,
+                on_delta=on_delta,
+                on_block=on_block,
+                on_segment=on_segment,
+            )
+        except BaseException:
+            # Cancellation/errors must close remote typing/streaming state too.
+            push_native_stream(final=True)
+            raise
+        native_complete = push_native_stream(final=True)
+        if native_complete:
+            buffer["text"] = ""
+            buffer["delivered"] = True
+        else:
+            flush_text()
         if not isinstance(result, dict) or not result.get("ok"):
             return result
         out = dict(result)
@@ -474,7 +550,9 @@ class ChannelsMixin:
             out["text"] = ""
         # Lets the gateway drop a trailing hollow "完成。" — but only for a turn
         # whose real content the user has already seen.
-        out["channel_live_delivered"] = bool(buffer["delivered"] or pushed_keys)
+        out["channel_live_delivered"] = bool(
+            result.get("channel_live_delivered") or buffer["delivered"] or pushed_keys
+        )
         if pushed_keys:
             out["blocks"] = [
                 block for block in list(result.get("blocks") or [])
@@ -1573,6 +1651,219 @@ class ChannelsMixin:
             return self._channels_runtime().test_channel(channel_id)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def _qq_login_runtime(self) -> tuple[threading.RLock, dict[str, dict[str, Any]]]:
+        """Return the process-local QQ Onboard registry.
+
+        ``start_onboard`` deliberately keeps the decrypted AppSecret inside the
+        Python process.  The web view only sees a QR URL/image plus coarse
+        progress, while successful credentials go straight into ChannelStore's
+        encrypted secret store.
+        """
+        lock = getattr(self, "_qq_login_state_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._qq_login_state_lock = lock
+        flows = getattr(self, "_qq_login_flows", None)
+        if not isinstance(flows, dict):
+            flows = {}
+            self._qq_login_flows = flows
+        return lock, flows
+
+    @staticmethod
+    def _qq_login_public(flow: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "login_id",
+            "channel_id",
+            "status",
+            "qr_url",
+            "image",
+            "error",
+            "channel",
+            "created_at",
+            "updated_at",
+        }
+        return {key: value for key, value in flow.items() if key in allowed}
+
+    def _update_qq_login(self, login_id: str, **updates: Any) -> dict[str, Any] | None:
+        lock, flows = self._qq_login_runtime()
+        with lock:
+            flow = flows.get(login_id)
+            if flow is None:
+                return None
+            flow.update(updates)
+            flow["updated_at"] = time.time()
+            return dict(flow)
+
+    def start_qq_login(self, channel_id: str) -> dict[str, Any]:
+        """Start official QQ Bot QR Onboard without exposing its AppSecret."""
+        target = str(channel_id or "").strip().lower()
+        if not target:
+            return {"ok": False, "error": "save the QQ channel before scanning"}
+        try:
+            existing = self._channels_store().get_channel(target)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if existing.provider != "qq":
+            return {"ok": False, "error": "channel is not a QQ channel"}
+
+        login_id = uuid.uuid4().hex
+        now = time.time()
+        lock, flows = self._qq_login_runtime()
+        flow: dict[str, Any] = {
+            "login_id": login_id,
+            "channel_id": target,
+            "status": "starting",
+            "qr_url": "",
+            "image": "",
+            "error": "",
+            "created_at": now,
+            "updated_at": now,
+            "loop": None,
+            "task": None,
+        }
+        with lock:
+            flows[login_id] = flow
+
+        def worker() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            async def onboard() -> None:
+                from qqbot_agent_sdk import start_onboard
+
+                def on_qr_ready(url: str) -> None:
+                    link = str(url or "").strip()
+                    image = ""
+                    if link:
+                        try:
+                            import segno
+
+                            image = segno.make(link, error="m").svg_data_uri(scale=8, border=2)
+                        except Exception:
+                            image = ""
+                    self._update_qq_login(
+                        login_id,
+                        status="wait",
+                        qr_url=link,
+                        image=image,
+                    )
+
+                result = await start_onboard(
+                    on_qr_ready=on_qr_ready,
+                    poll_interval=2.0,
+                    poll_timeout=300.0,
+                    source="argusai",
+                )
+                lock_inner, flows_inner = self._qq_login_runtime()
+                with lock_inner:
+                    current = flows_inner.get(login_id)
+                    if current is None or current.get("status") == "canceled":
+                        return
+                channel = self._channels_store().get_channel(target)
+                if channel.provider != "qq":
+                    raise ValueError("channel is not a QQ channel")
+                saved = self._channels_store().upsert_channel(
+                    {
+                        **channel.to_dict(),
+                        # A successful official Onboard is an explicit request
+                        # to connect this bot; leaving it disabled would make a
+                        # completed scan look broken.
+                        "enabled": True,
+                    },
+                    secret_values={
+                        "app_id": str(result.app_id or ""),
+                        "client_secret": str(result.client_secret or ""),
+                    },
+                )
+                self._channels_runtime().refresh()
+                self._update_qq_login(
+                    login_id,
+                    status="confirmed",
+                    channel=saved.to_public_dict(),
+                )
+
+            task = loop.create_task(onboard())
+            with lock:
+                current = flows.get(login_id)
+                if current is None or current.get("status") == "canceled":
+                    task.cancel()
+                else:
+                    current["loop"] = loop
+                    current["task"] = task
+            try:
+                loop.run_until_complete(task)
+            except asyncio.CancelledError:
+                self._update_qq_login(login_id, status="canceled")
+            except TimeoutError as exc:
+                self._update_qq_login(login_id, status="expired", error=str(exc))
+            except Exception as exc:
+                status = "expired" if type(exc).__name__ == "OnboardExpiredError" else "error"
+                self._update_qq_login(
+                    login_id,
+                    status=status,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            finally:
+                with lock:
+                    current = flows.get(login_id)
+                    if current is not None:
+                        current["loop"] = None
+                        current["task"] = None
+                loop.close()
+
+        thread = threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"argusai-qq-onboard-{target}",
+        )
+        flow["thread"] = thread
+        response = {"ok": True, **self._qq_login_public(dict(flow))}
+        thread.start()
+        return response
+
+    def poll_qq_login(self, login_id: str, channel_id: str = "") -> dict[str, Any]:
+        safe_id = str(login_id or "").strip()
+        target = str(channel_id or "").strip().lower()
+        lock, flows = self._qq_login_runtime()
+        with lock:
+            flow = flows.get(safe_id)
+            if flow is None:
+                return {"ok": False, "error": "QQ login session not found"}
+            if target and flow.get("channel_id") != target:
+                return {"ok": False, "error": "QQ login session belongs to another channel"}
+            return {"ok": True, **self._qq_login_public(dict(flow))}
+
+    def cancel_qq_login(self, login_id: str) -> dict[str, Any]:
+        safe_id = str(login_id or "").strip()
+        lock, flows = self._qq_login_runtime()
+        with lock:
+            flow = flows.get(safe_id)
+            if flow is None:
+                return {"ok": True, "status": "missing"}
+            if flow.get("status") in {"confirmed", "expired", "error", "canceled"}:
+                return {"ok": True, "status": str(flow.get("status") or "")}
+            flow["status"] = "canceled"
+            flow["updated_at"] = time.time()
+            loop = flow.get("loop")
+            task = flow.get("task")
+        if loop is not None and task is not None:
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass
+        return {"ok": True, "status": "canceled"}
+
+    def _cancel_all_qq_logins(self) -> None:
+        lock, flows = self._qq_login_runtime()
+        with lock:
+            pending = [
+                login_id
+                for login_id, flow in flows.items()
+                if flow.get("status") in {"starting", "wait"}
+            ]
+        for login_id in pending:
+            self.cancel_qq_login(login_id)
 
     def start_wechat_login(self) -> dict[str, Any]:
         """Request a WeChat iLink sign-in QR code for the user to scan."""

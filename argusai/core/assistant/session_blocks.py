@@ -1185,7 +1185,7 @@ class SessionBlocksMixin:
                 blocks.append({"type": block_type, "title": name, **result})
             elif name in {"export_task_report", "export_workspace_bundle"} and isinstance(result, dict):
                 blocks.append({"type": "command_result", **result})
-            elif name in {"channel_send_message", "channel_send_file"} and isinstance(result, dict):
+            elif name in {"channel_reply", "channel_send_message", "channel_send_file"} and isinstance(result, dict):
                 blocks.append({"type": "channel_delivery", "title": name, **result})
             elif name in {"set_todos", "add_todos", "update_todo", "complete_todo_with_refs", "create_validation_todo", "list_todos", "clear_todos"} and isinstance(result, dict):
                 # list_todos is read-only. Re-emitting a settled snapshot in the

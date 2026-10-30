@@ -6,8 +6,11 @@ import base64
 import binascii
 import hashlib
 import hmac
+import io
+import json
 import mimetypes
 import re
+import zipfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -18,6 +21,8 @@ from .models import ChannelAttachment, ChannelAttachmentKind
 
 MAX_ATTACHMENTS = 8
 GLOBAL_FILE_LIMIT = 32 * 1024 * 1024
+FORWARD_MEDIA_MAX_COUNT = 64
+FORWARD_MEDIA_MAX_BYTES = GLOBAL_FILE_LIMIT - 65_536
 TEXT_LIMIT = 4 * 1024 * 1024
 IMAGE_LIMIT = 8 * 1024 * 1024
 AUDIO_LIMIT = 8 * 1024 * 1024
@@ -515,6 +520,129 @@ def to_assistant_dict(attachment: ChannelAttachment) -> dict[str, Any]:
     return result
 
 
+def pack_forwarded_media(
+    values: list[dict[str, Any]],
+    *,
+    provider: str,
+    message_id: str,
+) -> dict[str, Any]:
+    """Bundle downloaded forwarding media for on-demand sandbox access.
+
+    Only file bytes and a small allowlisted manifest enter the archive; source
+    URLs, credentials and arbitrary provider metadata never do. No input archive
+    is unpacked. Limit failures reject the entire bundle so callers can explicitly
+    report incomplete downloads instead of silently losing files.
+    """
+    if not values:
+        raise ChannelMediaError("forwarded media archive requires at least one file")
+    if len(values) > FORWARD_MEDIA_MAX_COUNT:
+        raise ChannelMediaError(
+            f"forwarded media archive exceeds the {FORWARD_MEDIA_MAX_COUNT} file limit"
+        )
+
+    def write_member(archive: zipfile.ZipFile, path: str, data: bytes) -> None:
+        # Fixed timestamps keep retries byte-identical. Generated regular-file
+        # members cannot carry symlinks or provider-controlled extraction paths.
+        info = zipfile.ZipInfo(path)
+        info.create_system = 3
+        info.external_attr = 0o100600 << 16
+        info.compress_type = zipfile.ZIP_STORED
+        archive.writestr(info, data)
+
+    buffer = io.BytesIO()
+    files: list[dict[str, Any]] = []
+    total_bytes = 0
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        for index, value in enumerate(values, start=1):
+            if not isinstance(value, dict):
+                raise ChannelMediaError("forwarded media entries must be attachment mappings")
+            data = attachment_bytes(value)
+            total_bytes += len(data)
+            if total_bytes > FORWARD_MEDIA_MAX_BYTES:
+                raise ChannelMediaError(
+                    f"forwarded media archive exceeds the {FORWARD_MEDIA_MAX_BYTES} byte limit"
+                )
+            original_name = str(value.get("name") or value.get("filename") or "attachment.bin")
+            member = f"files/{index:06d}-{safe_filename(original_name)}"
+            write_member(archive, member, data)
+            entry = {
+                "path": member,
+                "original_name": original_name,
+                "mime": detect_mime(str(value.get("mime") or ""), original_name, data),
+                "size": len(data),
+                "sha256": sha256_bytes(data),
+            }
+            source_message_id = str(value.get("source_message_id") or "").strip()[:128]
+            if source_message_id:
+                entry["source_message_id"] = source_message_id
+            files.append(entry)
+        manifest = json.dumps(
+            {"version": 1, "total_bytes": total_bytes, "files": files},
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        if buffer.tell() + len(manifest) > GLOBAL_FILE_LIMIT:
+            raise ChannelMediaError("forwarded media archive metadata exceeds the file size limit")
+        write_member(archive, "manifest.json", manifest)
+    payload = buffer.getvalue()
+    if len(payload) > GLOBAL_FILE_LIMIT:
+        raise ChannelMediaError("forwarded media archive exceeds the file size limit")
+    digest = hashlib.sha256(
+        str(provider).encode("utf-8") + b"\0"
+        + str(message_id).encode("utf-8") + b"\0" + payload
+    ).hexdigest()[:20]
+    return to_assistant_dict(attachment_from_bytes(
+        payload,
+        name=safe_filename(f"{provider}-forward-media-{digest}.zip"),
+        mime="application/zip",
+        requested_kind="file",
+        caption=(
+            f"转发媒体归档，共 {len(files)} 个文件。先读取 ZIP 内的 manifest.json，"
+            "再按需提取文件；图片可通过 vision_inspect_image(path=...) 查看。"
+        ),
+    ))
+
+
+def prepare_forwarded_text(
+    text: str,
+    *,
+    provider: str,
+    message_id: str,
+    force_archive: bool = False,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Keep large forwarded records in the existing session text-file path.
+
+    The adapter supplies the source-content delimiters and any retrieval gaps.
+    Limits are explicit so a partial record cannot look like a complete one.
+    """
+    if len(text) <= 12_000 and not force_archive:
+        return text, []
+    encoded = text.encode("utf-8", errors="replace")
+    digest = hashlib.sha256(
+        message_id.encode("utf-8", errors="replace") + b"\0" + encoded
+    ).hexdigest()[:20]
+    name = safe_filename(f"{provider}-forward-{digest}.txt")
+    warning = ""
+    if len(encoded) > TEXT_LIMIT:
+        warning = "【转发记录超过 4 MiB，仅保留前部；此附件不是完整记录，剩余内容请分批转发。】"
+        suffix = ("\n" + warning).encode("utf-8")
+        text = encoded[: TEXT_LIMIT - len(suffix)].decode("utf-8", errors="ignore")
+        text += "\n" + warning
+    attachment = to_assistant_dict(attachment_from_bytes(
+        text.encode("utf-8"),
+        name=name,
+        mime="text/plain",
+        requested_kind="text",
+    ))
+    overview = (
+        f"【转发记录较长，已作为文本附件提供：{name}（{attachment['size']:,} 字节）。"
+        "请通过附件文件按需读取、检索；当前消息未内嵌正文。】"
+    )
+    if warning:
+        overview += "\n" + warning
+    return overview, [attachment]
+
+
 def _content_length(headers: httpx.Headers, limit: int) -> int:
     raw = headers.get("Content-Length")
     if not raw:
@@ -613,6 +741,8 @@ __all__ = [
     "AUDIO_LIMIT",
     "ChannelMediaError",
     "FILE_LIMIT",
+    "FORWARD_MEDIA_MAX_BYTES",
+    "FORWARD_MEDIA_MAX_COUNT",
     "GLOBAL_FILE_LIMIT",
     "IMAGE_LIMIT",
     "MAX_ATTACHMENTS",
@@ -631,6 +761,7 @@ __all__ = [
     "load_attachment",
     "normalize_attachment",
     "normalize_attachments",
+    "pack_forwarded_media",
     "safe_filename",
     "sha256_bytes",
     "to_assistant_dict",

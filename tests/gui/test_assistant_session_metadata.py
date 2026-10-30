@@ -141,6 +141,24 @@ def test_set_assistant_thinking_persists_and_reloads(tmp_path) -> None:
     assert detail["thinking_effort"] == "xhigh"
 
 
+def test_composer_thinking_is_scoped_to_selected_conversation(tmp_path) -> None:
+    from argusai.gui.assistant_tools import AssistantToolsMixin
+
+    class _ThinkingApi(AssistantToolsMixin, _Api):
+        pass
+
+    api = _ThinkingApi(tmp_path)
+    for session_id in ("selected", "other"):
+        api._save_session(api._session_path(session_id), AssistantSession(), session_id)
+
+    result = api.set_assistant_thinking("selected", True, "max")
+    assert result["ok"] is True
+    assert api.get_assistant_session("selected")["thinking_enabled"] is True
+    assert api.get_assistant_session("selected")["thinking_effort"] == "max"
+    assert api.get_assistant_session("other")["thinking_enabled"] is False
+    assert api.get_assistant_session("other")["thinking_effort"] == "high"
+
+
 def test_channel_live_defaults_on_and_honors_saved_off() -> None:
     fresh = AssistantSession()
     assert fresh.channel_live is True
@@ -376,6 +394,34 @@ def test_session_list_hides_cron_owned_chats_and_classifies_types(tmp_path) -> N
     assert listed["local-agent-chat"]["session_type"] == "local_agent"
     # Hidden from normal history does not make the run transcript inaccessible.
     assert api.get_assistant_session("cron-owned-thread")["ok"] is True
+
+
+def test_session_origin_is_fixed_by_first_user_surface(tmp_path) -> None:
+    api = _Api(tmp_path)
+
+    desktop = AssistantSession()
+    desktop.history.extend([
+        # Old desktop histories did not persist an explicit source. They must
+        # still remain desktop-owned after a later channel follow-up.
+        ChatMessage(role="user", content="desktop first", source=""),
+        ChatMessage(role="assistant", content="answer"),
+        ChatMessage(role="user", content="remote follow-up", source="channel"),
+    ])
+    api._save_session(api._session_path("desktop-mixed"), desktop, "Desktop")
+
+    channel = AssistantSession()
+    channel.history.extend([
+        ChatMessage(role="user", content="remote first", source="channel"),
+        ChatMessage(role="assistant", content="answer"),
+        ChatMessage(role="user", content="desktop follow-up", source="gui"),
+    ])
+    api._save_session(api._session_path("channel-mixed"), channel, "Channel")
+
+    listed = {item["id"]: item for item in api.list_assistant_sessions()}
+    assert listed["desktop-mixed"]["origin"] == "gui"
+    assert listed["desktop-mixed"]["session_type"] == "native"
+    assert listed["channel-mixed"]["origin"] == "channel"
+    assert listed["channel-mixed"]["session_type"] == "channel"
 
 
 def test_session_list_exposes_project_dir(tmp_path) -> None:

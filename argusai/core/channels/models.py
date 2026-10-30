@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
 ChannelProvider = Literal[
+    "qq",
     "telegram",
     "discord",
     "slack",
@@ -18,6 +19,7 @@ ChannelProvider = Literal[
 ]
 
 CHANNEL_PROVIDERS = frozenset({
+    "qq",
     "telegram",
     "discord",
     "slack",
@@ -94,6 +96,19 @@ def infer_chat_kind(
             message = payload.get("message") if isinstance(payload.get("message"), Mapping) else {}
             room = message.get("chat") if isinstance(message.get("chat"), Mapping) else {}
         return classify(room.get("type") if isinstance(room, Mapping) else "") or "direct"
+
+    if kind == "qq":
+        # qqbot-agent-sdk normalises official gateway events to c2c/group/
+        # guild/dm. ArgusAI deliberately accepts only the one-to-one C2C
+        # surface; every room-like scope stays group-classified and is dropped
+        # by both the adapter and runtime boundary.
+        scope = str(
+            payload.get("chat_scope")
+            or payload.get("chat_type")
+            or explicit
+            or ""
+        ).strip().lower()
+        return "direct" if scope == "c2c" else "group" if scope else "direct"
 
     if kind == "discord":
         return "group" if payload.get("guild_id") else "direct"

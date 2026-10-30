@@ -16,6 +16,7 @@ from .markdown import (
     SLACK,
     TELEGRAM_HTML,
     WECOM,
+    QQ,
     feishu_markdown_parts,
     markdown_table_parts,
     render_markdown,
@@ -721,6 +722,7 @@ def _truncate_bytes(value: str, limit: int) -> str:
 #: How many actions each provider can turn into buttons before the rest are
 #: dropped by its own API limits.
 _BUTTON_BUDGET = {
+    "qq": 10,
     "telegram": 40,
     "discord": 25,
     "slack": 25,
@@ -731,6 +733,7 @@ _BUTTON_BUDGET = {
 #: Max characters a provider accepts on a button label. Longer labels are
 #: truncated on the button; the full text stays in the card body.
 _BUTTON_LABEL_LIMIT = {
+    "qq": 30,
     "telegram": 48,
     "discord": 80,
     "slack": 75,
@@ -1220,7 +1223,15 @@ def render_channel_reply(provider: str, reply: ChannelReply) -> dict[str, Any]:
     cards = tuple(dict(item) for item in reply.blocks if isinstance(item, dict))
     actions = _actions(cards)
     promoted_title = _promoted_title(str(reply.text or ""), cards)
-    interactive = provider_key in {"telegram", "discord", "slack", "feishu", "wecom", "webhook"}
+    interactive = provider_key in {
+        "qq",
+        "telegram",
+        "discord",
+        "slack",
+        "feishu",
+        "wecom",
+        "webhook",
+    }
     # Options are listed in the body only when buttons cannot carry them all,
     # otherwise every choice would appear twice in the same bubble.
     budget = _BUTTON_BUDGET.get(provider_key, 0)
@@ -1248,6 +1259,41 @@ def render_channel_reply(provider: str, reply: ChannelReply) -> dict[str, Any]:
     # Providers with a real card header show the title there instead of
     # repeating it as the first line of the body.
     headed = _body(include_titles=False) if promoted_title else text
+
+    if provider_key == "qq":
+        chunks = render_markdown_chunks(text, QQ)
+        # QQ's official inline keyboard accepts callback actions. Two buttons
+        # per row stay readable on mobile; excess actions remain in the body.
+        keyboard_rows = [
+            [
+                {
+                    "id": f"argusai-{start + offset}",
+                    "label": _button_label(action, provider_key),
+                    "visited_label": _button_label(action, provider_key),
+                    "style": (
+                        1 if action.get("style") in {"primary", "danger"} else 0
+                    ),
+                    "data": "act:" + _text(action.get("token"), 64),
+                    "group_id": "argusai",
+                }
+                for offset, action in enumerate(actions[start:start + 2])
+            ]
+            for start in range(0, min(len(actions), _BUTTON_BUDGET["qq"]), 2)
+        ]
+        fallback = card_text(
+            reply.text,
+            cards,
+            include_tokens=True,
+            include_actions=True,
+            locale=getattr(reply, "locale", DEFAULT_LOCALE),
+        )
+        return {
+            "text": "\n\n".join(chunks),
+            "text_chunks": chunks,
+            "markdown": True,
+            "keyboard": {"rows": keyboard_rows} if keyboard_rows else None,
+            "plain_fallback_chunks": render_markdown_chunks(fallback, PLAIN),
+        }
 
     if provider_key == "telegram":
         row_size = (

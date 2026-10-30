@@ -12,6 +12,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -20,7 +21,7 @@ from dataclasses import replace
 from abc import ABC, abstractmethod
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 import websockets
@@ -31,7 +32,10 @@ from .cards import card_text, feishu_card_has_body, render_channel_reply
 from .markdown import PLAIN, render_markdown
 from .stream_sidecar import feishu_inbound_text, feishu_media_refs
 from .media import (
+    FORWARD_MEDIA_MAX_BYTES,
+    FORWARD_MEDIA_MAX_COUNT,
     MAX_ATTACHMENTS,
+    TEXT_LIMIT,
     ChannelMediaError,
     attachment_bytes,
     attachment_from_bytes,
@@ -41,6 +45,8 @@ from .media import (
     download_attachment_async,
     normalize_attachment,
     normalize_attachments,
+    pack_forwarded_media,
+    prepare_forwarded_text,
     safe_filename,
     to_assistant_dict,
 )
@@ -346,13 +352,107 @@ class ChannelAdapter(ABC):
         self._last_error = ""
         self._connected = False
 
+        from .streaming import OutputStreams
+        self._output_streams = OutputStreams(self)
+
     def status(self) -> dict[str, Any]:
         return {
             "channel_id": self.config.id,
             "provider": self.config.provider,
             "connected": self._connected,
             "last_error": self._last_error,
+            "stream_mode": self.stream_mode(),
         }
+
+    def stream_mode(self) -> str:
+        from .streaming import stream_mode
+        return stream_mode(self.config)
+
+    def stream_update(self, *, chat_id: str, source_message_id: str,
+                      text: str, final: bool = False, thread_id: str = "",
+                      stream_id: str = "") -> bool:
+        return self._output_streams.update(
+            chat_id=chat_id, source_message_id=source_message_id,
+            text=text, final=final, thread_id=thread_id, stream_id=stream_id,
+        )
+
+    @staticmethod
+    def _completed_reply_prefixes(text: str, *, max_frames: int = 5) -> list[str]:
+        """Build a bounded cumulative frame set for one completed Agent bubble."""
+        content = str(text or "")
+        if not content:
+            return []
+        frame_count = min(max_frames, max(2, (len(content) + 11) // 12))
+        if len(content) <= 2:
+            frame_count = 1
+        cuts = {
+            max(
+                1,
+                min(
+                    len(content),
+                    (len(content) * index + frame_count - 1) // frame_count,
+                ),
+            )
+            for index in range(1, frame_count + 1)
+        }
+        return [content[:cut] for cut in sorted(cuts)]
+
+    def send_streamed_reply(
+        self,
+        reply: ChannelReply,
+        *,
+        source_message_id: str,
+        delivery_id: str = "",
+        frame_delay: float = 1.05,
+    ) -> bool:
+        """Replay one accepted tool-call bubble through the provider stream.
+
+        Tool arguments are only valid once their JSON has closed, so they do
+        not reach the normal assistant token callback.  Cumulative frames keep
+        the provider-native live experience while preserving the exact bubble
+        boundary selected by the Agent. Unsupported/disabled streams return
+        False and the durable outbox falls back to ``send``.
+        """
+        if reply.blocks or reply.attachments or self.stream_mode() == "staged":
+            return False
+        prefixes = self._completed_reply_prefixes(reply.text)
+        if not prefixes:
+            return False
+        extra: dict[str, str] = {}
+        if self.config.provider != "qq":
+            # One inbound message may produce several distinct bubbles. Keep
+            # their state separate while retaining the real platform reply ID.
+            extra = {
+                "thread_id": reply.external_thread_id,
+                "stream_id": delivery_id or uuid.uuid4().hex,
+            }
+            if self._output_streams.is_complete(
+                chat_id=reply.external_chat_id,
+                source_message_id=source_message_id,
+                text=reply.text,
+                **extra,
+            ):
+                return True
+        for prefix in prefixes[:-1]:
+            if not self.stream_update(
+                chat_id=reply.external_chat_id,
+                source_message_id=source_message_id,
+                text=prefix,
+                final=False,
+                **extra,
+            ):
+                return False
+            if frame_delay > 0 and self._stop.wait(frame_delay):
+                raise RuntimeError(
+                    f"{self.config.provider} channel stopped during streamed reply"
+                )
+        return self.stream_update(
+            chat_id=reply.external_chat_id,
+            source_message_id=source_message_id,
+            text=prefixes[-1],
+            final=True,
+            **extra,
+        )
 
     def worker_alive(self) -> bool:
         """False when this adapter's poll/server thread has died."""
@@ -388,6 +488,8 @@ class ChannelAdapter(ABC):
             return
         if kind != event.chat_kind:
             event = replace(event, chat_kind=kind)
+        if event.provider == "dingtalk":
+            self._output_streams.peer_users[event.external_chat_id] = event.external_user_id
         if self._on_event is not None:
             self._on_event(event)
 
@@ -610,7 +712,12 @@ class TelegramAdapter(ChannelAdapter):
                     str(value.get("file_name") or default_name),
                 ))
         attachments: list[dict[str, Any]] = []
-        for value, mime, name in candidates[:8]:
+        deadline = time.monotonic() + 60
+        total_bytes = 0
+        for value, mime, name in candidates[:FORWARD_MEDIA_MAX_COUNT]:
+            if time.monotonic() >= deadline:
+                attachments.append(_attachment_error(name, "60 second attachment download budget exhausted"))
+                break
             kind = _attachment_kind(mime, name)
             if not kind:
                 continue
@@ -621,25 +728,71 @@ class TelegramAdapter(ChannelAdapter):
                 ))
                 continue
             try:
+                file_id = str(value.get("file_id") or "")
+                if not file_id:
+                    raise ChannelMediaError("Telegram event did not include a file_id")
                 response = client.get(
                     f"{self._base}/getFile",
-                    params={"file_id": str(value.get("file_id") or "")},
+                    params={"file_id": file_id},
+                    timeout=max(0.1, deadline - time.monotonic()),
                 )
                 payload = response.json()
                 file_path = str(dict(payload.get("result") or {}).get("file_path") or "")
                 if not payload.get("ok") or not file_path:
-                    continue
-                attachment = _download_attachment(
+                    raise ChannelMediaError("Telegram getFile did not return a downloadable file path")
+                attachment = self._download_with_deadline(
                     client,
                     f"{self._base.replace('/bot', '/file/bot')}/{file_path}",
                     mime=mime,
                     name=name,
+                    deadline=deadline,
                 )
-                if attachment is not None:
-                    attachments.append(attachment)
-            except Exception:
+                if attachment is None:
+                    raise ChannelMediaError("provider did not return attachment bytes")
+                size = len(attachment_bytes(attachment))
+                if total_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                    raise ChannelMediaError("message attachment byte budget exceeded")
+                total_bytes += size
+                attachments.append(attachment)
+            except Exception as exc:
+                reason = str(exc) if isinstance(exc, ChannelMediaError) else f"provider download failed ({type(exc).__name__})"
+                attachments.append(_attachment_error(name, reason))
                 log.debug("Telegram attachment download failed", exc_info=True)
+        if len(attachments) > MAX_ATTACHMENTS:
+            return [pack_forwarded_media(
+                attachments, provider="telegram", message_id=str(message.get("message_id") or ""),
+            )]
         return attachments
+
+    @staticmethod
+    def _download_with_deadline(
+        client: httpx.Client, url: str, *, mime: str, name: str, deadline: float,
+    ) -> dict[str, Any]:
+        """Keep the synchronous stream inside this message's download budget."""
+        class DeadlineResponse:
+            def __init__(self, response):
+                self.response = response
+                self.headers = response.headers
+
+            def raise_for_status(self):
+                return self.response.raise_for_status()
+
+            def iter_bytes(self):
+                for chunk in self.response.iter_bytes():
+                    if time.monotonic() >= deadline:
+                        raise ChannelMediaError("60 second attachment download budget exhausted")
+                    yield chunk
+
+        class DeadlineClient:
+            @contextlib.contextmanager
+            def stream(self, *args, **kwargs):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ChannelMediaError("60 second attachment download budget exhausted")
+                with client.stream(*args, **kwargs, timeout=max(0.1, remaining)) as response:
+                    yield DeadlineResponse(response)
+
+        return _download_attachment(DeadlineClient(), url, mime=mime, name=name)
 
     def _post_message(self, payload: dict[str, Any]) -> httpx.Response:
         last_error: Exception | None = None
@@ -906,8 +1059,9 @@ class DiscordAdapter(ChannelAdapter):
                     author = message.get("author") or {}
                     if author.get("bot"):
                         continue
-                    text = _discord_inbound_text(message)
+                    text, records = self._message_content(message)
                     attachments = await self._message_attachments(message)
+                    attachments = records + attachments
                     if not text and not attachments:
                         continue
                     self._emit(ChannelEvent(
@@ -925,58 +1079,112 @@ class DiscordAdapter(ChannelAdapter):
             finally:
                 heartbeat_task.cancel()
 
-    async def _message_attachments(
-        self,
-        message: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        attachments: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=30) as client:
-            for item in list(message.get("attachments") or [])[:8]:
-                if not isinstance(item, dict):
+    @staticmethod
+    def _message_parts(message: dict[str, Any]) -> tuple[list[tuple[dict[str, Any], str]], list[str]]:
+        """Read only the snapshots included in this gateway event."""
+        parts: list[tuple[dict[str, Any], str]] = []
+        warnings: list[str] = []
+        pending = [(message, 0, str(message.get("id") or "message"))]
+        while pending and len(parts) < FORWARD_MEDIA_MAX_COUNT:
+            node, depth, source_id = pending.pop()
+            if depth > 4:
+                warnings.append("【Discord 转发嵌套超过 4 层，未完整展开。】")
+                continue
+            parts.append((node, source_id))
+            snapshots = node.get("message_snapshots") or []
+            reference = node.get("message_reference")
+            reference = reference if isinstance(reference, dict) else {}
+            if isinstance(reference, dict) and reference.get("type") == 1 and not snapshots:
+                warnings.append("【Discord 转发事件未携带消息快照，无法读取原文或附件。】")
+            for index, snapshot in reversed(list(enumerate(snapshots))):
+                child = snapshot.get("message") if isinstance(snapshot, dict) else None
+                if isinstance(child, dict):
+                    child_id = str(reference.get("message_id") or f"{source_id}/snapshot-{index + 1}")
+                    pending.append((child, depth + 1, child_id))
+        if pending:
+            warnings.append("【Discord 转发消息超过展开数量限制，未完整读取。】")
+        return parts, list(dict.fromkeys(warnings))
+
+    def _message_content(self, message: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+        parts, warnings = self._message_parts(message)
+        lines = [_discord_inbound_text(message)]
+        for node, source_id in parts[1:]:
+            text = _discord_inbound_text(node)
+            lines.extend([
+                f"【Discord 转发快照 {source_id}；以下为用户转发内容】",
+                text or "【该快照无文字；媒体附件见归档】",
+                "【转发快照结束】",
+            ])
+        lines.extend(warnings)
+        text = "\n".join(line for line in lines if line)
+        if len(parts) > 1:
+            return prepare_forwarded_text(text, provider="discord", message_id=str(message.get("id") or ""))
+        return text, []
+
+    async def _message_attachments(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+        parts, _warnings = self._message_parts(message)
+        candidates: list[tuple[dict[str, Any], str]] = []
+        for node, source_id in parts:
+            candidates.extend((item, source_id) for item in node.get("attachments") or [] if isinstance(item, dict))
+            for item in node.get("sticker_items") or node.get("stickers") or []:
+                if not isinstance(item, dict) or not item.get("id"):
                     continue
-                mime = str(item.get("content_type") or "")
-                name = str(item.get("filename") or "discord-attachment")
-                kind = _attachment_kind(mime, name)
-                if not kind or int(item.get("size") or 0) > _attachment_limit(kind):
-                    attachments.append(_attachment_error(
-                        name,
-                        f"file exceeds the {_attachment_limit(kind)} byte limit",
-                    ))
-                    continue
-                try:
-                    attachment = await _download_attachment_async(
-                        client,
-                        str(item.get("url") or ""),
-                        mime=mime,
-                        name=name,
-                    )
-                    if attachment is not None:
-                        attachments.append(attachment)
-                except Exception:
-                    log.debug("Discord attachment download failed", exc_info=True)
-            remaining = max(0, 8 - len(attachments))
-            for item in list(message.get("sticker_items") or message.get("stickers") or [])[:remaining]:
-                if not isinstance(item, dict):
-                    continue
-                sticker_id = str(item.get("id") or "")
-                name = str(item.get("name") or "discord-sticker")
                 format_type = int(item.get("format_type") or 1)
-                if not sticker_id or format_type == 3:
-                    # Lottie stickers are JSON, not a still/gif the assistant can read.
+                if format_type == 3:
                     continue
                 extension, mime = ("gif", "image/gif") if format_type == 4 else ("png", "image/png")
+                candidates.append(({
+                    "filename": f"{safe_filename(str(item.get('name') or 'discord-sticker'))}.{extension}",
+                    "content_type": mime,
+                    "url": f"https://cdn.discordapp.com/stickers/{item['id']}.{extension}",
+                    "_sticker": True,
+                }, source_id))
+        attachments: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        total_bytes = 0
+        deadline = time.monotonic() + 60
+        if len(candidates) > FORWARD_MEDIA_MAX_COUNT:
+            warnings.append(f"{len(candidates) - FORWARD_MEDIA_MAX_COUNT} attachments exceed the 64 file limit")
+        async with httpx.AsyncClient(timeout=30) as client:
+            for index, (item, source_id) in enumerate(candidates[:FORWARD_MEDIA_MAX_COUNT]):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    warnings.append(f"60 second download budget exhausted; {min(len(candidates), FORWARD_MEDIA_MAX_COUNT) - index} attachments not downloaded")
+                    break
+                mime = str(item.get("content_type") or "")
+                name = str(item.get("filename") or "discord-attachment")
                 try:
-                    attachment = await _download_attachment_async(
-                        client,
-                        f"https://cdn.discordapp.com/stickers/{sticker_id}.{extension}",
-                        mime=mime,
-                        name=f"{safe_filename(name, 'discord-sticker')}.{extension}",
-                        headers=self._headers(),
-                    )
-                    if attachment is not None:
-                        attachments.append(attachment)
-                except Exception:
-                    log.debug("Discord sticker download failed", exc_info=True)
+                    limit = min(_attachment_limit(_attachment_kind(mime, name)), FORWARD_MEDIA_MAX_BYTES - total_bytes)
+                    if int(item.get("size") or 0) > limit:
+                        raise ChannelMediaError("file exceeds the remaining attachment byte limit")
+                    url = str(item.get("url") or "")
+                    if not url:
+                        raise ChannelMediaError("Discord event did not include a download URL")
+                    attachment = await asyncio.wait_for(_download_attachment_async(
+                        client, url, mime=mime, name=name,
+                        headers=self._headers() if item.get("_sticker") else None,
+                    ), timeout=remaining)
+                    if attachment is None:
+                        raise ChannelMediaError("provider did not return attachment bytes")
+                    size = len(attachment_bytes(attachment))
+                    if total_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                        raise ChannelMediaError("message attachment byte budget exceeded")
+                    total_bytes += size
+                    attachment["source_message_id"] = source_id
+                    attachments.append(attachment)
+                except Exception as exc:
+                    reason = str(exc) if isinstance(exc, ChannelMediaError) else f"provider download failed ({type(exc).__name__})"
+                    warnings.append(f"{safe_filename(name)}: {reason}")
+        force_archive = len(parts) > 1
+        if attachments and (force_archive or len(attachments) + bool(warnings) > MAX_ATTACHMENTS):
+            try:
+                attachments = [pack_forwarded_media(
+                    attachments, provider="discord", message_id=str(message.get("id") or ""),
+                )]
+            except ChannelMediaError as exc:
+                attachments = [_attachment_error("discord-media", f"archive unavailable: {exc}; downloaded files could not be attached")]
+        if warnings:
+            attachments.append(_attachment_error("discord-media", "; ".join(warnings)))
         return attachments
 
     def send(self, reply: ChannelReply) -> None:
@@ -1130,10 +1338,9 @@ class SlackAdapter(ChannelAdapter):
                             continue
                         if event.get("hidden") or str(event.get("subtype") or "") in _SLACK_SKIP_SUBTYPES:
                             continue
-                        text = str(event.get("text") or "").strip() or _slack_blocks_text(
-                            event.get("blocks")
-                        )
+                        text, records = self._message_content(event)
                         attachments = await self._message_attachments(event)
+                        attachments = records + attachments
                         if not text and not attachments:
                             continue
                         self._emit(ChannelEvent(
@@ -1153,39 +1360,113 @@ class SlackAdapter(ChannelAdapter):
                 await asyncio.sleep(3)
         self._connected = False
 
-    async def _message_attachments(
-        self,
-        event: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        attachments: list[dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=30) as client:
-            for item in list(event.get("files") or [])[:8]:
+    @staticmethod
+    def _message_parts(event: dict[str, Any]) -> tuple[list[tuple[dict[str, Any], str]], list[str]]:
+        """Inspect shared content already present in this event, without link fetching."""
+        parts: list[tuple[dict[str, Any], str]] = []
+        warnings: list[str] = []
+        pending = [(event, 0, str(event.get("ts") or "message"))]
+        while pending and len(parts) < FORWARD_MEDIA_MAX_COUNT:
+            node, depth, source_id = pending.pop()
+            if depth > 4:
+                warnings.append("【Slack 共享消息嵌套超过 4 层，未完整展开。】")
+                continue
+            parts.append((node, source_id))
+            children = list(node.get("attachments") or [])
+            if isinstance(node.get("message"), dict):
+                children.insert(0, node["message"])
+            for index, child in reversed(list(enumerate(children))):
+                if isinstance(child, dict):
+                    child_id = str(child.get("ts") or child.get("message_ts") or f"{source_id}/shared-{index + 1}")
+                    pending.append((child, depth + 1, child_id))
+        if pending:
+            warnings.append("【Slack 共享消息超过展开数量限制，未完整读取。】")
+        return parts, list(dict.fromkeys(warnings))
+
+    def _message_content(self, event: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+        parts, warnings = self._message_parts(event)
+        lines: list[str] = []
+        for index, (node, source_id) in enumerate(parts):
+            text = str(node.get("text") or node.get("fallback") or "").strip() or _slack_blocks_text(node.get("blocks"))
+            if index == 0:
+                if text:
+                    lines.append(text)
+                continue
+            if not text and isinstance(node.get("message"), dict) and not node.get("files"):
+                # The nested message is emitted as its own part below.
+                continue
+            lines.extend([
+                f"【Slack 共享消息 {source_id}；以下为用户转发内容】",
+                text or (
+                    "【正文未包含在事件中；附件见媒体归档】" if node.get("files")
+                    else "【事件仅提供共享引用，未携带可读取的正文或文件；未自动访问分享链接。】"
+                ),
+                "【共享内容结束】",
+            ])
+        lines.extend(warnings)
+        text = "\n".join(lines)
+        if len(parts) > 1:
+            return prepare_forwarded_text(text, provider="slack", message_id=str(event.get("ts") or ""))
+        return text, []
+
+    async def _message_attachments(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        parts, _warnings = self._message_parts(event)
+        candidates: list[tuple[dict[str, Any], str]] = []
+        seen: set[str] = set()
+        for node, source_id in parts:
+            for item in node.get("files") or []:
                 if not isinstance(item, dict):
                     continue
+                file_id = str(item.get("id") or "")
+                if file_id and file_id in seen:
+                    continue
+                if file_id:
+                    seen.add(file_id)
+                candidates.append((item, source_id))
+        attachments: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        total_bytes = 0
+        deadline = time.monotonic() + 60
+        if len(candidates) > FORWARD_MEDIA_MAX_COUNT:
+            warnings.append(f"{len(candidates) - FORWARD_MEDIA_MAX_COUNT} attachments exceed the 64 file limit")
+        async with httpx.AsyncClient(timeout=30) as client:
+            for index, (item, source_id) in enumerate(candidates[:FORWARD_MEDIA_MAX_COUNT]):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    warnings.append(f"60 second download budget exhausted; {min(len(candidates), FORWARD_MEDIA_MAX_COUNT) - index} attachments not downloaded")
+                    break
                 mime = str(item.get("mimetype") or "")
                 name = str(item.get("name") or "slack-attachment")
-                kind = _attachment_kind(mime, name)
-                if not kind or int(item.get("size") or 0) > _attachment_limit(kind):
-                    attachments.append(_attachment_error(
-                        name,
-                        f"file exceeds the {_attachment_limit(kind)} byte limit",
-                    ))
-                    continue
-                url = str(item.get("url_private_download") or item.get("url_private") or "")
-                if not url:
-                    continue
                 try:
-                    attachment = await _download_attachment_async(
-                        client,
-                        url,
-                        mime=mime,
-                        name=name,
-                        headers=self._bot_headers(),
-                    )
-                    if attachment is not None:
-                        attachments.append(attachment)
-                except Exception:
-                    log.debug("Slack attachment download failed", exc_info=True)
+                    limit = min(_attachment_limit(_attachment_kind(mime, name)), FORWARD_MEDIA_MAX_BYTES - total_bytes)
+                    if int(item.get("size") or 0) > limit:
+                        raise ChannelMediaError("file exceeds the remaining attachment byte limit")
+                    url = str(item.get("url_private_download") or item.get("url_private") or "")
+                    if not url:
+                        raise ChannelMediaError("Slack event did not include a downloadable file URL")
+                    attachment = await asyncio.wait_for(_download_attachment_async(
+                        client, url, mime=mime, name=name, headers=self._bot_headers(),
+                    ), timeout=remaining)
+                    if attachment is None:
+                        raise ChannelMediaError("provider did not return attachment bytes")
+                    size = len(attachment_bytes(attachment))
+                    if total_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                        raise ChannelMediaError("message attachment byte budget exceeded")
+                    total_bytes += size
+                    attachment["source_message_id"] = source_id
+                    attachments.append(attachment)
+                except Exception as exc:
+                    reason = str(exc) if isinstance(exc, ChannelMediaError) else f"provider download failed ({type(exc).__name__})"
+                    warnings.append(f"{safe_filename(name)}: {reason}")
+        if attachments and (len(parts) > 1 or len(attachments) + bool(warnings) > MAX_ATTACHMENTS):
+            try:
+                attachments = [pack_forwarded_media(
+                    attachments, provider="slack", message_id=str(event.get("ts") or ""),
+                )]
+            except ChannelMediaError as exc:
+                attachments = [_attachment_error("slack-media", f"archive unavailable: {exc}; downloaded files could not be attached")]
+        if warnings:
+            attachments.append(_attachment_error("slack-media", "; ".join(warnings)))
         return attachments
 
     def send(self, reply: ChannelReply) -> None:
@@ -1454,12 +1735,53 @@ class StreamSDKAdapter(ChannelAdapter):
                 return
             payload = json.loads(raw[len(self._EVENT_PREFIX):].decode("utf-8"))
             raw_event = dict(payload.get("raw") or {})
+            media_warnings: list[str] = []
             if self.config.provider == "feishu":
-                attachments = self._feishu_attachments(payload, raw_event)
+                if str(raw_event.get("message_type") or "") == "merge_forward":
+                    attachments = []
+                    event_text = self._feishu_merge_forward_text(
+                        payload, raw_event, attachments=attachments,
+                    )
+                    incomplete = "内容尚不完整】" in event_text
+                    event_text, forward_attachments = prepare_forwarded_text(
+                        event_text,
+                        provider="feishu",
+                        message_id=str(payload.get("message_id") or ""),
+                    )
+                    if incomplete and forward_attachments:
+                        event_text += "\n【部分转发内容未能展开；附件中注明了读取缺失，不能视为完整记录。】"
+                    if attachments:
+                        media_archive = pack_forwarded_media(
+                            attachments, provider="feishu",
+                            message_id=str(payload.get("message_id") or ""),
+                        )
+                        event_text += (
+                            f"\n【转发媒体文件已打包为 {media_archive['name']}，内含 manifest.json；"
+                            "可在会话沙盒按需解压，读取图片或文件。】"
+                        )
+                        attachments = [media_archive]
+                    attachments = forward_attachments + attachments
+                else:
+                    attachments = self._feishu_attachments(payload, raw_event, warnings=media_warnings)
+                    event_text = str(payload.get("text") or "")
             elif self.config.provider == "dingtalk":
-                attachments = self._dingtalk_attachments(raw_event)
+                attachments = self._dingtalk_attachments(raw_event, warnings=media_warnings)
+                event_text = str(payload.get("text") or "")
             else:
                 attachments = []
+                event_text = str(payload.get("text") or "")
+            if len(attachments) > MAX_ATTACHMENTS:
+                media_archive = pack_forwarded_media(
+                    attachments, provider=self.config.provider,
+                    message_id=str(payload.get("message_id") or ""),
+                )
+                event_text += (
+                    f"\n【本条消息的 {len(attachments)} 个媒体文件已打包为 {media_archive['name']}，"
+                    "内含 manifest.json；可在会话沙盒按需解压读取。】"
+                )
+                attachments = [media_archive]
+            if media_warnings:
+                event_text += "\n" + "\n".join(f"【{warning}】" for warning in dict.fromkeys(media_warnings))
             if self.config.provider == "dingtalk":
                 callback_url = str(raw_event.get("sessionWebhook") or "")
                 chat_id = str(payload.get("external_chat_id") or "")
@@ -1474,7 +1796,7 @@ class StreamSDKAdapter(ChannelAdapter):
                 external_user_id=str(payload.get("external_user_id") or ""),
                 external_chat_id=str(payload.get("external_chat_id") or ""),
                 message_id=str(payload.get("message_id") or uuid.uuid4().hex),
-                text=str(payload.get("text") or ""),
+                text=event_text,
                 external_thread_id=str(payload.get("external_thread_id") or ""),
                 attachments=tuple(attachments),
                 display_name=str(payload.get("display_name") or ""),
@@ -1526,27 +1848,239 @@ class StreamSDKAdapter(ChannelAdapter):
         self._feishu_token_expires_at = time.time() + max(60, expires_in - 300)
         return token
 
+    def _feishu_merge_forward_text(
+        self,
+        payload: dict[str, Any],
+        raw_event: dict[str, Any],
+        *,
+        attachments: list[dict[str, Any]] | None = None,
+        media_limit: int = FORWARD_MEDIA_MAX_COUNT,
+    ) -> str:
+        """Read this exact merge and its descendants, never the chat's history."""
+        original = str(payload.get("text") or "").strip()
+        if str(raw_event.get("message_type") or "") != "merge_forward":
+            return original
+        message_id = str(payload.get("message_id") or "").strip()
+        if not message_id:
+            return original or "【飞书合并转发消息：事件未携带可展开标识】"
+        try:
+            token = self._get_feishu_token()
+            # The get-message API returns one merge + N children in items;
+            # unlike list(chat), it has no pagination or 50-message window.
+            # Fetch a nested merge separately only when its children were not
+            # included. Bound network work and traversal, reporting partial
+            # results explicitly instead of silently dropping records.
+            items_by_id: dict[str, dict[str, Any]] = {}
+            fetched: set[str] = set()
+            pending = [message_id]
+            selected: list[dict[str, Any]] = []
+            warnings: list[str] = []
+            deadline = time.monotonic() + 30
+            while pending:
+                if len(fetched) >= 16 or time.monotonic() >= deadline:
+                    warnings.append("部分嵌套转发达到本次展开限额，内容尚不完整")
+                    break
+                current_id = pending.pop(0)
+                fetched.add(current_id)
+                try:
+                    response = httpx.get(
+                        "https://open.feishu.cn/open-apis/im/v1/messages/"
+                        + quote(current_id, safe=""),
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=max(1, min(20, deadline - time.monotonic())),
+                    )
+                    body = check_api_response(response, "Feishu merge-forward expansion failed")
+                    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+                    returned = data.get("items") if isinstance(data.get("items"), list) else []
+                    for item in returned:
+                        if not isinstance(item, dict):
+                            continue
+                        item_id = str(item.get("message_id") or "")
+                        if not item_id or item_id in items_by_id:
+                            continue
+                        if len(items_by_id) >= 10_000:
+                            warnings.append("转发记录超过本次 10000 个节点的展开限额，内容尚不完整")
+                            break
+                        items_by_id[item_id] = item
+                except Exception:
+                    if current_id == message_id:
+                        raise
+                    log.debug("Nested Feishu merge-forward expansion failed", exc_info=True)
+                    warnings.append("部分嵌套转发读取失败，内容尚不完整")
+
+                children: dict[str, list[dict[str, Any]]] = {}
+                for item in items_by_id.values():
+                    children.setdefault(str(item.get("upper_message_id") or ""), []).append(item)
+                selected = []
+                selected_ids = {message_id}
+                ancestry = [message_id]
+                while ancestry:
+                    for item in children.get(ancestry.pop(), []):
+                        item_id = str(item.get("message_id") or "")
+                        if item_id in selected_ids:
+                            continue
+                        selected_ids.add(item_id)
+                        selected.append(item)
+                        ancestry.append(item_id)
+                pending = [
+                    str(item["message_id"])
+                    for item in selected
+                    if str(item.get("msg_type") or "") == "merge_forward"
+                    and str(item["message_id"]) not in fetched
+                    and not children.get(str(item["message_id"]))
+                ]
+                if len(items_by_id) >= 10_000:
+                    if pending:
+                        warnings.append("部分嵌套转发达到本次展开限额，内容尚不完整")
+                    break
+            if any(
+                str(item.get("msg_type") or "") == "merge_forward"
+                and not children.get(str(item.get("message_id") or ""))
+                for item in selected
+            ):
+                warnings.append("部分嵌套转发未返回子消息，内容尚不完整")
+            selected.sort(
+                key=lambda item: str(item.get("create_time") or "").zfill(20)
+            )
+            lines: list[str] = []
+            media_notes: dict[tuple[str, str], str] = {}
+            media_attempts = 0
+            media_bytes = 0
+            media_budget_exhausted = False
+            media_deadline = time.monotonic() + 60
+            for item in selected:
+                item_body = item.get("body") if isinstance(item.get("body"), dict) else {}
+                raw_content: Any = item_body.get("content")
+                if isinstance(raw_content, str):
+                    try:
+                        content = json.loads(raw_content)
+                    except json.JSONDecodeError:
+                        content = {"text": raw_content}
+                else:
+                    content = raw_content if isinstance(raw_content, dict) else {}
+                item_type = str(item.get("msg_type") or "")
+                text = feishu_inbound_text(item_type, content).strip()
+                for ref in feishu_media_refs(item_type, content):
+                    file_key = str(ref.get("file_key") or "")
+                    resource_type = str(ref.get("resource_type") or "file")
+                    resource_key = (resource_type, file_key)
+                    if not file_key:
+                        continue
+                    if resource_key not in media_notes:
+                        media_name = str(ref.get("name") or "feishu-file")
+                        media_name = safe_filename(media_name)
+                        if attachments is None:
+                            note = f"【附件引用：{media_name}；尚未下载】"
+                        elif media_budget_exhausted or media_bytes >= FORWARD_MEDIA_MAX_BYTES:
+                            note = f"【附件超过本次媒体总大小限额：{media_name}；未下载】"
+                            warnings.append("部分转发附件超过本次媒体总大小限额，内容尚不完整")
+                        elif time.monotonic() >= media_deadline:
+                            note = f"【附件超过本次下载时间限额：{media_name}；未下载】"
+                            warnings.append("部分转发附件超过本次下载时间限额，内容尚不完整")
+                        elif media_attempts >= max(0, media_limit):
+                            note = f"【附件超过本次下载数量限额：{media_name}；未下载】"
+                            warnings.append("部分转发附件超过本次下载数量限额，内容尚不完整")
+                        else:
+                            media_attempts += 1
+                            downloaded = self._feishu_attachments(
+                                {"message_id": str(item.get("message_id") or "")},
+                                {"message_type": item_type, "content": content},
+                                refs_override=[{**ref, "name": media_name}],
+                            )
+                            if downloaded:
+                                downloaded_size = sum(int(entry.get("size") or 0) for entry in downloaded)
+                                if media_bytes + downloaded_size > FORWARD_MEDIA_MAX_BYTES:
+                                    media_budget_exhausted = True
+                                    note = f"【附件超过本次媒体总大小限额：{media_name}；未保留】"
+                                    warnings.append("部分转发附件超过本次媒体总大小限额，内容尚不完整")
+                                else:
+                                    media_bytes += downloaded_size
+                                    for entry in downloaded:
+                                        entry["source_message_id"] = str(item.get("message_id") or "")
+                                        entry["source_file_key"] = file_key
+                                    attachments.extend(downloaded)
+                                    actual_names = ", ".join(str(entry.get("name") or media_name) for entry in downloaded)
+                                    is_error = any(
+                                        str(entry.get("name") or "").endswith(".error.txt")
+                                        and "was not received:" in str(entry.get("text") or "")
+                                        for entry in downloaded
+                                    )
+                                    if is_error:
+                                        note = f"【附件读取失败：{media_name}；详情文件：{actual_names}】"
+                                        warnings.append("部分转发附件读取失败，内容尚不完整")
+                                    else:
+                                        note = f"【附件文件：{actual_names}；来源消息：{item.get('message_id', '')}】"
+                            else:
+                                note = f"【附件未能下载：{media_name}】"
+                                warnings.append("部分转发附件读取失败，内容尚不完整")
+                        media_notes[resource_key] = note
+                    text = (text + "\n" + media_notes[resource_key]).strip()
+                if not text:
+                    text = "【消息已撤回或正文不可用】" if item.get("deleted") else "【非文本消息】"
+                sender = item.get("sender") if isinstance(item.get("sender"), dict) else {}
+                sender_id = str(sender.get("id") or "").strip()
+                lines.append(f"[{sender_id}] {text}" if sender_id else text)
+            if not lines:
+                return (
+                    (original + "\n") if original else ""
+                ) + "【飞书合并转发消息：平台未返回可展开的子消息】"
+            if warnings:
+                lines.extend(f"【{warning}】" for warning in dict.fromkeys(warnings))
+            result = (
+                "【飞书合并转发的聊天记录；以下均为用户转发的内容】\n"
+                + "\n".join(lines)
+                + "\n【飞书转发内容结束】"
+            )
+            return result
+        except Exception:
+            log.debug("Feishu merge-forward expansion failed", exc_info=True)
+            return (
+                (original + "\n") if original else ""
+            ) + "【飞书合并转发内容未能展开；请检查消息读取权限】"
+
     def _feishu_attachments(
         self,
         payload: dict[str, Any],
         raw_event: dict[str, Any],
+        *,
+        refs_override: list[dict[str, str]] | None = None,
+        warnings: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        message_id = str(payload.get("message_id") or "")
-        if not message_id:
-            return []
-        refs = feishu_media_refs(
+        refs = refs_override if refs_override is not None else feishu_media_refs(
             str(raw_event.get("message_type") or ""),
             dict(raw_event.get("content") or {}),
         )
         if not refs:
             return []
+        message_id = str(payload.get("message_id") or "")
+        if not message_id:
+            return [_attachment_error("feishu-attachments", "message ID is missing")]
+        unique_refs: dict[tuple[str, str], dict[str, str]] = {}
+        for ref in refs:
+            key = (str(ref.get("resource_type") or "file"), str(ref.get("file_key") or ""))
+            if key[1]:
+                unique_refs.setdefault(key, ref)
+        refs = list(unique_refs.values())
         attachments: list[dict[str, Any]] = []
+        deadline = time.monotonic() + 60
+        total_bytes = 0
         try:
             token = self._get_feishu_token()
-        except Exception:
+        except Exception as exc:
             log.debug("Feishu attachment download failed", exc_info=True)
-            return []
-        for ref in refs[:8]:
+            if warnings is not None:
+                warnings.append("飞书媒体授权失败，附件未能下载")
+            return [_attachment_error("feishu-attachments", f"authentication failed ({type(exc).__name__})")]
+        for index, ref in enumerate(refs):
+            reason = (
+                "数量限额" if index >= FORWARD_MEDIA_MAX_COUNT else
+                "总大小限额" if total_bytes >= FORWARD_MEDIA_MAX_BYTES else
+                "时间限额" if time.monotonic() >= deadline else ""
+            )
+            if reason:
+                if warnings is not None:
+                    warnings.append(f"飞书媒体达到本次{reason}，余下 {len(refs) - index} 个附件未下载")
+                break
             file_key = str(ref.get("file_key") or "")
             mime = str(ref.get("mime") or "application/octet-stream")
             name = str(ref.get("name") or "feishu-file")
@@ -1554,7 +2088,8 @@ class StreamSDKAdapter(ChannelAdapter):
                 continue
             try:
                 url = str(httpx.URL(
-                    f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
+                    "https://open.feishu.cn/open-apis/im/v1/messages/"
+                    + quote(message_id, safe="") + "/resources/" + quote(file_key, safe=""),
                     params={"type": str(ref.get("resource_type") or "file")},
                 ))
                 with httpx.Client(timeout=30) as client:
@@ -1566,9 +2101,26 @@ class StreamSDKAdapter(ChannelAdapter):
                         headers={"Authorization": f"Bearer {token}"},
                     )
                 if attachment is not None:
+                    size = int(attachment.get("size") or 0)
+                    if total_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                        if warnings is not None:
+                            warnings.append(f"飞书媒体超过本次总大小限额，{name} 及余下 {len(refs) - index - 1} 个附件未保留")
+                        break
+                    total_bytes += size
                     attachments.append(attachment)
-            except Exception:
+                    if str(attachment.get("name") or "").endswith(".error.txt") and warnings is not None:
+                        warnings.append(f"飞书附件 {name} 下载失败，详情已作为文本附件保留")
+            except Exception as exc:
                 log.debug("Feishu attachment download failed", exc_info=True)
+                error_attachment = _attachment_error(name, f"provider download failed ({type(exc).__name__})")
+                error_size = int(error_attachment.get("size") or 0)
+                if total_bytes + error_size <= FORWARD_MEDIA_MAX_BYTES:
+                    attachments.append(error_attachment)
+                    total_bytes += error_size
+                else:
+                    total_bytes = FORWARD_MEDIA_MAX_BYTES
+                if warnings is not None:
+                    warnings.append(f"飞书附件 {name} 下载失败")
         return attachments
 
     def _get_dingtalk_token(self) -> str:
@@ -1594,15 +2146,10 @@ class StreamSDKAdapter(ChannelAdapter):
     def _dingtalk_attachments(
         self,
         raw_event: dict[str, Any],
+        *,
+        warnings: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        download_codes = [
-            str(item)
-            for item in list(raw_event.get("download_codes") or [])
-            if str(item)
-        ]
         robot_code = str(raw_event.get("robotCode") or "")
-        if not download_codes or not robot_code:
-            return []
         message_type = str(raw_event.get("msgtype") or "")
         content = dict(raw_event.get("content") or {})
         default_name, mime = {
@@ -1613,11 +2160,46 @@ class StreamSDKAdapter(ChannelAdapter):
             "richText": ("dingtalk-image.jpg", "image/jpeg"),
         }.get(message_type, ("dingtalk-file", "application/octet-stream"))
         name = str(content.get("fileName") or content.get("file_name") or default_name)
+        resources: dict[str, dict[str, str]] = {}
+        for item in list(raw_event.get("download_resources") or []):
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("download_code") or item.get("downloadCode") or "")
+            if code:
+                resources.setdefault(code, {
+                    "name": str(item.get("name") or item.get("file_name") or name),
+                    "mime": str(item.get("mime") or mime),
+                })
+        for code in list(raw_event.get("download_codes") or []):
+            if str(code):
+                resources.setdefault(str(code), {"name": name, "mime": mime})
+        if not resources:
+            return []
+        if not robot_code:
+            return [_attachment_error("dingtalk-attachments", "robotCode is missing")]
         attachments: list[dict[str, Any]] = []
+        deadline = time.monotonic() + 60
+        total_bytes = 0
         try:
             token = self._get_dingtalk_token()
-            with httpx.Client(timeout=30) as client:
-                for download_code in download_codes[:8]:
+        except Exception as exc:
+            log.debug("DingTalk attachment authentication failed", exc_info=True)
+            if warnings is not None:
+                warnings.append("钉钉媒体授权失败，附件未能下载")
+            return [_attachment_error("dingtalk-attachments", f"authentication failed ({type(exc).__name__})")]
+        for index, (download_code, resource) in enumerate(resources.items()):
+            reason = (
+                "数量限额" if index >= FORWARD_MEDIA_MAX_COUNT else
+                "总大小限额" if total_bytes >= FORWARD_MEDIA_MAX_BYTES else
+                "时间限额" if time.monotonic() >= deadline else ""
+            )
+            if reason:
+                if warnings is not None:
+                    warnings.append(f"钉钉媒体达到本次{reason}，余下 {len(resources) - index} 个附件未下载")
+                break
+            name, mime = resource["name"], resource["mime"]
+            try:
+                with httpx.Client(timeout=30) as client:
                     response = client.post(
                         "https://api.dingtalk.com/v1.0/robot/messageFiles/download",
                         headers={"x-acs-dingtalk-access-token": token},
@@ -1629,7 +2211,7 @@ class StreamSDKAdapter(ChannelAdapter):
                     response.raise_for_status()
                     download_url = str(response.json().get("downloadUrl") or "")
                     if not download_url:
-                        continue
+                        raise ChannelMediaError("provider returned no download URL")
                     attachment = _download_attachment(
                         client,
                         download_url,
@@ -1637,9 +2219,26 @@ class StreamSDKAdapter(ChannelAdapter):
                         name=name,
                     )
                     if attachment is not None:
+                        size = int(attachment.get("size") or 0)
+                        if total_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                            if warnings is not None:
+                                warnings.append(f"钉钉媒体超过本次总大小限额，{name} 及余下 {len(resources) - index - 1} 个附件未保留")
+                            break
+                        total_bytes += size
                         attachments.append(attachment)
-        except Exception:
-            log.debug("DingTalk attachment download failed", exc_info=True)
+                        if str(attachment.get("name") or "").endswith(".error.txt") and warnings is not None:
+                            warnings.append(f"钉钉附件 {name} 下载失败，详情已作为文本附件保留")
+            except Exception as exc:
+                log.debug("DingTalk attachment download failed", exc_info=True)
+                error_attachment = _attachment_error(name, f"provider download failed ({type(exc).__name__})")
+                error_size = int(error_attachment.get("size") or 0)
+                if total_bytes + error_size <= FORWARD_MEDIA_MAX_BYTES:
+                    attachments.append(error_attachment)
+                    total_bytes += error_size
+                else:
+                    total_bytes = FORWARD_MEDIA_MAX_BYTES
+                if warnings is not None:
+                    warnings.append(f"钉钉附件 {name} 下载失败")
         return attachments
 
     def send(self, reply: ChannelReply) -> None:
@@ -2178,8 +2777,6 @@ class WebhookPlatformAdapter(ChannelAdapter):
             return ()
         media_id = str(payload.get("MediaId") or payload.get("media_id") or "")
         picture_url = str(payload.get("PicUrl") or payload.get("pic_url") or "")
-        if not media_id and not picture_url:
-            return ()
         default_name, mime = {
             "image": ("wecom-image.jpg", "image/jpeg"),
             "voice": ("wecom-voice.amr", "audio/amr"),
@@ -2192,6 +2789,8 @@ class WebhookPlatformAdapter(ChannelAdapter):
             or payload.get("Title")
             or default_name
         )
+        if not media_id and not picture_url:
+            return (_attachment_error(name, "callback has no MediaId or PicUrl"),)
         try:
             token = self._get_wecom_token()
             if media_id:
@@ -2210,10 +2809,12 @@ class WebhookPlatformAdapter(ChannelAdapter):
                     mime=mime,
                     name=name,
                 )
-            return (attachment,) if attachment is not None else ()
-        except Exception:
+            if not attachment or ("size" in attachment and not attachment["size"]):
+                return (_attachment_error(name, "provider returned empty media"),)
+            return (attachment,)
+        except Exception as exc:
             log.debug("WeCom attachment download failed", exc_info=True)
-            return ()
+            return (_attachment_error(name, f"provider download failed ({type(exc).__name__})"),)
 
     def _event(self, payload: dict[str, Any]) -> ChannelEvent | None:
         provider = self.config.provider
@@ -2865,6 +3466,33 @@ class WeChatILinkAdapter(ChannelAdapter):
                 self._contexts[chat] = context_token
         text_parts: list[str] = []
         attachments: list[dict[str, Any]] = []
+        media_deadline = time.monotonic() + 60
+        media_attempts = media_bytes = omitted = failed = 0
+
+        def receive_media(item: dict[str, Any], kind: str, name: str) -> None:
+            nonlocal media_attempts, media_bytes, omitted, failed
+            remaining = media_deadline - time.monotonic()
+            if (
+                media_attempts >= FORWARD_MEDIA_MAX_COUNT
+                or media_bytes >= FORWARD_MEDIA_MAX_BYTES
+                or remaining <= 0
+            ):
+                omitted += 1
+                return
+            media_attempts += 1
+            received = self._download_media(
+                client, item, kind, name,
+                timeout=remaining, max_bytes=FORWARD_MEDIA_MAX_BYTES - media_bytes,
+            )
+            if str(received.get("name") or "").endswith(".error.txt"):
+                failed += 1
+            size = int(received.get("size") or 0)
+            if media_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                omitted += 1
+                return
+            media_bytes += size
+            attachments.append(received)
+
         for item in message.get("item_list") or []:
             if not isinstance(item, dict):
                 continue
@@ -2878,9 +3506,7 @@ class WeChatILinkAdapter(ChannelAdapter):
                 transcript = str(voice.get("text") or "").strip()
                 if transcript:
                     text_parts.append(transcript)
-                attachments.append(self._download_media(
-                    client, voice, "audio", "wechat-voice.silk",
-                ))
+                receive_media(voice, "audio", "wechat-voice.silk")
             elif kind in {2, 4, 5}:
                 field, kind_name, default_name = {
                     2: ("image_item", "image", "wechat-image.jpg"),
@@ -2888,12 +3514,32 @@ class WeChatILinkAdapter(ChannelAdapter):
                     5: ("video_item", "video", "wechat-video.mp4"),
                 }[kind]
                 item_body = item.get(field) or {}
-                attachments.append(self._download_media(
-                    client,
+                receive_media(
                     item_body,
                     kind_name,
                     str(item_body.get("file_name") or default_name),
-                ))
+                )
+        if omitted:
+            text_parts.append(
+                f"【另有 {omitted} 个媒体附件因数量、总大小或下载时限未留存，附件不完整。】"
+            )
+        if failed:
+            text_parts.append(f"【{failed} 个媒体附件下载失败，未留存原文件。】")
+        if len(attachments) > MAX_ATTACHMENTS:
+            try:
+                archive = pack_forwarded_media(
+                    attachments, provider="wechat",
+                    message_id=str(message.get("message_id") or message.get("client_id") or ""),
+                )
+            except ChannelMediaError as exc:
+                attachments = [_attachment_error("wechat-media", str(exc))]
+                text_parts.append("【媒体归档失败，本条消息的媒体附件未留存。】")
+            else:
+                attachments = [archive]
+                text_parts.append(
+                    f"【媒体文件已打包为 {archive['name']}，内含 manifest.json；"
+                    "可在会话沙盒按需解压，读取图片或文件。】"
+                )
         text = "\n".join(part for part in text_parts if part.strip())
         if not text and not attachments:
             return
@@ -2904,7 +3550,7 @@ class WeChatILinkAdapter(ChannelAdapter):
             external_chat_id=chat,
             message_id=str(message.get("message_id") or message.get("client_id") or ""),
             text=text,
-            attachments=tuple(attachments[:MAX_ATTACHMENTS]),
+            attachments=tuple(attachments),
             timestamp=float(message.get("create_time_ms") or 0) / 1000 or time.time(),
             raw=message,
         ))
@@ -2915,6 +3561,9 @@ class WeChatILinkAdapter(ChannelAdapter):
         item: dict[str, Any],
         kind: str,
         name: str,
+        *,
+        timeout: float = 60,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         media = item.get("media") if isinstance(item.get("media"), dict) else {}
         param = str(media.get("encrypt_query_param") or "")
@@ -2922,18 +3571,32 @@ class WeChatILinkAdapter(ChannelAdapter):
             return _attachment_error(name, "attachment has no CDN reference")
         try:
             key = ilink_media_key(media, str(item.get("aeskey") or ""))
-            response = client.get(
-                f"{self._cdn}/download",
-                params={"encrypted_query_param": param},
-                timeout=60,
-            )
-            if response.status_code >= 400:
-                return _attachment_error(name, f"CDN download returned HTTP {response.status_code}")
             limit = _attachment_limit(kind)
-            if len(response.content) > limit:
+            if max_bytes is not None:
+                limit = min(limit, max_bytes)
+            deadline = time.monotonic() + timeout
+            encrypted = bytearray()
+            with client.stream(
+                "GET", f"{self._cdn}/download",
+                params={"encrypted_query_param": param},
+                timeout=timeout,
+            ) as response:
+                if response.status_code >= 400:
+                    return _attachment_error(name, f"CDN download returned HTTP {response.status_code}")
+                for chunk in response.iter_bytes():
+                    if time.monotonic() >= deadline:
+                        return _attachment_error(name, "media download time limit exceeded")
+                    # AES padding adds at most one 16-byte block.
+                    if len(encrypted) + len(chunk) > limit + 16:
+                        return _attachment_error(name, f"file exceeds the {limit} byte limit")
+                    encrypted.extend(chunk)
+            content = ilink_decrypt(bytes(encrypted), key)
+            if not content:
+                return _attachment_error(name, "provider returned empty media")
+            if len(content) > limit:
                 return _attachment_error(name, f"file exceeds the {limit} byte limit")
             return _attachment_from_bytes(
-                ilink_decrypt(response.content, key),
+                content,
                 mime="",
                 name=name,
             )
@@ -3100,10 +3763,717 @@ class WeChatILinkAdapter(ChannelAdapter):
         self._connected = False
 
 
+_QQ_COMPOSITE_MESSAGE_TYPES = frozenset({101, 102})
+_QQ_FORWARD_MAX_NODES = 10_000
+_QQ_FORWARD_MAX_DEPTH = 32
+
+
+def _qq_composite_parts(
+    raw: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]], list[str], int]:
+    """Extract bounded nested text/media from QQ composite/forward payloads."""
+    lines: list[str] = []
+    attachments: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    pending: list[tuple[Any, int]] = [
+        (item, 0) for item in reversed(list(raw.get("msg_elements") or []))
+    ]
+    visited = 0
+    text_bytes = 0
+    while pending and visited < _QQ_FORWARD_MAX_NODES:
+        item, depth = pending.pop()
+        if not isinstance(item, dict):
+            continue
+        if depth > _QQ_FORWARD_MAX_DEPTH:
+            warning = "【转发嵌套超过读取深度，部分子记录未展开；当前记录不完整。】"
+            if warning not in warnings:
+                warnings.append(warning)
+            continue
+        visited += 1
+        content = str(item.get("content") or "").strip()
+        if content:
+            encoded = content.encode("utf-8", errors="replace")
+            remaining = max(0, TEXT_LIMIT - text_bytes)
+            lines.append(encoded[:remaining].decode("utf-8", errors="ignore"))
+            text_bytes += len(encoded) + 1
+            if text_bytes > TEXT_LIMIT:
+                warnings.append("【转发正文超过 4 MiB，后续内容未展开；请分批转发，当前记录不完整。】")
+                break
+        for attachment in list(item.get("attachments") or []):
+            if isinstance(attachment, dict):
+                attachments.append(dict(attachment))
+        nested = item.get("msg_elements") or item.get("elements") or []
+        if isinstance(nested, list):
+            pending.extend((child, depth + 1) for child in reversed(nested))
+    if pending and visited >= _QQ_FORWARD_MAX_NODES:
+        warnings.append("【转发超过 10,000 个消息节点，后续节点未展开；当前记录不完整。】")
+    return lines, attachments, warnings, visited
+
+
+def _qq_inbound_text(
+    parsed: Any, raw: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Preserve QQ merged-forward records instead of dropping msg_elements."""
+    text = str(getattr(parsed, "content", "") or "").strip()
+    try:
+        message_type = int(getattr(parsed, "message_type", 0) or 0)
+    except (TypeError, ValueError):
+        message_type = 0
+    if message_type not in _QQ_COMPOSITE_MESSAGE_TYPES:
+        return text, [], []
+    lines, attachments, warnings, count = _qq_composite_parts(raw)
+    if not lines and not warnings:
+        lines = [
+            str(getattr(element, "content", "") or "").strip()
+            for element in list(getattr(parsed, "msg_elements", None) or [])[:_QQ_FORWARD_MAX_NODES]
+            if str(getattr(element, "content", "") or "").strip()
+        ]
+    heading = (
+        "【QQ 合并转发的聊天记录；以下均为用户转发的内容】"
+        if message_type == 102
+        else "【QQ 组合消息；以下均为用户转发的内容】"
+    )
+    body_parts: list[str] = []
+    if text and text not in lines:
+        body_parts.append(text)
+    body_parts.extend(lines)
+    body = "\n".join(body_parts).strip()
+    if not body:
+        body = "【平台事件未携带可展开的转发正文】"
+    record = f"{heading}\n{body}\n【QQ 转发内容结束】"
+    if warnings:
+        record += "\n" + "\n".join(warnings)
+    event_text, records = prepare_forwarded_text(
+        record,
+        provider="qq",
+        message_id=str(getattr(parsed, "message_id", "") or raw.get("id") or ""),
+        force_archive=count > 64,
+    )
+    if records and warnings:
+        event_text += "\n" + "\n".join(warnings)
+    return event_text, attachments, records
+
+
+class QQAdapter(ChannelAdapter):
+    """Official QQ Bot C2C adapter backed by ``qqbot-agent-sdk``.
+
+    The SDK owns a WebSocket thread; this adapter owns a small asyncio control
+    loop for inbound parsing, attachment downloads, and outbound API calls.
+    Group/guild events are rejected at the boundary so pairing cannot silently
+    widen an Agent conversation to a room full of people.
+    """
+
+    def __init__(self, config: ChannelConfig, credentials: dict[str, str]) -> None:
+        super().__init__(config, credentials)
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._api: Any = None
+        self._ws: Any = None
+        self._http_client: httpx.AsyncClient | None = None
+        self._session_lock = threading.Lock()
+        self._session_id: str | None = None
+        self._session_seq: int | None = None
+        # QQ's native C2C stream endpoint is not exposed by the current Python
+        # SDK, so the adapter keeps the small amount of sequencing state the
+        # official protocol requires (stable msg_seq, increasing index, and
+        # the stream_msg_id returned by the first frame).
+        self._stream_states: dict[str, dict[str, Any]] = {}
+        self._stream_failures: set[str] = set()
+
+    def _credentials(self) -> tuple[str, str]:
+        return (
+            str(self.credentials.get("app_id") or "").strip(),
+            str(self.credentials.get("client_secret") or "").strip(),
+        )
+
+    def test(self) -> dict[str, Any]:
+        app_id, secret = self._credentials()
+        if not app_id or not secret:
+            return {"ok": False, "error": "app_id and client_secret are required"}
+        try:
+            from qqbot_agent_sdk import QQApiClient
+
+            client = QQApiClient(app_id, secret, log_tag=f"ArgusAI:{self.config.id}")
+            client.ensure_token_sync()
+            gateway = client.get_gateway_url_sync()
+            return {
+                "ok": True,
+                "identity": {"app_id": app_id},
+                "gateway": gateway,
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def start(self, on_event: EventCallback) -> None:
+        app_id, secret = self._credentials()
+        if not app_id or not secret:
+            raise ValueError("QQ app_id and client_secret are required")
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._on_event = on_event
+        self._stop.clear()
+        self._last_error = ""
+        self._thread = threading.Thread(
+            target=self._thread_main,
+            daemon=True,
+            name=f"argusai-qq-{self.config.id}",
+        )
+        self._thread.start()
+
+    def _thread_main(self) -> None:
+        try:
+            asyncio.run(self._run())
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            self._connected = False
+            log.exception("QQ channel worker failed channel_id=%s", self.config.id)
+        finally:
+            self._loop = None
+            self._api = None
+            self._ws = None
+            self._http_client = None
+
+    async def _run(self) -> None:
+        from qqbot_agent_sdk import QQApiClient, QQWebSocket, WSCallbacks
+
+        app_id, secret = self._credentials()
+        self._loop = asyncio.get_running_loop()
+        timeout = httpx.Timeout(60, connect=15)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
+            api = QQApiClient(app_id, secret, log_tag=f"ArgusAI:{self.config.id}")
+            api.setup(client)
+            self._api = api
+            self._http_client = client
+
+            callbacks = WSCallbacks(
+                on_message_event=self._on_message_event,
+                on_interaction_event=self._on_interaction_event,
+                on_connected=self._on_connected,
+                on_disconnected=self._on_disconnected,
+                on_fatal_error=self._on_fatal_error,
+                get_token=api.ensure_token_sync,
+                get_session=self._get_session,
+                set_session=self._set_session,
+                set_heartbeat_interval=lambda _seconds: None,
+                clear_token=lambda: self._clear_token(api),
+                fail_pending=lambda reason: self._set_error(reason),
+                get_gateway_url=api.get_gateway_url_sync,
+            )
+            gateway_url = await api.get_gateway_url()
+            ws = QQWebSocket(callbacks, log_tag=f"ArgusAI:{self.config.id}")
+            self._ws = ws
+            ws.start(gateway_url, self._loop)
+            try:
+                while not self._stop.is_set():
+                    await asyncio.sleep(0.2)
+            finally:
+                await ws.async_stop()
+                self._connected = False
+
+    def _on_connected(self) -> None:
+        self._connected = True
+        self._last_error = ""
+
+    def _on_disconnected(self) -> None:
+        self._connected = False
+
+    def _on_fatal_error(self, code: str, message: str) -> None:
+        self._last_error = f"{code}: {message}".strip(": ")
+        self._connected = False
+        self._stop.set()
+
+    def _set_error(self, reason: str) -> None:
+        if reason:
+            self._last_error = str(reason)[:900]
+
+    @staticmethod
+    def _clear_token(api: Any) -> None:
+        # The official SDK exposes token invalidation only through this callback
+        # contract; keep the mutation local to its documented cache fields.
+        api._access_token = None
+        api._token_expires_at = 0.0
+
+    def _get_session(self) -> tuple[str | None, int | None]:
+        with self._session_lock:
+            return self._session_id, self._session_seq
+
+    def _set_session(self, session_id: str | None, seq: int | None) -> None:
+        with self._session_lock:
+            self._session_id = str(session_id) if session_id else None
+            self._session_seq = int(seq) if seq is not None else None
+
+    async def _on_message_event(self, event_type: str, raw: dict[str, Any]) -> None:
+        from qqbot_agent_sdk import EventParser
+
+        parsed = EventParser.parse(event_type, raw)
+        if parsed is None or str(parsed.chat_scope or "").lower() != "c2c":
+            return
+        text, nested_attachments, records = _qq_inbound_text(parsed, raw)
+        attachments: list[dict[str, Any]] = list(records)
+        seen: set[str] = set()
+        candidates = list(parsed.attachments or [])
+        for element in list(parsed.msg_elements or []):
+            candidates.extend(list(getattr(element, "attachments", None) or []))
+        candidates.extend(nested_attachments)
+        client = self._http_client
+        is_forward = str(getattr(parsed, "message_type", "")) in {"101", "102"}
+        forwarded_media: list[dict[str, Any]] = []
+        media_bytes = 0
+        download_started = time.monotonic()
+        if client is not None:
+            omitted = 0
+            failed = 0
+            for item in candidates:
+                if isinstance(item, dict):
+                    url = str(item.get("url") or "").strip()
+                    if url.startswith("//"):
+                        url = f"https:{url}"
+                    mime = str(item.get("content_type") or item.get("mime") or "")
+                    name = str(item.get("filename") or item.get("name") or "qq-attachment")
+                else:
+                    url = str(getattr(item, "resolved_url", "") or "").strip()
+                    mime = str(getattr(item, "content_type", "") or "")
+                    name = str(getattr(item, "filename", "") or "qq-attachment")
+                dedup_key = url or f"missing-url:{mime}:{name}"
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                if (
+                    len(seen) > FORWARD_MEDIA_MAX_COUNT
+                    or time.monotonic() - download_started > 60
+                    or (is_forward and media_bytes >= FORWARD_MEDIA_MAX_BYTES)
+                    or (not is_forward and len(attachments) >= MAX_ATTACHMENTS)
+                ):
+                    omitted += 1
+                    continue
+                received = (
+                    await _download_attachment_async(client, url, mime=mime, name=name)
+                    if url else _attachment_error(name, "platform did not provide a download URL")
+                )
+                if str(received.get("name") or "").endswith(".error.txt"):
+                    failed += 1
+                if is_forward:
+                    size = int(received.get("size") or 0)
+                    if media_bytes + size > FORWARD_MEDIA_MAX_BYTES:
+                        omitted += 1
+                        continue
+                    media_bytes += size
+                    forwarded_media.append(received)
+                else:
+                    attachments.append(received)
+            if omitted:
+                text += f"\n【另有 {omitted} 个媒体附件因数量、总大小或下载时限未留存，附件不完整。】"
+            if failed:
+                text += f"\n【{failed} 个媒体附件下载失败，已保留错误说明。】"
+        elif candidates:
+            text += "\n【媒体下载连接不可用，图片或文件未留存。】"
+        if forwarded_media:
+            archive = pack_forwarded_media(
+                forwarded_media, provider="qq", message_id=str(parsed.message_id or ""),
+            )
+            attachments.append(archive)
+            text += (
+                f"\n【转发媒体文件已打包为 {archive['name']}，内含 manifest.json；"
+                "可在会话沙盒中按需解压读取图片或文件。】"
+            )
+        raw_payload = dict(raw or {})
+        raw_payload["chat_scope"] = "c2c"
+        raw_payload["chat_type"] = "c2c"
+        author = raw_payload.get("author")
+        display_name = str(parsed.user_name or "").strip()
+        if not display_name and isinstance(author, dict):
+            display_name = str(author.get("username") or "").strip()
+        self._emit(ChannelEvent(
+            channel_id=self.config.id,
+            provider="qq",
+            external_user_id=str(parsed.user_id or parsed.chat_id),
+            external_chat_id=str(parsed.chat_id),
+            external_thread_id="",
+            message_id=str(parsed.message_id or ""),
+            text=text,
+            display_name=display_name,
+            timestamp=time.time(),
+            attachments=tuple(attachments),
+            chat_kind="direct",
+            raw=raw_payload,
+        ))
+
+    async def _on_interaction_event(
+        self,
+        _event_type: str,
+        raw: dict[str, Any],
+    ) -> None:
+        """ACK an official QQ keyboard callback and forward ArgusAI actions."""
+        from qqbot_agent_sdk import parse_interaction_event
+
+        api = self._api
+        if api is None:
+            return
+        try:
+            interaction = parse_interaction_event(raw)
+            interaction_id = str(getattr(interaction, "id", "") or "")
+            if interaction_id:
+                # QQ requires interaction ACKs promptly; acknowledge before the
+                # action enters the potentially busy Agent conversation.
+                await api.acknowledge_interaction(interaction_id)
+        except Exception:
+            log.warning("QQ interaction could not be parsed or acknowledged", exc_info=True)
+            return
+
+        resolved = getattr(getattr(interaction, "data", None), "resolved", None)
+        button_data = str(getattr(resolved, "button_data", "") or "").strip()
+        if not bool(getattr(interaction, "is_c2c", False)):
+            return
+        if not button_data.startswith("act:"):
+            return
+        token = button_data.removeprefix("act:").strip()
+        if not token.startswith("ca_") or len(token) > 64:
+            return
+        chat_id = str(getattr(interaction, "chat_id", "") or "").strip()
+        user_id = str(getattr(interaction, "user_openid", "") or chat_id).strip()
+        if not chat_id or not user_id:
+            return
+        raw_payload = dict(raw or {})
+        raw_payload["chat_scope"] = "c2c"
+        # QQ interaction chat_type=2 means C2C, whereas several other
+        # providers use 2 for groups. Normalize before the shared boundary.
+        raw_payload["chat_type"] = "c2c"
+        self._emit(ChannelEvent(
+            channel_id=self.config.id,
+            provider="qq",
+            external_user_id=user_id,
+            external_chat_id=chat_id,
+            message_id=f"interaction:{interaction_id}",
+            text="",
+            timestamp=time.time(),
+            chat_kind="direct",
+            raw=raw_payload,
+            event_kind="action",
+            action_token=token,
+        ))
+
+    def send(self, reply: ChannelReply) -> None:
+        loop = self._loop
+        api = self._api
+        if loop is None or api is None or loop.is_closed():
+            raise RuntimeError("QQ channel is not connected")
+        future = asyncio.run_coroutine_threadsafe(self._send_async(reply), loop)
+        try:
+            future.result(timeout=180)
+        except Exception as exc:
+            raise delivery_error("QQ send failed", f"{type(exc).__name__}: {exc}") from exc
+
+    @staticmethod
+    def _qq_plain_fallback_allowed(exc: Exception) -> bool:
+        """Only downgrade capability errors; retry ambiguous network failures."""
+        message = f"{type(exc).__name__}: {exc}".lower()
+        return any(marker in message for marker in (
+            "[400]",
+            "[403]",
+            "keyboard",
+            "markdown",
+            "msg_type",
+            "not support",
+            "not allowed",
+            "permission",
+            "unsupported",
+        ))
+
+    @staticmethod
+    def _qq_keyboard(payload: dict[str, Any]) -> Any:
+        spec = payload.get("keyboard")
+        if not isinstance(spec, dict):
+            return None
+        from qqbot_agent_sdk.dto import (
+            InlineKeyboard,
+            KeyboardButton,
+            KeyboardButtonAction,
+            KeyboardButtonPermission,
+            KeyboardButtonRenderData,
+            KeyboardContent,
+            KeyboardRow,
+        )
+
+        rows: list[Any] = []
+        for raw_row in list(spec.get("rows") or [])[:5]:
+            if not isinstance(raw_row, list):
+                continue
+            buttons: list[Any] = []
+            for raw_button in raw_row[:5]:
+                if not isinstance(raw_button, dict):
+                    continue
+                data = str(raw_button.get("data") or "")[:128]
+                label = str(raw_button.get("label") or "")[:30]
+                if not data or not label:
+                    continue
+                buttons.append(KeyboardButton(
+                    id=str(raw_button.get("id") or uuid.uuid4().hex[:12])[:64],
+                    render_data=KeyboardButtonRenderData(
+                        label=label,
+                        visited_label=str(
+                            raw_button.get("visited_label") or label
+                        )[:30],
+                        style=int(raw_button.get("style") or 0),
+                    ),
+                    action=KeyboardButtonAction(
+                        type=1,
+                        data=data,
+                        permission=KeyboardButtonPermission(type=2),
+                        click_limit=1,
+                    ),
+                    group_id=str(raw_button.get("group_id") or "argusai")[:64],
+                ))
+            if buttons:
+                rows.append(KeyboardRow(buttons=buttons))
+        return InlineKeyboard(content=KeyboardContent(rows=rows)) if rows else None
+
+    async def _send_qq_markdown(
+        self,
+        *,
+        api: Any,
+        chat_id: str,
+        reply: ChannelReply,
+        rendered: dict[str, Any],
+    ) -> None:
+        from qqbot_agent_sdk import MessageToCreate, QQMessageType
+        from qqbot_agent_sdk.dto import MarkdownContent
+
+        chunks = [
+            str(item).strip()
+            for item in list(rendered.get("text_chunks") or [])
+            if str(item).strip()
+        ]
+        keyboard = self._qq_keyboard(rendered)
+        try:
+            for index, chunk in enumerate(chunks):
+                await api.post_c2c_message(
+                    chat_id,
+                    MessageToCreate(
+                        msg_type=QQMessageType.MARKDOWN,
+                        msg_id=(
+                            str(reply.reply_to_message_id or "")
+                            if index == 0
+                            else ""
+                        ),
+                        msg_seq=api.next_msg_seq(chat_id),
+                        markdown=MarkdownContent(content=chunk),
+                    ),
+                    keyboard=(keyboard if index == 0 else None),
+                )
+        except Exception as exc:
+            if not self._qq_plain_fallback_allowed(exc):
+                raise
+            # Markdown and inline keyboards are reviewed QQ capabilities. A bot
+            # without either permission still gets a complete actionable reply.
+            fallback_chunks = [
+                str(item).strip()
+                for item in list(rendered.get("plain_fallback_chunks") or [])
+                if str(item).strip()
+            ]
+            for index, chunk in enumerate(fallback_chunks):
+                await api.send_text(
+                    "c2c",
+                    chat_id,
+                    chunk,
+                    reply_to=(
+                        reply.reply_to_message_id if index == 0 else None
+                    ),
+                    markdown=False,
+                    max_length=4000,
+                )
+
+    def stream_update(
+        self,
+        *,
+        chat_id: str,
+        source_message_id: str,
+        text: str,
+        final: bool = False,
+    ) -> bool:
+        """Send one full-text QQ C2C stream frame from any runtime thread."""
+        loop = self._loop
+        api = self._api
+        if loop is None or api is None or loop.is_closed():
+            return False
+        target = str(chat_id or "").strip()
+        source = str(source_message_id or "").strip()
+        content = str(text or "")
+        if not target or not source or not content.strip():
+            return False
+        future = asyncio.run_coroutine_threadsafe(
+            self._stream_update_async(
+                chat_id=target,
+                source_message_id=source,
+                text=content,
+                final=final,
+            ),
+            loop,
+        )
+        if final:
+            future.result(timeout=60)
+        else:
+            def record_failure(done: Any) -> None:
+                try:
+                    done.result()
+                except Exception as exc:
+                    self._set_error(f"QQ native stream failed: {exc}")
+                    log.warning(
+                        "QQ native stream frame failed channel_id=%s",
+                        self.config.id,
+                        exc_info=True,
+                    )
+
+            future.add_done_callback(record_failure)
+        return True
+
+    async def _stream_update_async(
+        self,
+        *,
+        chat_id: str,
+        source_message_id: str,
+        text: str,
+        final: bool,
+    ) -> None:
+        api = self._api
+        if api is None:
+            raise RuntimeError("QQ channel is not connected")
+        if source_message_id in self._stream_failures:
+            raise RuntimeError("QQ native stream was already rejected for this message")
+        state = self._stream_states.get(source_message_id)
+        if state is None:
+            state = {
+                "chat_id": chat_id,
+                "msg_seq": api.next_msg_seq(source_message_id),
+                "index": 0,
+                "stream_msg_id": "",
+                "last_text": "",
+                "lock": asyncio.Lock(),
+            }
+            self._stream_states[source_message_id] = state
+        lock = state["lock"]
+        async with lock:
+            if text == state.get("last_text") and not final:
+                return
+            index = int(state.get("index") or 0)
+            state["index"] = index + 1
+            body: dict[str, Any] = {
+                "input_mode": "replace",
+                "input_state": 10 if final else 1,
+                "content_type": "markdown",
+                "content_raw": text,
+                "event_id": source_message_id,
+                "msg_id": source_message_id,
+                "msg_seq": int(state["msg_seq"]),
+                "index": index,
+            }
+            if state.get("stream_msg_id"):
+                body["stream_msg_id"] = str(state["stream_msg_id"])
+            try:
+                response = await api.request(
+                    "POST",
+                    f"/v2/users/{chat_id}/stream_messages",
+                    body,
+                )
+            except Exception:
+                self._stream_states.pop(source_message_id, None)
+                if len(self._stream_failures) >= 256:
+                    self._stream_failures.clear()
+                self._stream_failures.add(source_message_id)
+                raise
+            stream_id = str(
+                (response or {}).get("id")
+                or (response or {}).get("stream_msg_id")
+                or ""
+            )
+            if stream_id and not state.get("stream_msg_id"):
+                state["stream_msg_id"] = stream_id
+            state["last_text"] = text
+            if final:
+                self._stream_states.pop(source_message_id, None)
+
+    async def _send_async(self, reply: ChannelReply) -> None:
+        from qqbot_agent_sdk import (
+            MEDIA_TYPE_FILE,
+            MEDIA_TYPE_IMAGE,
+            MEDIA_TYPE_VIDEO,
+            MEDIA_TYPE_VOICE,
+            MediaInfo,
+            MediaUploader,
+            MessageToCreate,
+            QQMessageType,
+        )
+
+        api = self._api
+        client = self._http_client
+        if api is None or client is None:
+            raise RuntimeError("QQ channel is not connected")
+        chat_id = str(reply.external_chat_id or "").strip()
+        if not chat_id:
+            raise ValueError("QQ reply requires a C2C chat id")
+        rendered = render_channel_reply("qq", reply)
+        await self._send_qq_markdown(
+            api=api,
+            chat_id=chat_id,
+            reply=reply,
+            rendered=rendered,
+        )
+
+        media_types = {
+            "image": MEDIA_TYPE_IMAGE,
+            "video": MEDIA_TYPE_VIDEO,
+            "audio": MEDIA_TYPE_VOICE,
+            "text": MEDIA_TYPE_FILE,
+            "file": MEDIA_TYPE_FILE,
+        }
+        uploader = MediaUploader(api, client, log_tag=f"ArgusAI:{self.config.id}")
+        for attachment, data in _prepared_attachments(reply):
+            suffix = os.path.splitext(attachment.name or "")[1][:20]
+            tmp_path = ""
+            try:
+                with tempfile.NamedTemporaryFile(
+                    prefix="argusai-qq-",
+                    suffix=suffix,
+                    delete=False,
+                ) as handle:
+                    handle.write(data)
+                    tmp_path = handle.name
+                file_info = await uploader.upload(
+                    "c2c",
+                    chat_id,
+                    tmp_path,
+                    media_types.get(attachment.kind, MEDIA_TYPE_FILE),
+                    file_name=attachment.name or None,
+                )
+                await api.post_c2c_message(chat_id, MessageToCreate(
+                    msg_type=QQMessageType.RICH_MEDIA,
+                    msg_id=str(reply.reply_to_message_id or ""),
+                    msg_seq=api.next_msg_seq(chat_id),
+                    media=MediaInfo(file_info=file_info),
+                ))
+            finally:
+                if tmp_path:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._stream_states.clear()
+        self._stream_failures.clear()
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(lambda: None)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=3)
+        self._thread = None
+        self._connected = False
+
+
 def create_channel_adapter(
     config: ChannelConfig,
     credentials: dict[str, str],
 ) -> ChannelAdapter:
+    if config.provider == "qq":
+        return QQAdapter(config, credentials)
     if config.provider == "telegram":
         return TelegramAdapter(config, credentials)
     if config.provider == "discord":

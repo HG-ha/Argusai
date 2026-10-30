@@ -81,6 +81,100 @@ def test_replay_toolless_done() -> None:
     assert ai.calls == 1
 
 
+def test_channel_reply_is_terminal_after_delivery_is_accepted() -> None:
+    sent: list[list[str]] = []
+    later_tool_hits = 0
+
+    async def channel_reply(messages=None, **kwargs):  # noqa: ANN001
+        sent.append(list(messages or []))
+        return {
+            "ok": True,
+            "queued": True,
+            "terminal_delivery": True,
+            "delivery_count": len(messages or []),
+        }
+
+    async def later_tool(**kwargs):
+        nonlocal later_tool_hits
+        later_tool_hits += 1
+        return {"ok": True}
+
+    reg = ToolRegistry()
+    reg.register(
+        "channel_reply",
+        "final channel reply",
+        {"messages": {"type": "array", "items": {"type": "string"}}},
+        channel_reply,
+        kind="mutating",
+        dedupe=False,
+    )
+    reg.register("skill_read", "later read", {}, later_tool, kind="idempotent")
+    ai = ScriptedAI([
+        _assistant_msg("", [
+            _tool_call(
+                "reply-1",
+                "channel_reply",
+                {"messages": ["第一条", "第二条"]},
+            ),
+            _tool_call("must-not-run", "skill_read"),
+        ]),
+        _assistant_msg("已经发到聊天里了（两条）。"),
+    ])
+    session = AssistantSession(registry=reg, ai_provider=ai)
+
+    async def _run():
+        return await session.chat(
+            "分两条回复",
+            thinking_enabled=False,
+            message_source="channel",
+            message_source_ref="qq-user",
+        )
+
+    resp = asyncio.run(_run())
+
+    assert sent == [["第一条", "第二条"]]
+    assert later_tool_hits == 0
+    assert ai.calls == 1
+    assert resp.status == "done"
+    assert resp.text == ""
+    assert [trace["name"] for trace in resp.tool_trace] == ["channel_reply"]
+    assert all("已经发到聊天里了" not in item.content for item in session.history)
+
+
+def test_failed_channel_reply_keeps_agent_loop_running() -> None:
+    async def channel_reply(messages=None, **kwargs):  # noqa: ANN001
+        return {"ok": False, "error": "channel unavailable"}
+
+    reg = ToolRegistry()
+    reg.register(
+        "channel_reply",
+        "final channel reply",
+        {"messages": {"type": "array", "items": {"type": "string"}}},
+        channel_reply,
+        kind="mutating",
+        dedupe=False,
+    )
+    ai = ScriptedAI([
+        _assistant_msg("", [_tool_call(
+            "reply-failed",
+            "channel_reply",
+            {"messages": ["准备发送"]},
+        )]),
+        _assistant_msg("渠道发送失败，请稍后重试。"),
+    ])
+    session = AssistantSession(registry=reg, ai_provider=ai)
+
+    resp = asyncio.run(session.chat(
+        "回复我",
+        thinking_enabled=False,
+        message_source="channel",
+        message_source_ref="qq-user",
+    ))
+
+    assert ai.calls == 2
+    assert resp.text == "渠道发送失败，请稍后重试。"
+
+
 def test_replay_parallel_readonly_order() -> None:
     seen: list[str] = []
 

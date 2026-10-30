@@ -1271,6 +1271,11 @@ def tool_kind(name: str) -> str:
         return "control"
     if n in _POLLING_TOOLS:
         return "polling"
+    # Exact-source channel replies change remote state, but intentionally skip
+    # proactive-send confirmation: the paired user authored this very turn.
+    # Keep them mutating so repeated identical bubbles are never deduplicated.
+    if n == "channel_reply":
+        return "mutating"
     if n in _WRITE_TOOLS:
         return "mutating"
     return "idempotent"

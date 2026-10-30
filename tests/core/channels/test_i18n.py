@@ -178,6 +178,42 @@ def test_store_errors_are_translated_through_their_code(tmp_path) -> None:
     assert "无效或已过期" in expired.text
 
 
+def test_gateway_preserves_chat_transcripts_code_and_emoji(tmp_path) -> None:
+    store, channel, gateway = _build(tmp_path, "zh")
+    _pair(store, channel, gateway)
+    turns = []
+
+    def capture_turn(params):
+        turns.append(params)
+        return {"ok": True, "text": "answer"}
+
+    gateway.turn_handler = capture_turn
+    message = (
+        "【合并转发】\r\n[甲] 请检查这段代码：\r\n"
+        "```python\r\nif ready:\r\n    run()\r\n\tfinish()\r\n```\r\n\r\n"
+        "[乙] 保留  两个空格，以及 👩‍💻 的连接符。"
+    )
+
+    reply = gateway.handle(_event(channel.id, message, "forward-1"))
+
+    assert reply.text == "answer"
+    assert len(turns) == 1
+    assert turns[0]["message"] == message
+
+
+def test_gateway_keeps_command_whitespace_normalization_separate(tmp_path) -> None:
+    store, channel, gateway = _build(tmp_path, "zh")
+    _pair(store, channel, gateway)
+    turns = []
+    gateway.turn_handler = lambda params: turns.append(params) or {"ok": True}
+
+    reply = gateway.handle(_event(channel.id, "\t@_user_1\u200b\n /status  \r\n", "status-1"))
+
+    assert "会话概览" in _body(reply)
+    assert turns == []
+    assert gateway.handle(_event(channel.id, "@_user_1\u200b \n", "mention-1")).text == ""
+
+
 def test_confirmation_card_buttons_follow_the_locale(tmp_path) -> None:
     store, channel, gateway = _build(tmp_path, "zh")
     pairing = store.create_pairing(channel.id, bound_session_id="session-1")

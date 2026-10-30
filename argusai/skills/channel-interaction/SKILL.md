@@ -1,13 +1,14 @@
 ---
 name: channel-interaction
-description: Interact well on paired remote channels (Feishu, Telegram, Discord, Slack, DingTalk, WeCom, WeChat, Webhook). Prefer clickable UI-block decisions, stage replies under /live, and deliver sandbox files with channel_send_file — not MCP.
+description: Interact well on paired remote channels (QQ, Feishu, Telegram, Discord, Slack, DingTalk, WeCom, WeChat, Webhook). Prefer channel_reply for direct replies, clickable UI-block decisions, stage replies under /live, and sandbox file delivery with channel_send_file — not MCP.
 trigger-keywords:
-  - "\\b(feishu|lark|telegram|discord|slack|dingtalk|wecom|wechat|webhook)\\b"
-  - "\\b(channel_send_file|channel_send_message|channel_list_targets)\\b"
-  - "飞书|钉钉|企业微信|电报|远程通道|通讯渠道|发给我|发文件|回传文件|推送文件"
+  - "\\b(qq|feishu|lark|telegram|discord|slack|dingtalk|wecom|wechat|webhook)\\b"
+  - "\\b(channel_reply|channel_send_file|channel_send_message|channel_list_targets)\\b"
+  - "QQ|飞书|钉钉|企业微信|电报|远程通道|通讯渠道|发给我|发文件|回传文件|推送文件"
   - "通道.*(交互|卡片|按钮|决策)|远程.*(聊天|消息)|配对.*(通道|渠道)"
 trigger-tools:
   - channel_list_targets
+  - channel_reply
   - channel_send_message
   - channel_send_file
   - channel_delivery_status
@@ -17,7 +18,7 @@ trigger-tools:
 
 # Channel Interaction
 
-Paired messaging channels are a first-class Agent surface, not a settings-only feature. The user may be on **Feishu / Telegram / Discord / Slack / DingTalk / WeCom / WeChat / Webhook** with limited formatting and **no rich desktop UI**. Optimize for clickable cards, short stages, and explicit file delivery. Each pairing only sees conversations granted to it — do not search or read other sessions.
+Paired messaging channels are a first-class Agent surface, not a settings-only feature. The user may be on **QQ / Feishu / Telegram / Discord / Slack / DingTalk / WeCom / WeChat / Webhook** with limited formatting and **no rich desktop UI**. Optimize for clickable cards, short stages, and explicit file delivery. Each pairing only sees conversations granted to it — do not search or read other sessions.
 
 Also read `ui-block-protocol` for block shapes. This skill covers **channel-specific** behavior.
 
@@ -27,7 +28,7 @@ Also read `ui-block-protocol` for block shapes. This skill covers **channel-spec
 2. **Choices = buttons only.** Mutually exclusive next steps go through `stop_for_user_decision` / `_batch`. Never ask the user to type `1` / `A` / `B` / `C` or "回复选项编号".
 3. **Card vs essay.** Explanation stays in assistant prose (or mid-turn live segments). Card `question` is 1–2 short control sentences; `options` are concrete clicks; `context` is at most one why-line. Do not paste install guides into the card.
 4. **No fake progress filler.** If `/live` already pushed stage text + cards, do not invent a hollow final line like "完成。" when there is nothing left to say.
-5. **Do not invent an MCP "send file" tool.** Outbound delivery is native: `channel_list_targets`, `channel_send_message`, `channel_send_file`, `channel_delivery_status`.
+5. **Do not invent an MCP "send file" tool.** Channel delivery is native: `channel_reply`, `channel_list_targets`, `channel_send_message`, `channel_send_file`, `channel_delivery_status`.
 
 ## Decision UX
 
@@ -56,6 +57,7 @@ Ordinary chat and non-blocking status stay prose. If you cannot continue without
 | Tool | Confirm? | Use when |
 |------|----------|----------|
 | `channel_list_targets` | No | Discover send-enabled identities (bound + auto-route preview) |
+| `channel_reply` | No | Reply to the exact identity that authored the current channel turn; one call may send several ordered bubbles |
 | `channel_send_message` | Yes | Proactive text (briefing, alert, reminder) |
 | `channel_send_file` | Yes | Deliver a **sandbox** artifact (report, zip, screenshot, script) |
 | `channel_delivery_status` | No | Confirm queued send became `sent` / inspect `failed` + `last_error` |
@@ -64,7 +66,8 @@ Ordinary chat and non-blocking status stay prose. If you cannot continue without
 
 One Agent conversation may be paired from Telegram + Feishu + Discord + … at once.
 
-- **Channel turn (you messaged from TG/飞书/…)**: omit `identity_id` → reply/file goes **only to that same identity** (`route_mode=turn_source`). Do not fan-out and do not ask which app.
+- **Ordinary channel reply (you messaged from QQ/TG/飞书/…)**: finish the work, then call `channel_reply(messages=[...])` as the turn's final action. It is locked to that exact identity (`route_mode=turn_source`), and an accepted call ends the Agent loop without another model response.
+- **Channel file/proactive send**: omit `identity_id` → it goes **only to that same identity**. Do not fan-out and do not ask which app.
 - **GUI / no channel turn**: omit `identity_id` → fan-out to every send-enabled identity bound to this conversation; if none are bound, auto-route to one unambiguous recently active chat, or to the only paired recipient without changing its inbound binding.
 - Pass `identity_id` when the user named a recipient/platform or when `channel_list_targets` lists it under `other_session_targets`. An explicit confirmed send does not change that identity's incoming conversation binding.
 - A successfully delivered cross-session message is mirrored into the recipient history as `channel_outbound` with its exact `Origin conversation`. If the recipient later asks why it was sent, call `read_assistant_session` only for that exact origin when it is already granted to this pairing; do not scan unrelated sessions.
@@ -81,6 +84,7 @@ User-facing `/file` is for **browsing** sandbox files from chat commands. Prefer
 
 ### Text delivery
 
+- For an ordinary reply to the current channel user, use `channel_reply`; follow `channel-human-reply` for wording and bubble boundaries.
 - Keep messages short; put long reports in a file and send the file.
 - One coherent message per intent — do not flood with many tiny proactive sends.
 - Target must be paired with `send` permission. If it is bound to another conversation, select it explicitly by `identity_id`; do not ask the user to re-pair.

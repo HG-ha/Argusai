@@ -11,7 +11,7 @@ from typing import Any
 
 from .streaming import normalize_confirmation_decision
 
-REMOTE_CONFIRMATION_SOURCES = frozenset({"channel", "telegram", "discord", "slack", "feishu", "dingtalk", "wecom", "webhook"})
+REMOTE_CONFIRMATION_SOURCES = frozenset({"channel", "qq", "telegram", "discord", "slack", "feishu", "dingtalk", "wecom", "wechat", "webhook"})
 
 
 @dataclass

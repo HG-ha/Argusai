@@ -290,3 +290,97 @@ def test_second_chat_turn_does_not_absorb_keyword_tools() -> None:
     assert len(first) < 36
     assert ai.tool_names[0] == first
     assert ai.tool_names[1] == first
+
+
+def test_channel_reply_schema_and_guidance_are_scoped_to_channel_turns() -> None:
+    import asyncio
+
+    from argusai.core.assistant.session import AssistantSession
+    from argusai.core.assistant.tools import build_tool_registry
+
+    class RecorderAI:
+        def __init__(self) -> None:
+            self.tool_names: list[list[str]] = []
+            self.system_prompts: list[str] = []
+
+        async def chat(self, messages=None, tools=None, thinking_enabled=None):  # noqa: ANN001
+            self.tool_names.append([
+                item["function"]["name"]
+                for item in tools or []
+                if isinstance(item, dict) and isinstance(item.get("function"), dict)
+            ])
+            self.system_prompts.append("\n".join(
+                str(item.get("content") or "")
+                for item in messages or []
+                if isinstance(item, dict) and item.get("role") == "system"
+            ))
+            return {"choices": [{"message": {"content": "ok", "tool_calls": []}}]}
+
+    ai = RecorderAI()
+    session = AssistantSession(registry=build_tool_registry(None), ai_provider=ai)
+
+    asyncio.run(session.chat("GUI turn", thinking_enabled=False, message_source="gui"))
+    asyncio.run(session.chat(
+        "channel turn",
+        thinking_enabled=False,
+        message_source="channel",
+        message_source_ref="qq-user",
+    ))
+    asyncio.run(session.chat("GUI again", thinking_enabled=False, message_source="gui"))
+
+    assert "channel_reply" not in session._prompt_tool_names
+    assert "channel_reply" not in ai.tool_names[0]
+    assert "channel_reply" in ai.tool_names[1]
+    assert "channel_reply" not in ai.tool_names[2]
+    assert "MUST finish the work and then call `channel_reply`" not in ai.system_prompts[0]
+    assert "MUST finish the work and then call `channel_reply`" in ai.system_prompts[1]
+    assert "MUST finish the work and then call `channel_reply`" not in ai.system_prompts[2]
+
+
+def test_long_channel_history_keeps_delivery_contract_system_only() -> None:
+    import asyncio
+
+    from argusai.core.assistant.messages import ChatMessage
+    from argusai.core.assistant.session import AssistantSession
+    from argusai.core.assistant.tools import build_tool_registry
+
+    class RecorderAI:
+        def __init__(self) -> None:
+            self.messages = []
+            self.tool_names = []
+
+        async def chat(self, messages=None, tools=None, thinking_enabled=None):  # noqa: ANN001
+            self.messages = list(messages or [])
+            self.tool_names = [
+                item["function"]["name"]
+                for item in tools or []
+                if isinstance(item, dict) and isinstance(item.get("function"), dict)
+            ]
+            return {"choices": [{"message": {"content": "ok", "tool_calls": []}}]}
+
+    ai = RecorderAI()
+    session = AssistantSession(registry=build_tool_registry(None), ai_provider=ai)
+    for index in range(session.MAX_HISTORY + 40):
+        role = "user" if index % 2 == 0 else "assistant"
+        session.history.append(ChatMessage(role=role, content=f"old turn {index}"))
+    session.memory_summary = "old compressed context " * 1200
+
+    asyncio.run(session.chat(
+        "给我结论、原因和下一步",
+        thinking_enabled=False,
+        message_source="channel",
+        message_source_ref="qq-user",
+    ))
+
+    live_user = next(
+        item for item in reversed(ai.messages)
+        if item.get("role") == "user" and "给我结论" in str(item.get("content") or "")
+    )
+    system_text = "\n".join(
+        str(item.get("content") or "")
+        for item in ai.messages
+        if item.get("role") == "system"
+    )
+    assert "MUST finish the work and then call `channel_reply`" in system_text
+    assert "MUST finish the work and then call `channel_reply`" not in live_user["content"]
+    assert "channel_reply" in ai.tool_names

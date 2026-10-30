@@ -170,7 +170,8 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
         f"--file-version={args.version}", f"--product-version={args.version}",
         "--include-package=argusai", "--include-package=websockets",
         "--include-package=lark_oapi.core", "--include-package=lark_oapi.ws",
-        "--include-package=dingtalk_stream", "--include-package=segno", "--include-package-data=certifi",
+        "--include-package=dingtalk_stream", "--include-package=qqbot_agent_sdk",
+        "--include-package=segno", "--include-package-data=certifi",
         "--include-data-files=argusai/core/reverse/ghidra_scripts/*.py=argusai/core/reverse/ghidra_scripts/",
         "--no-deployment-flag=excluded-module-usage",
     ]

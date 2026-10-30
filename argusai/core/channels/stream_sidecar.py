@@ -438,6 +438,52 @@ def _run_feishu(credentials: dict[str, str]) -> None:
     client.start()
 
 
+def _dingtalk_media_resources(message: Any, raw: dict[str, Any]) -> list[dict[str, str]]:
+    """Keep per-resource names/types instead of flattening mixed posts to images."""
+    resources: dict[str, dict[str, str]] = {}
+    defaults = {
+        "picture": ("dingtalk-image.jpg", "image/jpeg"),
+        "image": ("dingtalk-image.jpg", "image/jpeg"),
+        "audio": ("dingtalk-audio.ogg", "audio/ogg"),
+        "video": ("dingtalk-video.mp4", "video/mp4"),
+        "file": ("dingtalk-file", "application/octet-stream"),
+        "richText": ("dingtalk-image.jpg", "image/jpeg"),
+    }
+
+    def add(value: Any, kind: str) -> None:
+        item = value if isinstance(value, dict) else {"downloadCode": value}
+        code = str(item.get("downloadCode") or item.get("download_code") or item.get("mediaId") or "")
+        if not code or code in resources:
+            return
+        kind = str(item.get("type") or item.get("msgtype") or kind)
+        default_name, default_mime = defaults.get(kind, defaults["file"])
+        resources[code] = {
+            "download_code": code,
+            "name": str(item.get("fileName") or item.get("file_name") or item.get("name") or default_name),
+            "mime": str(item.get("mime") or item.get("contentType") or item.get("content_type") or default_mime),
+        }
+
+    content = raw.get("content") if isinstance(raw.get("content"), dict) else {}
+    message_type = str(raw.get("msgtype") or "")
+    add(content, message_type)
+    for item in list(content.get("richText") or []):
+        add(item, "picture")
+    for getter_name, kind in (
+        ("get_image_list", "picture"), ("get_file_list", "file"),
+        ("get_audio_list", "audio"), ("get_video_list", "video"),
+    ):
+        getter = getattr(message, getter_name, None)
+        if not callable(getter):
+            continue
+        try:
+            values = list(getter() or [])
+        except Exception:
+            values = []
+        for value in values:
+            add(value, kind)
+    return list(resources.values())
+
+
 def _run_dingtalk(credentials: dict[str, str]) -> None:
     import dingtalk_stream
 
@@ -455,33 +501,11 @@ def _run_dingtalk(credentials: dict[str, str]) -> None:
                 for item in (message.get_text_list() or [])
                 if str(item or "").strip()
             )
-            download_codes = list(message.get_image_list() or [])
-            for getter_name in (
-                "get_file_list",
-                "get_audio_list",
-                "get_video_list",
-            ):
-                getter = getattr(message, getter_name, None)
-                if not callable(getter):
-                    continue
-                try:
-                    media_items = list(getter() or [])
-                except Exception:
-                    media_items = []
-                for media_item in media_items:
-                    if isinstance(media_item, dict):
-                        code = (
-                            media_item.get("downloadCode")
-                            or media_item.get("download_code")
-                            or media_item.get("mediaId")
-                        )
-                    else:
-                        code = media_item
-                    if code:
-                        download_codes.append(str(code))
+            download_resources = _dingtalk_media_resources(
+                message, callback.data if isinstance(callback.data, dict) else raw,
+            )
+            download_codes = [item["download_code"] for item in download_resources]
             content = raw.get("content")
-            if isinstance(content, dict) and content.get("downloadCode"):
-                download_codes.append(str(content["downloadCode"]))
             if not text and isinstance(content, dict):
                 text = str(
                     content.get("content")
@@ -490,6 +514,7 @@ def _run_dingtalk(credentials: dict[str, str]) -> None:
                 ).strip()
             if text or download_codes:
                 raw["download_codes"] = list(dict.fromkeys(download_codes))
+                raw["download_resources"] = download_resources
                 _event({
                     "provider": "dingtalk",
                     "external_user_id": str(

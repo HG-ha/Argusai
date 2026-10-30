@@ -853,6 +853,51 @@ class SessionLoopControlMixin:
         )
 
 
+    @staticmethod
+    def _is_terminal_channel_reply_trace(trace: dict[str, Any] | None) -> bool:
+        """Return whether ``trace`` accepted the turn's final channel reply.
+
+        ``channel_reply`` is a delivery primitive, not an intermediate lookup:
+        once its exact bubbles are accepted by the outbox, asking the model for
+        another assistant message only invites a redundant delivery receipt.
+        Failed/rejected calls deliberately remain non-terminal so the model can
+        retry or explain the failure.
+        """
+        if not isinstance(trace, dict) or trace.get("name") != "channel_reply":
+            return False
+        result = trace.get("result")
+        return bool(
+            isinstance(result, dict)
+            and result.get("ok") is True
+            and result.get("queued") is True
+            and result.get("terminal_delivery") is True
+        )
+
+
+    def _commit_terminal_channel_reply(
+        self,
+        tool_calls_made: list[dict[str, Any]] | None = None,
+    ) -> ChatResponse:
+        """Finish silently after ``channel_reply`` accepted its message bubbles."""
+        traces = list(tool_calls_made or [])
+        self.history.append(ChatMessage(
+            role="assistant",
+            content="",
+            ui_hidden=True,
+            tool_trace=traces,
+            blocks=[],
+            timestamp=time.time(),
+            token_usage=self._turn_token_usage_snapshot(),
+        ))
+        return ChatResponse(
+            text="",
+            tool_calls=traces,
+            blocks=[],
+            tool_trace=traces,
+            status="done",
+        )
+
+
     def _commit_stream_repetition_stop(
         self,
         *,
@@ -1606,7 +1651,8 @@ class SessionLoopControlMixin:
     ) -> ChatResponse | None:
         """Execute a tool-call list with optional readonly parallelism (Loom22 §22.6).
 
-        Returns a ChatResponse when cancel/dedup circuit stops the turn; else None.
+        Returns a ChatResponse when cancel/dedup/terminal-delivery stops the turn;
+        else None.
         Results are always committed in the original ``tc_list`` order.
         """
         # Parse once.
@@ -1725,6 +1771,18 @@ class SessionLoopControlMixin:
                 on_status=on_status,
                 visual_tool_attachments=visual_tool_attachments,
             )
+            if self._is_terminal_channel_reply_trace(
+                tool_calls_made[-1] if tool_calls_made else None
+            ):
+                # Preserve provider tool-call invariants if a model batched
+                # work *after* the terminal reply. Those calls are intentionally
+                # not executed: channel_reply must be the final action.
+                self._fill_missing_tool_results(
+                    tc_list,
+                    messages,
+                    reason="terminal_channel_reply",
+                )
+                return self._commit_terminal_channel_reply(tool_calls_made)
             if self._cancel_requested:
                 self._fill_missing_tool_results(tc_list, messages, reason="user_cancelled_after_dispatch")
                 await self._emit_status(on_status, "工具执行完成，正在整理结果...")

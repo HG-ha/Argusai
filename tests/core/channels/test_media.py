@@ -4,8 +4,10 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -32,7 +34,9 @@ from argusai.core.channels.media import (
     attachment_bytes,
     attachment_from_bytes,
     normalize_attachment,
+    pack_forwarded_media,
     safe_filename,
+    to_assistant_dict,
 )
 
 
@@ -88,6 +92,108 @@ def test_media_contract_rejects_oversize_and_pathless_content() -> None:
             b"x" * (4 * 1024 * 1024 + 1),
             name="large.txt",
             mime="text/plain",
+        )
+
+
+def test_forward_text_archive_limits_bytes_and_marks_partial_records() -> None:
+    from argusai.core.channels.media import TEXT_LIMIT, prepare_forwarded_text
+
+    text, attachments = prepare_forwarded_text(
+        "转发正文" * (TEXT_LIMIT // 6), provider="qq", message_id="oversize",
+    )
+    assert "不是完整记录" in text
+    assert len(attachments) == 1
+    record = attachments[0]
+    assert record["size"] <= TEXT_LIMIT
+    assert record["size"] == len(record["text"].encode("utf-8"))
+    assert "不是完整记录" in record["text"]
+    assert "\ufffd" not in record["text"]
+    assert _sanitize_attachments(attachments)
+
+
+def test_forward_text_archive_names_do_not_overwrite_other_messages() -> None:
+    from argusai.core.channels.media import prepare_forwarded_text
+
+    body = "完整转发记录" * 3000
+    _, first = prepare_forwarded_text(body, provider="qq", message_id="one")
+    _, second = prepare_forwarded_text(body, provider="qq", message_id="two")
+    assert first[0]["name"] != second[0]["name"]
+    assert first[0]["text"] == second[0]["text"] == body
+
+
+def test_forward_media_archive_preserves_all_images_and_files(tmp_path) -> None:
+    payloads = [b"\x89PNG\r\n\x1a\n" + bytes([index]) for index in range(10)]
+    values = [
+        to_assistant_dict(attachment_from_bytes(data, name=f"image-{index}.png"))
+        for index, data in enumerate(payloads)
+    ]
+    payloads.append(b"%PDF-forwarded-file")
+    values.append(to_assistant_dict(attachment_from_bytes(payloads[-1], name="report.pdf")))
+    values[0]["metadata"] = {"download_url": "https://example.test/private?token=secret"}
+    values[0]["source_message_id"] = "child-message-1"
+    values[1]["source_message_id"] = "m" * 150
+    values[2]["source_message_id"] = "  "
+
+    packed = pack_forwarded_media(values, provider="qq", message_id="message-1")
+    assert packed["type"] == "file"
+    assert packed["mime"] == "application/zip"
+    sanitized = _sanitize_attachments([packed])
+    materialized, _note = _materialize_binary_attachments(sanitized, tmp_path)
+    assert "data_base64" not in materialized[0]
+    with zipfile.ZipFile(materialized[0]["sandbox_path"]) as archive:
+        manifest_bytes = archive.read("manifest.json")
+        manifest = json.loads(manifest_bytes)
+        assert len(manifest["files"]) == 11
+        assert manifest["total_bytes"] == sum(map(len, payloads))
+        assert b"token=secret" not in manifest_bytes
+        assert manifest["files"][0]["source_message_id"] == "child-message-1"
+        assert manifest["files"][1]["source_message_id"] == "m" * 128
+        assert "source_message_id" not in manifest["files"][2]
+        assert "source_message_id" not in manifest["files"][3]
+        for entry, expected in zip(manifest["files"], payloads, strict=True):
+            assert archive.read(entry["path"]) == expected
+            assert entry["size"] == len(expected)
+            assert entry["sha256"] == hashlib.sha256(expected).hexdigest()
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+
+
+def test_forward_media_archive_uses_safe_unique_paths_and_stable_names() -> None:
+    names = ["../../same.png", r"..\same.png", "same.png", "CON.exe"]
+    values = [{
+        "type": "file", "name": name, "mime": "application/octet-stream", "bytes": b"data",
+    } for name in names]
+    packed = pack_forwarded_media(values, provider="qq", message_id="same-message")
+    again = pack_forwarded_media(values, provider="qq", message_id="same-message")
+    other = pack_forwarded_media(values, provider="qq", message_id="other-message")
+    assert packed == again
+    assert packed["name"] != other["name"]
+    with zipfile.ZipFile(io.BytesIO(attachment_bytes(packed))) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        paths = [entry["path"] for entry in manifest["files"]]
+        assert len(set(paths)) == len(names)
+        assert all(path.startswith("files/") and ".." not in path and "\\" not in path for path in paths)
+        assert [entry["original_name"] for entry in manifest["files"]] == names
+
+
+def test_forward_media_archive_rejects_count_and_total_size_overflow(monkeypatch) -> None:
+    from argusai.core.channels import media
+
+    value = {"type": "file", "name": "sample.bin", "bytes": b"1234"}
+    with pytest.raises(ChannelMediaError, match="file limit"):
+        pack_forwarded_media([value] * (media.FORWARD_MEDIA_MAX_COUNT + 1), provider="qq", message_id="many")
+    monkeypatch.setattr(media, "FORWARD_MEDIA_MAX_BYTES", 7)
+    with pytest.raises(ChannelMediaError, match="byte limit"):
+        pack_forwarded_media([value, value], provider="qq", message_id="large")
+
+
+def test_forward_media_archive_counts_zip_metadata_against_size_limit(monkeypatch) -> None:
+    from argusai.core.channels import media
+
+    monkeypatch.setattr(media, "GLOBAL_FILE_LIMIT", 100)
+    with pytest.raises(ChannelMediaError, match="size limit"):
+        pack_forwarded_media(
+            [{"type": "file", "name": "sample.bin", "bytes": b"1234"}],
+            provider="qq", message_id="metadata-overflow",
         )
 
 
@@ -157,11 +263,9 @@ def test_telegram_normalizes_inbound_document(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "argusai.core.channels.adapters._download_attachment",
-        lambda *_args, **kwargs: {
-            "type": "file",
-            "name": kwargs["name"],
-            "mime": kwargs["mime"],
-        },
+        lambda *_args, **kwargs: to_assistant_dict(attachment_from_bytes(
+            b"%PDF-test", name=kwargs["name"], mime=kwargs["mime"],
+        )),
     )
     adapter = TelegramAdapter(
         ChannelConfig(id="telegram-test", provider="telegram", name="Telegram"),
@@ -177,11 +281,9 @@ def test_telegram_normalizes_inbound_document(monkeypatch) -> None:
         },
     })
 
-    assert attachments == [{
-        "type": "file",
-        "name": "report.pdf",
-        "mime": "application/pdf",
-    }]
+    assert attachments == [to_assistant_dict(attachment_from_bytes(
+        b"%PDF-test", name="report.pdf", mime="application/pdf",
+    ))]
 
 
 def test_telegram_accepts_stickers_video_notes_and_locations(monkeypatch) -> None:
@@ -192,11 +294,9 @@ def test_telegram_accepts_stickers_video_notes_and_locations(monkeypatch) -> Non
 
     monkeypatch.setattr(
         "argusai.core.channels.adapters._download_attachment",
-        lambda *_args, **kwargs: {
-            "type": "image",
-            "name": kwargs["name"],
-            "mime": kwargs["mime"],
-        },
+        lambda *_args, **kwargs: to_assistant_dict(attachment_from_bytes(
+            b"media-bytes", name=kwargs["name"], mime=kwargs["mime"],
+        )),
     )
     adapter = TelegramAdapter(
         ChannelConfig(id="telegram-test", provider="telegram", name="Telegram"),
@@ -222,13 +322,13 @@ def test_telegram_accepts_stickers_video_notes_and_locations(monkeypatch) -> Non
 
 
 def test_discord_downloads_stickers_and_reads_embeds(monkeypatch) -> None:
+    urls = []
+
     async def fake_download(_client, url, **kwargs):
-        return {
-            "type": "image",
-            "name": kwargs["name"],
-            "mime": kwargs["mime"],
-            "url": url,
-        }
+        urls.append(url)
+        return to_assistant_dict(attachment_from_bytes(
+            b"image-bytes", name=kwargs["name"], mime=kwargs["mime"],
+        ))
 
     monkeypatch.setattr(
         "argusai.core.channels.adapters._download_attachment_async",
@@ -250,7 +350,7 @@ def test_discord_downloads_stickers_and_reads_embeds(monkeypatch) -> None:
     files = asyncio.run(discord._message_attachments(message))
     assert len(files) == 1
     assert files[0]["name"] == "shipit.png"
-    assert "stickers/111.png" in files[0]["url"]
+    assert "stickers/111.png" in urls[0]
 
 
 def test_wecom_location_and_link_become_text() -> None:
@@ -305,11 +405,9 @@ def test_feishu_http_callback_reads_post_messages() -> None:
 
 def test_discord_and_slack_normalize_inbound_files(monkeypatch) -> None:
     async def fake_download(_client, _url, **kwargs):
-        return {
-            "type": "file",
-            "name": kwargs["name"],
-            "mime": kwargs["mime"],
-        }
+        return to_assistant_dict(attachment_from_bytes(
+            b"%PDF-test", name=kwargs["name"], mime=kwargs["mime"],
+        ))
 
     monkeypatch.setattr(
         "argusai.core.channels.adapters._download_attachment_async",
@@ -343,6 +441,175 @@ def test_discord_and_slack_normalize_inbound_files(monkeypatch) -> None:
 
     assert discord_files[0]["name"] == "discord.pdf"
     assert slack_files[0]["name"] == "slack.pdf"
+
+
+@pytest.mark.parametrize("provider", ["discord", "slack"])
+@pytest.mark.parametrize("count", [10, 70])
+def test_channel_many_media_are_archived_with_explicit_count_limits(monkeypatch, provider, count) -> None:
+    calls = []
+
+    async def fake_download(_client, url, **kwargs):
+        calls.append(url)
+        return to_assistant_dict(attachment_from_bytes(
+            url.encode(), name=kwargs["name"], mime=kwargs["mime"],
+        ))
+
+    monkeypatch.setattr("argusai.core.channels.adapters._download_attachment_async", fake_download)
+    cls = DiscordAdapter if provider == "discord" else SlackAdapter
+    adapter = cls(ChannelConfig(id="many", provider=provider, name=provider), {"bot_token": "test"})
+    items = [{
+        "id": str(index), "name": f"file-{index}.bin", "filename": f"file-{index}.bin",
+        "content_type": "application/octet-stream", "mimetype": "application/octet-stream",
+        "url": f"https://cdn.example/{index}", "url_private": f"https://cdn.example/{index}",
+    } for index in range(count)]
+
+    result = asyncio.run(adapter._message_attachments({
+        "id": "message", "ts": "message",
+        "attachments" if provider == "discord" else "files": items,
+    }))
+
+    assert len(calls) == min(count, 64)
+    assert result[0]["mime"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(attachment_bytes(result[0]))) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert len(manifest["files"]) == min(count, 64)
+        for entry, url in zip(manifest["files"], calls, strict=True):
+            assert archive.read(entry["path"]) == url.encode()
+    if count > 64:
+        assert len(result) == 2
+        assert "6 attachments exceed" in result[1]["text"]
+    else:
+        assert len(result) == 1
+
+
+def test_discord_forward_snapshot_text_and_media_are_preserved(monkeypatch) -> None:
+    async def fake_download(_client, _url, **kwargs):
+        return to_assistant_dict(attachment_from_bytes(
+            b"snapshot-image", name=kwargs["name"], mime=kwargs["mime"],
+        ))
+
+    monkeypatch.setattr("argusai.core.channels.adapters._download_attachment_async", fake_download)
+    adapter = DiscordAdapter(ChannelConfig(id="d", provider="discord", name="Discord"), {})
+    message = {
+        "id": "forward", "content": "看看这个",
+        "message_reference": {"type": 1, "message_id": "original"},
+        "message_snapshots": [{"message": {
+            "content": "第一行\n第二行",
+            "attachments": [{"filename": "image.png", "content_type": "image/png", "url": "https://cdn.example/image"}],
+        }}],
+    }
+    text, records = adapter._message_content(message)
+    result = asyncio.run(adapter._message_attachments(message))
+    assert "看看这个" in text and "第一行\n第二行" in text
+    assert "用户转发内容" in text and "original" in text
+    assert not records
+    with zipfile.ZipFile(io.BytesIO(attachment_bytes(result[0]))) as archive:
+        entry = json.loads(archive.read("manifest.json"))["files"][0]
+        assert entry["source_message_id"] == "original"
+        assert archive.read(entry["path"]) == b"snapshot-image"
+    missing, _ = adapter._message_content({"message_reference": {"type": 1}})
+    assert "未携带消息快照" in missing
+
+
+def test_slack_shared_event_content_and_files_need_no_link_fetching(monkeypatch) -> None:
+    calls = []
+
+    async def fake_download(_client, url, **kwargs):
+        calls.append(url)
+        return to_assistant_dict(attachment_from_bytes(
+            b"%PDF-shared", name=kwargs["name"], mime=kwargs["mime"],
+        ))
+
+    monkeypatch.setattr("argusai.core.channels.adapters._download_attachment_async", fake_download)
+    adapter = SlackAdapter(ChannelConfig(id="s", provider="slack", name="Slack"), {})
+    event = {"ts": "forward", "text": "共享给你", "attachments": [{
+        "from_url": "https://example.test/must-not-fetch",
+        "message": {"ts": "original", "text": "共享正文", "files": [{
+            "id": "file", "name": "shared.pdf", "mimetype": "application/pdf",
+            "url_private": "https://files.slack.test/shared.pdf",
+        }]},
+    }]}
+    text, _records = adapter._message_content(event)
+    result = asyncio.run(adapter._message_attachments(event))
+    assert "共享正文" in text and "用户转发内容" in text
+    assert calls == ["https://files.slack.test/shared.pdf"]
+    with zipfile.ZipFile(io.BytesIO(attachment_bytes(result[0]))) as archive:
+        entry = json.loads(archive.read("manifest.json"))["files"][0]
+        assert entry["source_message_id"] == "original"
+        assert archive.read(entry["path"]) == b"%PDF-shared"
+    missing, _ = adapter._message_content({"attachments": [{"from_url": "https://example.test/private"}]})
+    assert "未携带可读取的正文或文件" in missing
+    assert asyncio.run(adapter._message_attachments({"attachments": [{"from_url": "https://example.test/private"}]})) == []
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("provider", ["discord", "slack"])
+def test_channel_media_download_failures_and_byte_budget_are_visible(monkeypatch, provider) -> None:
+    from argusai.core.channels import adapters
+
+    calls = []
+
+    async def fake_download(_client, url, **kwargs):
+        calls.append(url)
+        if url.endswith("failure"):
+            raise httpx.ConnectError("private-url-must-not-leak")
+        return to_assistant_dict(attachment_from_bytes(b"1234", name=kwargs["name"], mime=kwargs["mime"]))
+
+    monkeypatch.setattr(adapters, "_download_attachment_async", fake_download)
+    monkeypatch.setattr(adapters, "FORWARD_MEDIA_MAX_BYTES", 6)
+    cls = DiscordAdapter if provider == "discord" else SlackAdapter
+    adapter = cls(ChannelConfig(id="failure", provider=provider, name=provider), {})
+    items = [{
+        "name": f"{name}.bin", "filename": f"{name}.bin",
+        "url": f"https://cdn.example/{name}" if name != "missing" else "",
+        "url_private": f"https://cdn.example/{name}" if name != "missing" else "",
+    } for name in ["first", "over-budget", "failure", "missing"]]
+    result = asyncio.run(adapter._message_attachments({
+        "attachments" if provider == "discord" else "files": items,
+    }))
+    assert attachment_bytes(result[0]) == b"1234"
+    error = result[-1]["text"]
+    assert "byte budget" in error and "ConnectError" in error and "URL" in error
+    assert "private-url-must-not-leak" not in error
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("provider", ["discord", "slack"])
+def test_channel_media_deadline_stops_remaining_downloads(monkeypatch, provider) -> None:
+    from types import SimpleNamespace
+    from argusai.core.channels import adapters
+
+    ticks = iter([0, 61])
+    monkeypatch.setattr(adapters, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    cls = DiscordAdapter if provider == "discord" else SlackAdapter
+    adapter = cls(ChannelConfig(id="deadline", provider=provider, name=provider), {})
+    result = asyncio.run(adapter._message_attachments({
+        "attachments" if provider == "discord" else "files": [{"name": "item.bin", "filename": "item.bin"}],
+    }))
+    assert len(result) == 1 and "60 second" in result[0]["text"]
+
+
+@pytest.mark.parametrize("payload", [{"ok": False}, {"ok": True, "result": {}}])
+def test_telegram_missing_file_download_data_is_visible(payload) -> None:
+    class Client:
+        def get(self, *_args, **_kwargs):
+            return _Response(payload)
+
+    adapter = TelegramAdapter(ChannelConfig(id="t", provider="telegram", name="Telegram"), {})
+    result = adapter._message_attachments(Client(), {"document": {"file_id": "file", "file_name": "item.pdf"}})
+    assert len(result) == 1
+    assert "getFile" in result[0]["text"] and "not received" in result[0]["text"]
+
+
+def test_telegram_get_file_exception_is_visible() -> None:
+    class Client:
+        def get(self, *_args, **_kwargs):
+            raise httpx.ConnectError("private-url-must-not-leak")
+
+    adapter = TelegramAdapter(ChannelConfig(id="t", provider="telegram", name="Telegram"), {})
+    result = adapter._message_attachments(Client(), {"document": {"file_id": "file", "file_name": "item.pdf"}})
+    assert "ConnectError" in result[0]["text"]
+    assert "private-url-must-not-leak" not in result[0]["text"]
 
 
 def test_feishu_dingtalk_and_wecom_normalize_inbound_files(monkeypatch) -> None:
@@ -420,6 +687,31 @@ def test_feishu_dingtalk_and_wecom_normalize_inbound_files(monkeypatch) -> None:
         "MediaId": "media-id",
         "FileName": "wecom.pdf",
     })[0]["name"] == "wecom.pdf"
+
+
+@pytest.mark.parametrize("failure", ["missing", "token", "empty", "zero"])
+def test_wecom_file_failures_do_not_drop_the_whole_event(monkeypatch, failure) -> None:
+    wecom = WebhookPlatformAdapter(
+        ChannelConfig(id="wecom-test", provider="wecom", name="WeCom"), {},
+    )
+    payload = {"MsgType": "file", "FromUserName": "user", "MsgId": "file-1", "FileName": "report.pdf"}
+    if failure != "missing":
+        payload["MediaId"] = "media-id"
+    def token():
+        if failure == "token":
+            raise RuntimeError("unavailable")
+        return "test-token"
+    monkeypatch.setattr(wecom, "_get_wecom_token", token)
+    monkeypatch.setattr(
+        "argusai.core.channels.adapters._download_attachment",
+        lambda *_args, **_kwargs: {"size": 0} if failure == "zero" else None,
+    )
+    event = wecom._event(payload)
+    assert event is not None
+    assert len(event.attachments) == 1
+    assert event.attachments[0]["type"] == "text"
+    assert "was not received" in event.attachments[0]["text"]
+    assert "report.pdf" in event.attachments[0]["text"]
 
 
 def test_generic_inbound_binary_is_materialized_without_raw_bytes(tmp_path) -> None:

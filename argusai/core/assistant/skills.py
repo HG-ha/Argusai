@@ -169,7 +169,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "cron_delete", "cron_grant_high_risk",
     ],
     "channels": [
-        "channel_list_targets", "channel_send_message", "channel_send_file",
+        "channel_list_targets", "channel_reply", "channel_send_message", "channel_send_file",
         "channel_delivery_status",
     ],
     "web": [
@@ -479,7 +479,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "mcp_marketplace_search", "mcp_marketplace_get", "mcp_server_list",
         # Paired communication targets are first-class Agent capabilities.
         # Sending remains confirmation-gated; discovery is read-only.
-        "channel_list_targets", "channel_send_message", "channel_send_file",
+        "channel_list_targets", "channel_reply", "channel_send_message", "channel_send_file",
         "channel_delivery_status",
     ],
 }
@@ -597,7 +597,7 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
         r"\b外部工具\b", r"\b外部服务\b", r"\b外部 mcp\b", r"\b接入 mcp\b",
     ],
     "channels": [
-        r"\bchannel\b", r"\btelegram\b", r"\bdiscord\b", r"\bslack\b",
+        r"\bchannel\b", r"\bqq\b", r"\btelegram\b", r"\bdiscord\b", r"\bslack\b",
         r"\bfeishu\b", r"\bdingtalk\b", r"\bwecom\b", r"\bwebhook\b",
         r"\b通讯渠道\b", r"\b通讯接入\b", r"\b飞书\b", r"\b钉钉\b",
         r"\b企业微信\b", r"\b发给我\b", r"\b发送文件\b", r"\b回传文件\b",
@@ -926,6 +926,22 @@ EXPLICIT_SCHEMAS: dict[str, dict[str, Any]] = {
     "channel_delivery_status": {
         "delivery_id": {"type": "string", "description": "Optional delivery id returned by channel_send_message or channel_send_file.", "default": ""},
         "limit": {"type": "integer", "description": "How many recent deliveries of this conversation to report.", "default": 10},
+    },
+    "channel_reply": {
+        "messages": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": 8,
+            "description": "Ordered message bubbles sent to the exact paired identity that authored this channel turn. Apply the global user-habits profile and usually prefer 2–4 natural bubbles when the reply contains distinct conversational thoughts. Call only as the final action: once accepted, channel_reply terminates the Agent turn.",
+        },
+        "pause_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2000,
+            "description": "Pause before each bubble after the first, in milliseconds. Keep it short and natural.",
+            "default": 350,
+        },
     },
     "channel_send_message": {
         "text": {"type": "string", "description": "Message to deliver to the paired channel target."},
@@ -3383,18 +3399,27 @@ def _build_system_prompt(
         "- Scheduled and durable automation is available: use the `assistant-cron` skill for recurring work, scheduled "
         "messages, patrol cadence, and segmented continuation of unfinished Agent work.",
         "- Paired communication channels are an Agent capability, not only a settings page. Use the "
-        "`channel-interaction` skill for remote UX (clickable decisions, `/live` stages, file push). Use "
-        "`channel_list_targets` to discover send-enabled Telegram, Discord, Slack, Feishu, DingTalk, WeCom, or "
-        "Webhook targets. When the user asks to generate and send a deliverable, create it in the current session "
-        "sandbox and call `channel_send_file`; use `channel_send_message` for proactive text. When the user "
+        "`channel-interaction` skill for remote UX (clickable decisions, `/live` stages, file push), and "
+        "`channel-human-reply` for natural multi-bubble direct replies. Use `channel_list_targets` to discover "
+        "send-enabled QQ, Telegram, Discord, Slack, Feishu, DingTalk, WeCom, WeChat, or Webhook targets. "
+        "For a paired-channel turn, `channel_reply` is resident. Prefer a few short, natural bubbles when an "
+        "ordinary reply contains distinct conversational thoughts. Choose boundaries by meaning and rhythm, "
+        "not punctuation. Call it once with one exact bubble per `messages` item; the runtime never splits or rewrites them. A "
+        "single cohesive paragraph or structured block may be returned normally. `channel_reply` is locked to "
+        "that exact source identity and requires no proactive-send confirmation. It is a terminal tool: call it "
+        "only after all work is complete; once accepted, the runtime ends the turn without another model pass. "
+        "The global user-habits profile "
+        "governs wording in GUI, floating-ball, and channel conversations alike. When the user asks to generate "
+        "and send a deliverable, create it in the current session sandbox and call `channel_send_file`; use "
+        "`channel_send_message` only for proactive text. When the user "
         "messaged from a paired channel, omit `identity_id` so delivery returns to that same identity "
         "(`turn_source`). From the GUI, omitting `identity_id` fans out to every send-enabled identity "
         "bound to this conversation, auto-routes to an unambiguous recently active paired chat, or uses the "
         "only paired recipient without changing its inbound binding. A recipient "
         "listed by `channel_list_targets.other_session_targets` may be named explicitly by `identity_id`; "
         "the confirmation-gated outbound send does not move that recipient's incoming conversation binding. "
-        "Never tell the user to re-pair merely because the recipient is bound elsewhere. Every outbound send "
-        "is confirmation-gated. Sends are queued, so confirm the "
+        "Never tell the user to re-pair merely because the recipient is bound elsewhere. Proactive outbound "
+        "sends are confirmation-gated; `channel_reply` is the exact-source reply exception. Sends are queued, so confirm the "
         "outcome with `channel_delivery_status` before telling the user a file arrived; a failed delivery carries the "
         "provider's own reason. Do not invent an MCP tool for channel send — these native tools are the API.",
         "- Two multi-agent mechanisms; do not mix them. Standing team (`team_list` / `team_create` / "

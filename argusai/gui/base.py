@@ -402,6 +402,9 @@ class _ApiBase:
             broker = getattr(self, "_assistant_tool_broker", None)
             if broker is not None:
                 broker.shutdown()
+            cancel_qq_logins = getattr(self, "_cancel_all_qq_logins", None)
+            if callable(cancel_qq_logins):
+                cancel_qq_logins()
             channel_runtime = getattr(self, "_channel_runtime_instance", None)
             if channel_runtime is not None:
                 channel_runtime.shutdown()

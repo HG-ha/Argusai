@@ -22,6 +22,11 @@ const showEditor = ref(false)
 const showPairing = ref(false)
 const pairing = ref(null)
 const form = reactive(emptyForm())
+const showQqLogin = ref(false)
+const qqLogin = ref(null)
+const qqStatus = ref('')
+const qqBusy = ref(false)
+let qqPollTimer = 0
 const showWechatLogin = ref(false)
 const wechatQr = ref(null)
 const wechatStatus = ref('')
@@ -31,6 +36,15 @@ let wechatPollTimer = 0
 // `yields` names the credential a step produces, so the guide can point at the
 // field further down instead of leaving the user to match console labels by eye.
 const CHANNEL_GUIDES = Object.freeze({
+  qq: {
+    url: 'https://q.qq.com/',
+    steps: [
+      { id: 'qq1' },
+      { id: 'qq2' },
+      { id: 'qq3', yields: ['app_id', 'client_secret'] },
+      { id: 'qq4' },
+    ],
+  },
   telegram: {
     url: 'https://t.me/BotFather',
     steps: [
@@ -126,6 +140,17 @@ const wechatStatusText = computed(() => {
   const key = keys[wechatStatus.value]
   return key ? t(`channels.${key}`) : ''
 })
+const qqStatusText = computed(() => {
+  const keys = {
+    starting: 'qqQrStarting',
+    wait: 'qqQrWaiting',
+    expired: 'qqQrExpired',
+    canceled: 'qqQrCanceled',
+    error: 'qqQrFailed',
+  }
+  const key = keys[qqStatus.value]
+  return key ? t(`channels.${key}`) : ''
+})
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
   if (!q) return channels.value
@@ -165,6 +190,10 @@ function emptyForm() {
     port: '',
     path: '',
     outbound_url: '',
+    card_template_id: '',
+    card_content_key: 'content',
+    stream_protocol: '',
+    extra_settings: {},
     proxy: '',
     api_base: '',
     secrets: {},
@@ -201,7 +230,7 @@ function providerLabel(providerId) {
 }
 
 function providerInitial(providerId) {
-  const initials = { telegram: 'TG', discord: 'DC', slack: 'SL', feishu: 'FS', dingtalk: 'DT', wecom: 'WW', wechat: 'WX', webhook: 'WH' }
+  const initials = { qq: 'QQ', telegram: 'TG', discord: 'DC', slack: 'SL', feishu: 'FS', dingtalk: 'DT', wecom: 'WW', wechat: 'WX', webhook: 'WH' }
   return initials[providerId] || '?'
 }
 
@@ -236,6 +265,10 @@ function openEdit(channel) {
     port: channel.settings?.port || '',
     path: channel.settings?.path || '',
     outbound_url: channel.settings?.outbound_url || '',
+    card_template_id: channel.settings?.card_template_id || '',
+    card_content_key: channel.settings?.card_content_key || 'content',
+    stream_protocol: channel.settings?.stream_protocol || '',
+    extra_settings: { ...(channel.settings || {}) },
     proxy: channel.settings?.proxy || '',
     api_base: channel.settings?.api_base || '',
     secrets: {},
@@ -254,21 +287,27 @@ async function saveChannel() {
     const secrets = Object.fromEntries(
       Object.entries(form.secrets || {}).filter(([, value]) => String(value || '').trim()),
     )
-    let settings = {}
+    let settings = { ...form.extra_settings }
     if (['webhook', 'wecom'].includes(form.provider)) {
       settings = {
+        ...settings,
         host: form.host.trim() || '127.0.0.1',
         port: Number(form.port || 0),
         path: form.path.trim(),
       }
       if (form.provider === 'webhook') {
         settings.outbound_url = form.outbound_url.trim()
+        settings.stream_protocol = form.stream_protocol
       }
     } else if (form.provider === 'telegram') {
       settings = {
+        ...settings,
         proxy: form.proxy.trim(),
         api_base: form.api_base.trim(),
       }
+    } else if (form.provider === 'dingtalk') {
+      settings.card_template_id = form.card_template_id.trim()
+      settings.card_content_key = form.card_content_key.trim() || 'content'
     }
     const result = await api.saveChannel({
       id: form.id,
@@ -356,6 +395,105 @@ async function setIdentityPermissions(identity, permissions) {
     return
   }
   await loadAll()
+}
+
+function stopQqPoll() {
+  if (!qqPollTimer) return
+  window.clearTimeout(qqPollTimer)
+  qqPollTimer = 0
+}
+
+async function openQqLogin(channel) {
+  if (!channel?.id) {
+    showToast(t('channels.qqSaveFirst'), 'error')
+    return
+  }
+  showQqLogin.value = true
+  await requestQqLogin(channel.id)
+}
+
+async function closeQqLogin() {
+  stopQqPoll()
+  const loginId = qqLogin.value?.id
+  const active = ['starting', 'wait'].includes(qqStatus.value)
+  showQqLogin.value = false
+  if (loginId && active) {
+    try {
+      await api.cancelQqLogin(loginId)
+    } catch (_) {
+      // Closing remains available if cancellation races process shutdown.
+    }
+  }
+}
+
+async function requestQqLogin(channelId) {
+  stopQqPoll()
+  if (qqLogin.value?.id && ['starting', 'wait'].includes(qqStatus.value)) {
+    try { await api.cancelQqLogin(qqLogin.value.id) } catch (_) { /* best effort */ }
+  }
+  qqBusy.value = true
+  qqLogin.value = null
+  qqStatus.value = 'starting'
+  try {
+    const result = await api.startQqLogin(channelId)
+    if (!result?.ok) throw new Error(result?.error || t('channels.qqQrFailed'))
+    qqLogin.value = {
+      id: String(result.login_id || ''),
+      channelId,
+      image: wechatQrSrc(result.image),
+      link: String(result.qr_url || ''),
+    }
+    qqStatus.value = String(result.status || 'starting')
+    qqPollTimer = window.setTimeout(pollQqLogin, 350)
+  } catch (error) {
+    qqStatus.value = 'error'
+    showToast(String(error?.message || error), 'error')
+  } finally {
+    qqBusy.value = false
+  }
+}
+
+async function pollQqLogin() {
+  const login = qqLogin.value
+  if (!login?.id || !showQqLogin.value) return
+  let result
+  try {
+    result = await api.pollQqLogin(login.id, login.channelId)
+  } catch (error) {
+    qqStatus.value = 'error'
+    showToast(String(error?.message || error), 'error')
+    return
+  }
+  if (!showQqLogin.value) return
+  if (!result?.ok) {
+    qqStatus.value = 'error'
+    showToast(result?.error || t('channels.qqQrFailed'), 'error')
+    return
+  }
+  qqLogin.value = {
+    ...login,
+    image: wechatQrSrc(result.image),
+    link: String(result.qr_url || ''),
+  }
+  qqStatus.value = String(result.status || 'starting')
+  if (qqStatus.value === 'confirmed') {
+    stopQqPoll()
+    showQqLogin.value = false
+    showToast(t('channels.qqQrDone'), 'ok')
+    await loadAll()
+    return
+  }
+  if (['expired', 'error', 'canceled'].includes(qqStatus.value)) {
+    stopQqPoll()
+    if (result.error) showToast(String(result.error), 'error')
+    return
+  }
+  qqPollTimer = window.setTimeout(pollQqLogin, 700)
+}
+
+function openQqLoginLink() {
+  const link = String(qqLogin.value?.link || '')
+  if (link) api.openExternalUrl(link)
 }
 
 function wechatQrSrc(image) {
@@ -455,7 +593,13 @@ async function deleteIdentity(identity) {
 }
 
 onMounted(loadAll)
-onUnmounted(stopWechatPoll)
+onUnmounted(() => {
+  stopWechatPoll()
+  stopQqPoll()
+  if (qqLogin.value?.id && ['starting', 'wait'].includes(qqStatus.value)) {
+    api.cancelQqLogin(qqLogin.value.id).catch(() => {})
+  }
+})
 </script>
 
 <template>
@@ -506,6 +650,7 @@ onUnmounted(stopWechatPoll)
             <div><h2>{{ selected.name }}</h2><p>{{ providerLabel(selected.provider) }} · {{ selected.transport }}</p></div>
           </div>
           <div class="detail-actions">
+            <button v-if="selected.provider === 'qq'" class="btn ghost" type="button" @click="openQqLogin(selected)">{{ t('channels.qqSignIn') }}</button>
             <button v-if="selected.provider === 'wechat'" class="btn ghost" type="button" @click="openWechatLogin(selected)">{{ t('channels.wechatSignIn') }}</button>
             <button class="btn ghost" type="button" :disabled="testing[selected.id]" @click="testChannel(selected)">{{ testing[selected.id] ? t('channels.testing') : t('channels.test') }}</button>
             <button class="btn ghost" type="button" @click="openEdit(selected)">{{ t('common.edit') }}</button>
@@ -646,8 +791,15 @@ onUnmounted(stopWechatPoll)
           <small>{{ t('channels.callbackPreviewHint') }}</small>
         </div>
         <label v-if="form.provider === 'webhook'"><span>{{ t('channels.outboundUrl') }}</span><input v-model="form.outbound_url" placeholder="https://…" /></label>
+        <label v-if="form.provider === 'webhook'"><span>{{ t('channels.streamProtocol') }}</span><select v-model="form.stream_protocol"><option value="">{{ t('channels.streamStaged') }}</option><option value="v1">ArgusAI stream v1</option></select></label>
+        <template v-if="form.provider === 'dingtalk'">
+          <label><span>{{ t('channels.cardTemplateId') }}</span><input v-model="form.card_template_id" /></label>
+          <label><span>{{ t('channels.cardContentKey') }}</span><input v-model="form.card_content_key" placeholder="content" /></label>
+          <p class="qr-notice">{{ t('channels.dingStreamHint') }}</p>
+        </template>
         <label v-if="form.provider === 'telegram'"><span>{{ t('channels.proxy') }}</span><input v-model="form.proxy" :placeholder="t('channels.proxyPlaceholder')" /></label>
         <label v-if="form.provider === 'telegram'"><span>{{ t('channels.apiBase') }}</span><input v-model="form.api_base" :placeholder="t('channels.apiBasePlaceholder')" /></label>
+        <p v-if="form.provider === 'qq'" class="qr-notice">{{ t('channels.qqSignInHint') }}</p>
         <p v-if="form.provider === 'wechat'" class="qr-notice">{{ t('channels.wechatSignInHint') }}</p>
         <div v-if="visibleSecrets.length" class="secret-grid">
           <label v-for="secret in visibleSecrets" :key="secret">
@@ -680,6 +832,29 @@ onUnmounted(stopWechatPoll)
     </WorkbenchModal>
 
     <WorkbenchModal
+      :open="showQqLogin"
+      size="sm"
+      :title="t('channels.qqQrTitle')"
+      :busy="qqBusy"
+      :close-label="t('common.close')"
+      @close="closeQqLogin"
+    >
+      <div class="qr-card">
+        <p>{{ t('channels.qqQrHint') }}</p>
+        <div class="qr-frame" :class="{ stale: ['expired', 'error', 'canceled'].includes(qqStatus) }">
+          <img v-if="qqLogin?.image" :src="qqLogin.image" :alt="t('channels.qqQrTitle')" />
+          <span v-else>{{ qqBusy || qqStatus === 'starting' ? t('common.loading') : t('channels.qqQrFailed') }}</span>
+        </div>
+        <small>{{ qqStatusText }}</small>
+        <button v-if="qqLogin?.link" class="qr-browser-link" type="button" @click="openQqLoginLink">{{ t('channels.qqQrOpenBrowser') }}</button>
+      </div>
+      <template #footer>
+        <button class="btn ghost" type="button" :disabled="qqBusy" @click="requestQqLogin(selected?.id)">{{ t('channels.qqQrRefresh') }}</button>
+        <button class="btn primary" type="button" @click="closeQqLogin">{{ t('common.close') }}</button>
+      </template>
+    </WorkbenchModal>
+
+    <WorkbenchModal
       :open="showWechatLogin"
       size="sm"
       :title="t('channels.wechatQrTitle')"
@@ -707,7 +882,7 @@ onUnmounted(stopWechatPoll)
 <style scoped>
 .channel-page{height:100%;min-height:0;display:flex;flex-direction:column;padding:18px 20px;gap:14px;overflow:hidden;background:transparent}.channel-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex:none}.channel-kicker{margin:0 0 7px;font:700 11px/1.2 var(--font-mono);letter-spacing:.14em;color:var(--accent);text-transform:uppercase}.channel-head h1{margin:0;font-size:20px;line-height:1.2;letter-spacing:-.015em}.channel-head p:not(.channel-kicker){margin:5px 0 0;color:var(--text-secondary);font-size:12px}.channel-head-actions{display:flex;align-items:center;gap:8px}.inventory-chip{padding:7px 10px;border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);font-size:12px;background:var(--surface)}
 .channel-shell{display:grid;grid-template-columns:minmax(240px,290px) minmax(0,1fr);min-height:0;flex:1;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:none}.channel-master{min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:color-mix(in srgb,var(--surface) 95%,var(--page-bg))}.channel-search{margin:14px;display:flex;align-items:center;gap:8px;padding:0 10px;height:36px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg)}.channel-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}.channel-search svg{width:15px;fill:none;stroke:var(--text-tertiary);stroke-width:2}.channel-search input{min-width:0;flex:1;border:0;outline:0;background:none;color:var(--text-primary)}.channel-list{min-height:0;overflow:auto;padding:0 8px 12px}.channel-row{width:100%;display:grid;grid-template-columns:36px minmax(0,1fr) 10px;align-items:center;gap:10px;padding:10px;border:0;border-radius:9px;background:transparent;color:inherit;text-align:left;cursor:pointer}.channel-row:hover{background:var(--surface-hover)}.channel-row.active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));box-shadow:inset 2px 0 var(--accent)}
-.provider-mark{width:34px;height:34px;flex:0 0 34px;flex-shrink:0;display:grid;place-items:center;border-radius:9px;color:white;background:#53657d;font:750 10px/1 var(--font-mono);letter-spacing:.02em}.provider-mark.telegram{background:#168bd2}.provider-mark.discord{background:#5865f2}.provider-mark.slack{background:#6e3a73}.provider-mark.feishu{background:#3370ff}.provider-mark.dingtalk{background:#1888ff}.provider-mark.wecom{background:#1aad19}.provider-mark.wechat{background:#07c160}.provider-mark.webhook{background:#6d7480}.provider-mark.large{width:44px;height:44px;flex:0 0 44px;flex-shrink:0;border-radius:11px;font-size:12px}.channel-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.channel-copy strong,.channel-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.channel-copy strong{font-size:13px}.channel-copy small{color:var(--text-tertiary);font-size:11px}.status-dot{width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--text-tertiary);opacity:.45}.status-dot.live{background:#2ba36a;opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,#2ba36a 14%,transparent)}
+.provider-mark{width:34px;height:34px;flex:0 0 34px;flex-shrink:0;display:grid;place-items:center;border-radius:9px;color:white;background:#53657d;font:750 10px/1 var(--font-mono);letter-spacing:.02em}.provider-mark.qq{background:#12b7f5}.provider-mark.telegram{background:#168bd2}.provider-mark.discord{background:#5865f2}.provider-mark.slack{background:#6e3a73}.provider-mark.feishu{background:#3370ff}.provider-mark.dingtalk{background:#1888ff}.provider-mark.wecom{background:#1aad19}.provider-mark.wechat{background:#07c160}.provider-mark.webhook{background:#6d7480}.provider-mark.large{width:44px;height:44px;flex:0 0 44px;flex-shrink:0;border-radius:11px;font-size:12px}.channel-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.channel-copy strong,.channel-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.channel-copy strong{font-size:13px}.channel-copy small{color:var(--text-tertiary);font-size:11px}.status-dot{width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--text-tertiary);opacity:.45}.status-dot.live{background:#2ba36a;opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,#2ba36a 14%,transparent)}
 .channel-detail{min-width:0;min-height:0;overflow:auto;padding:22px 24px}.channel-detail-head{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:14px}.channel-title{min-width:0;flex:1 1 220px;display:flex;align-items:center;gap:12px}.channel-title>div{min-width:0}.channel-title h2{margin:0;font-size:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.channel-title p{margin:5px 0 0;color:var(--text-secondary);font:11px/1.35 var(--font-mono);overflow-wrap:anywhere}.detail-actions{flex:0 0 auto;display:flex;align-items:center;flex-wrap:wrap;gap:8px}.delivery-route{margin:20px 0;display:flex;align-items:center;gap:8px;overflow:auto;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--page-bg)}.delivery-route span{flex:none;padding:6px 9px;border:1px solid var(--border);border-radius:7px;background:var(--surface);font-size:11px}.delivery-route span.accent{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--accent)}.delivery-route b{color:var(--text-tertiary);font-weight:400}
 .detail-section{margin-top:14px;border:1px solid var(--border);border-radius:11px;overflow:hidden}.section-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border-bottom:1px solid var(--border)}.section-head h3{margin:0;font-size:13px}.section-head p{margin:4px 0 0;color:var(--text-tertiary);font-size:11px}.connection-badge{padding:5px 8px;border-radius:99px;background:var(--page-bg);color:var(--text-tertiary);font-size:11px}.connection-badge.live{background:color-mix(in srgb,#2ba36a 12%,var(--surface));color:#21885a}.fact-rows{margin:0}.fact-rows>div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:14px;padding:10px 16px;border-top:1px solid var(--border-subtle)}.fact-rows>div:first-child{border-top:0}.fact-rows dt{color:var(--text-secondary);font-size:12px}.fact-rows dd{margin:0;min-width:0;font-size:12px}.fact-rows code{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:11px/1.4 var(--font-mono)}.error-text{color:var(--danger)}
 .identity-list{padding:4px 10px}.identity-row{display:grid;grid-template-columns:34px minmax(110px,1fr) minmax(135px,200px) minmax(135px,200px) 32px;align-items:center;gap:10px;padding:9px 6px;border-top:1px solid var(--border-subtle)}.identity-row:first-child{border-top:0}.identity-avatar{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--page-bg);font-weight:700}.identity-copy{min-width:0;display:flex;flex-direction:column;gap:2px}.identity-copy strong,.identity-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.identity-copy strong{font-size:12px}.identity-copy small{color:var(--text-tertiary);font:10px/1.2 var(--font-mono)}.identity-empty{padding:24px;text-align:center;color:var(--text-tertiary);font-size:12px}.session-select,.permission-select{min-width:0}.icon-btn{width:30px;height:30px;display:grid;place-items:center;border:0;border-radius:7px;background:transparent;color:var(--text-tertiary);cursor:pointer}.icon-btn:hover{background:var(--surface-hover)}.icon-btn.danger:hover{color:var(--danger)}.icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8}
@@ -719,7 +894,7 @@ onUnmounted(stopWechatPoll)
 .guide-body li p em{display:block;margin-top:4px;color:var(--text-tertiary);font-size:10px;font-style:normal}.guide-body li p em code{margin-right:4px;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--accent) 10%,var(--surface));color:var(--accent);font:10px/1.5 var(--font-mono)}.guide-next-eyebrow{margin:4px 0 0;padding-top:10px;border-top:1px solid var(--border-subtle);color:var(--text-tertiary);font:700 9px/1.2 var(--font-mono);letter-spacing:.1em}.guide-body ol.guide-next{padding-top:8px}.guide-body ol.guide-next li>span{background:var(--page-bg);color:var(--text-tertiary)}
 .callback-preview{display:flex;flex-direction:column;gap:5px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:var(--page-bg)}.callback-preview strong{font-size:11px}.callback-preview code{overflow:auto;color:var(--accent);font:11px/1.5 var(--font-mono);white-space:nowrap}.callback-preview small{color:var(--text-tertiary);font-size:10px;line-height:1.45}
 .qr-notice{margin:0;padding:10px 12px;border:1px solid color-mix(in srgb,var(--accent) 25%,var(--border));border-radius:9px;background:color-mix(in srgb,var(--accent) 4%,var(--surface));color:var(--text-secondary);font-size:11px;line-height:1.55}
-.qr-card{text-align:center;padding:8px 16px 18px}.qr-card p{margin:0 0 16px;color:var(--text-secondary);font-size:13px}.qr-frame{width:200px;height:200px;display:grid;place-items:center;margin:0 auto;padding:10px;box-sizing:border-box;border:1px solid var(--border);border-radius:12px;background:white}.qr-frame img{width:100%;height:100%;object-fit:contain}.qr-frame span{color:var(--text-tertiary);font-size:11px}.qr-frame.stale{opacity:.35}.qr-card small{display:block;margin-top:14px;color:var(--text-tertiary);font-size:11px}.qr-link{display:block;margin-top:10px;padding:8px 10px;border-radius:7px;background:var(--page-bg);color:var(--text-secondary);font:10px/1.5 var(--font-mono);word-break:break-all;user-select:all}
+.qr-card{text-align:center;padding:8px 16px 18px}.qr-card p{margin:0 0 16px;color:var(--text-secondary);font-size:13px}.qr-frame{width:200px;height:200px;display:grid;place-items:center;margin:0 auto;padding:10px;box-sizing:border-box;border:1px solid var(--border);border-radius:12px;background:white}.qr-frame img{width:100%;height:100%;object-fit:contain}.qr-frame span{color:var(--text-tertiary);font-size:11px}.qr-frame.stale{opacity:.35}.qr-card small{display:block;margin-top:14px;color:var(--text-tertiary);font-size:11px}.qr-link{display:block;margin-top:10px;padding:8px 10px;border-radius:7px;background:var(--page-bg);color:var(--text-secondary);font:10px/1.5 var(--font-mono);word-break:break-all;user-select:all}.qr-browser-link{display:inline-flex;margin-top:12px;padding:7px 10px;border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border));border-radius:7px;background:var(--surface);color:var(--accent);font-size:11px;cursor:pointer}.qr-browser-link:hover{background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
 .pairing-card{text-align:center;padding:8px 16px 20px}.pairing-card p{margin:0 0 18px;color:var(--text-secondary);font-size:13px}.pair-code{font:750 36px/1 var(--font-mono);letter-spacing:.18em;color:var(--accent)}.pairing-card code{display:block;width:max-content;margin:16px auto 10px;padding:8px 11px;border-radius:7px;background:var(--page-bg);font:12px/1.2 var(--font-mono)}.pairing-card small{color:var(--text-tertiary)}
 @media(max-width:1280px){.provider-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.identity-row{grid-template-columns:34px minmax(0,1fr) 32px}.session-select,.permission-select{grid-column:2/4}}
 @media(max-width:820px){.channel-page{padding:18px}.channel-head{align-items:flex-start;flex-direction:column}.channel-head-actions{width:100%;flex-wrap:wrap}.channel-shell{grid-template-columns:1fr;overflow:auto}.channel-master{max-height:260px;border-right:0;border-bottom:1px solid var(--border)}.channel-detail{overflow:visible}.form-grid.two,.secret-grid{grid-template-columns:1fr}.fact-rows>div{grid-template-columns:1fr;gap:4px}.guide-footer{align-items:flex-start;flex-direction:column}}

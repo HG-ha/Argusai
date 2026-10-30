@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
+
+import pytest
 
 from argusai.gui.channels import ChannelsMixin
 
@@ -157,6 +160,131 @@ def test_a_delivered_turn_is_marked_so_trailing_filler_can_be_dropped() -> None:
 
     assert api.gateway.texts == ["step one done"]
     assert result["channel_live_delivered"] is True
+
+
+def test_qq_live_turn_uses_native_replace_stream_and_done() -> None:
+    frames = []
+
+    class NativeRuntime:
+        def stream_live_update(
+            self,
+            identity_id,
+            *,
+            source_message_id,
+            text,
+            final=False,
+        ):
+            frames.append({
+                "identity_id": identity_id,
+                "source_message_id": source_message_id,
+                "text": text,
+                "final": final,
+            })
+            return True
+
+    def script(_params, on_delta, _on_block, on_segment):
+        on_delta("正在分析")
+        on_segment(1)
+        on_delta("，已经完成。")
+        return {"ok": True, "text": "正在分析，已经完成。", "blocks": []}
+
+    api = _Api(script)
+    api._channel_runtime_instance = NativeRuntime()
+    params = _params()
+    params["channel"] = {
+        "provider": "qq",
+        "message_id": "qq-message-1",
+    }
+
+    result = api._run_channel_assistant_chat(params)
+
+    assert frames[0]["text"] == "正在分析"
+    assert frames[-1] == {
+        "identity_id": "identity-1",
+        "source_message_id": "qq-message-1",
+        "text": "正在分析，已经完成。",
+        "final": True,
+    }
+    assert api.gateway.texts == []
+    assert result["text"] == ""
+    assert result["channel_live_delivered"] is True
+
+
+def test_progress_before_terminal_reply_can_finish_without_gateway_filtering() -> None:
+    frames = []
+    class Runtime:
+        def stream_capability(self, identity_id):
+            return "native"
+        def stream_live_update(self, identity_id, **frame):
+            frames.append(frame)
+            return True
+    def script(params, on_delta, on_block, on_segment):
+        on_delta("正在检查配置。")
+        return {"ok": True, "text": "", "blocks": []}
+    api = _Api(script)
+    api._channel_runtime_instance = Runtime()
+    api._run_channel_assistant_chat({**_params(), "channel": {"provider": "qq", "message_id": "source"}})
+    assert frames[-1]["final"] is True
+    assert all(frame["text"] == "正在检查配置。" for frame in frames)
+
+
+@pytest.mark.parametrize("mode", ["native", "edit", "webhook_v1"])
+def test_other_provider_modes_use_stream_capability(mode) -> None:
+    frames = []
+    class Runtime:
+        def stream_capability(self, identity_id):
+            return mode
+        def stream_live_update(self, identity_id, **frame):
+            frames.append(frame)
+            return True
+    def script(params, on_delta, on_block, on_segment):
+        on_delta("first")
+        on_segment(1)
+        on_delta(" second")
+        return {"ok": True, "text": "first second", "blocks": []}
+    api = _Api(script)
+    api._channel_runtime_instance = Runtime()
+    params = {**_params(), "channel": {"provider": "slack", "message_id": "source"}}
+    result = api._run_channel_assistant_chat(params)
+    assert frames[-1]["text"] == "first second"
+    assert frames[-1]["final"] is True
+    assert api.gateway.texts == []
+    assert result["text"] == ""
+
+
+def test_stream_final_failure_retains_answer_when_outbox_is_offline() -> None:
+    class Runtime:
+        def stream_capability(self, identity_id):
+            return "native"
+        def stream_live_update(self, identity_id, **frame):
+            return not frame["final"]
+    def script(params, on_delta, on_block, on_segment):
+        on_delta("complete answer")
+        return {"ok": True, "text": "complete answer", "blocks": []}
+    api = _Api(script, _Gateway(fail=True))
+    api._channel_runtime_instance = Runtime()
+    params = {**_params(), "channel": {"provider": "slack", "message_id": "source"}}
+    result = api._run_channel_assistant_chat(params)
+    assert result["text"] == "complete answer"
+    assert result["channel_live_delivered"] is False
+
+
+def test_cancelled_turn_finalizes_remote_stream() -> None:
+    frames = []
+    class Runtime:
+        def stream_capability(self, identity_id):
+            return "native"
+        def stream_live_update(self, identity_id, **frame):
+            frames.append(frame)
+            return True
+    def script(params, on_delta, on_block, on_segment):
+        on_delta("partial")
+        raise RuntimeError("cancelled")
+    api = _Api(script)
+    api._channel_runtime_instance = Runtime()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        api._run_channel_assistant_chat({**_params(), "channel": {"message_id": "source"}})
+    assert frames[-1]["final"] is True
 
 
 def test_wait_decision_card_is_force_pushed_to_the_channel() -> None:

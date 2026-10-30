@@ -224,7 +224,7 @@ uv run argusai ai list
 
 | 命令组 | 支持的管理操作 |
 | --- | --- |
-| `channels` | add、enable、disable、remove、test、pair、identities、bind、grant、login-wechat、serve |
+| `channels` | add、enable、disable、remove、test、pair、identities、bind、grant、login-qq、login-wechat、serve |
 | `mcp` | add、enable、disable、remove、test、probe |
 | `agent` | add、enable、disable、remove、test |
 | `ai` | providers、add、enable、disable、remove、activate、test |

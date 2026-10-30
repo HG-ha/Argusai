@@ -183,6 +183,97 @@ def test_the_bots_own_echo_is_not_replayed_as_user_input() -> None:
     assert received == []
 
 
+def test_many_wechat_files_are_saved_in_one_readable_archive(tmp_path) -> None:
+    import zipfile
+    from argusai.core.assistant.attachments import _materialize_binary_attachments, _sanitize_attachments
+
+    adapter = _adapter()
+    received = []
+    adapter._on_event = received.append
+    key = bytes(range(16))
+    payloads = {str(index): f"file-{index}".encode() for index in range(12)}
+    def respond(request):
+        value = payloads[request.url.params["encrypted_query_param"]]
+        return httpx.Response(200, content=ilink_encrypt(value, key))
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        adapter._emit_message(client, {
+            "from_user_id": "user", "message_id": "many-media",
+            "item_list": [{"type": 4, "file_item": {
+                "file_name": "same.bin", "media": {
+                    "encrypt_query_param": index,
+                    "aes_key": base64.b64encode(key).decode(),
+                },
+            }} for index in payloads],
+        })
+    event = received[0]
+    assert "manifest.json" in event.text
+    assert len(event.attachments) == 1
+    stored, _ = _materialize_binary_attachments(_sanitize_attachments(list(event.attachments)), tmp_path)
+    with zipfile.ZipFile(stored[0]["sandbox_path"]) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert len(manifest["files"]) == 12
+        assert [archive.read(item["path"]) for item in manifest["files"]] == list(payloads.values())
+
+
+@pytest.mark.parametrize("limit_kind", ["count", "bytes", "time"])
+def test_wechat_media_limits_report_omitted_files(monkeypatch, limit_kind) -> None:
+    import zipfile
+    import io
+    from argusai.core.channels import adapters
+    from argusai.core.channels.media import attachment_from_bytes, to_assistant_dict
+
+    adapter = _adapter()
+    received = []
+    calls = []
+    clock = {"now": 0.0}
+    adapter._on_event = received.append
+    monkeypatch.setattr(adapters.time, "monotonic", lambda: clock["now"])
+    if limit_kind == "bytes":
+        monkeypatch.setattr(adapters, "FORWARD_MEDIA_MAX_BYTES", 8)
+
+    def download(_client, _item, _kind, name, *, timeout, max_bytes):
+        calls.append((timeout, max_bytes))
+        if limit_kind == "time":
+            clock["now"] += 61
+        return to_assistant_dict(attachment_from_bytes(b"data", name=name))
+    monkeypatch.setattr(adapter, "_download_media", download)
+    count = 65 if limit_kind == "count" else 3
+    adapter._emit_message(None, {
+        "from_user_id": "user", "message_id": "limited",
+        "item_list": [{"type": 4, "file_item": {"file_name": f"{i}.bin"}} for i in range(count)],
+    })
+    assert len(calls) == {"count": 64, "bytes": 2, "time": 1}[limit_kind]
+    assert all(0 < timeout <= 60 for timeout, _size in calls)
+    assert "未留存" in received[0].text
+    if limit_kind == "count":
+        payload = base64.b64decode(received[0].attachments[0]["data_base64"])
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            assert len(json.loads(archive.read("manifest.json"))["files"]) == 64
+    else:
+        assert len(received[0].attachments) == len(calls)
+
+
+def test_wechat_empty_media_remains_a_visible_failure() -> None:
+    adapter = _adapter()
+    received = []
+    adapter._on_event = received.append
+    key = bytes(range(16))
+    with httpx.Client(transport=httpx.MockTransport(
+        lambda _request: httpx.Response(200, content=ilink_encrypt(b"", key)),
+    )) as client:
+        adapter._emit_message(client, {
+            "from_user_id": "user", "message_id": "empty-media",
+            "item_list": [{"type": 4, "file_item": {
+                "file_name": "empty.bin", "media": {
+                    "encrypt_query_param": "empty", "aes_key": base64.b64encode(key).decode(),
+                },
+            }}],
+        })
+    assert len(received) == 1
+    assert "下载失败" in received[0].text
+    assert "empty media" in received[0].attachments[0]["text"]
+
+
 def test_group_messages_are_not_accepted() -> None:
     adapter = _adapter()
     received: list[ChannelEvent] = []

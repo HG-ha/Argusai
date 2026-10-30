@@ -53,7 +53,11 @@ ArgusAI 工具可通过绑定会话的回环 MCP broker 提供给外部 Agent，
 
 ## 配对通信渠道
 
-当前提供商包括 Telegram、Discord、Slack、飞书、钉钉、企业微信、微信和签名 Webhook。各提供商有各自的机器人、应用或登录配置，详细字段以 **通讯接入** 面板和 `argusai channels providers` 为准。
+当前提供商包括 QQ、Telegram、Discord、Slack、飞书、钉钉、企业微信、微信和签名 Webhook。各提供商有各自的机器人、应用或登录配置，详细字段以 **通讯接入** 面板和 `argusai channels providers` 为准。
+
+QQ 使用腾讯官方 [`qqbot-agent-sdk`](https://github.com/tencent-connect/qqbot-agent-sdk) 建立 WebSocket 长连接，不需要公网回调地址。新建并保存 QQ 渠道后，可在详情页点击 **QQ 扫码绑定**，用手机 QQ 完成官方 Onboard；返回的 App ID 与 Client Secret 会直接写入本机加密凭据存储，不经过 Web 界面。已有机器人也可以手动填写这两个字段。命令行使用 `argusai channels login-qq <渠道 ID>`，终端会显示二维码和可打开的扫码链接。
+
+QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器与运行时两层都会被忽略。文字按 QQ 限制分段，图片、语音、视频和文件通过官方媒体接口发送。扫码完成的是机器人凭据绑定，远端账号仍需发送一次性 `/pair` 口令，才能访问指定的 Agent 对话。
 
 ### 一次完整配对
 
@@ -71,6 +75,56 @@ ArgusAI 工具可通过绑定会话的回环 MCP broker 提供给外部 Agent，
 ### 渠道交互和文件
 
 渠道可展示阶段消息与可投影的决策卡，最终文本不一定包含全部中间细节。收到“执行完成”时，应查看关联的报告与运行记录，而不只依赖一条摘要。
+
+QQ、飞书合并转发中的长记录会作为文本附件保存到会话沙盒，Agent 可检索或分段读取。图片、音视频和文件保存在媒体 ZIP 中，清单 `manifest.json` 记录文件名、类型、大小与 SHA-256；Agent 可用 Python 工具按需提取，再通过图片或文件工具读取。文件留存在本机会话中，后续查看不依赖平台下载链接继续有效。
+
+单次转发的文本附件上限为 4 MiB；媒体最多尝试下载 64 个文件，总内容约 32 MiB，另受单文件大小、平台权限和下载时限约束。超过限额或下载失败会标明记录不完整，不能将已读取部分视为全部材料。
+
+Discord 可读取事件自带的转发快照，Slack 可读取事件内携带的共享正文和文件；仅有分享链接时，不代表已经获取了原消息。Telegram 普通转发沿用单条消息接收，相册中的各条消息分别进入会话。飞书普通富文本、钉钉、微信等渠道的多文件输入超过 8 个时也会打包留存；普通图片仍可直接查看，文件可从会话附件中读取。Webhook 按标准附件协议接收，单次超过 8 个附件或校验失败会返回 HTTP 400，发送端应拆分请求。
+
+在配对的私聊中发送 `/live on`，开启当前绑定对话的过程输出；`/live off` 关闭。桌面宿主和 `argusai serve run` 使用相同的发送路径。过程文字按渠道能力展示：
+
+| 渠道 | 开启 `/live` 后的文字展示 | 配置要求 |
+| --- | --- | --- |
+| QQ | C2C 原生 Markdown 流，结束时发送完成帧 | 机器人需有对应消息权限；权限不足时使用普通消息 |
+| Telegram | `sendMessageDraft` 临时预览，结束后用正式消息保存完整内容 | 支持草稿流的 Bot API，私聊；预览只展示当前长度窗口，完整内容在结束时发送 |
+| Slack | `chat.startStream`、`chat.appendStream`、`chat.stopStream` | `chat:write`；在当前消息的话题中回复，达到单流时限或长度上限时接续新流 |
+| 飞书 | CardKit 2.0 卡片正文增量更新，结束时关闭流式模式 | 应用需有消息发送和 CardKit 创建、更新权限；无需额外安装新版 SDK |
+| 钉钉 | AI 卡片全量更新正文，结束时设置 `isFinalize` | 在渠道编辑窗口填写已发布的流式 AI 卡片模板 ID、正文变量名，并开启卡片创建、投放与更新权限 |
+| Discord | 反复编辑机器人发出的同一条消息 | 机器人可发送、编辑自己的消息；超过消息长度上限时接续下一条 |
+| 企业微信应用消息、微信 iLink | 阶段消息与最终消息 | 当前接入方式不提供通用文字流接口；阶段消息保留正常投递机制 |
+| 通用 Webhook | 默认发送阶段消息；可选择 ArgusAI stream v1 实现原位更新 | 接收方需实现下述流式协议后，再在渠道编辑窗口启用 |
+
+流式更新会合并短时间内的变化，结束时强制提交最后一段。接口返回错误、权限不足或流式收尾失败时，完整文字仍通过普通投递路径发送；已经出现的部分预览可能保留。对话中的确认卡和文件继续使用各渠道现有的卡片、附件接口。
+
+钉钉的正文变量名默认是 `content`，应与自己的模板一致。CLI 创建渠道时也可传入 `--setting card_template_id=<模板ID> --setting card_content_key=content`。未填写模板 ID 时使用阶段消息。这里的流式 AI 卡片与用于接收事件的 DingTalk Stream 长连接分别配置。
+
+通用 Webhook 在界面选择 **ArgusAI stream v1**，或配置 `--setting stream_protocol=v1`。发送地址接收 JSON POST：
+
+```json
+{
+  "type": "stream_delta",
+  "protocol": "argusai.stream.v1",
+  "stream_id": "同一回复中保持不变的标识",
+  "sequence": 2,
+  "chat_id": "目标聊天标识",
+  "thread_id": "目标话题标识",
+  "reply_to_message_id": "原始消息标识",
+  "text": "截至本次更新的完整文字",
+  "mode": "replace",
+  "final": false
+}
+```
+
+事件依次为 `stream_start`、零次或多次 `stream_delta`、`stream_end`。接收方按聊天、话题和 `stream_id` 定位显示位置，按递增的 `sequence` 忽略旧帧，并用 `text` 替换正文。一次完成的回复可能直接收到 `stream_end`；此时创建并保存该条消息。结束事件的 `final` 为 `true`。接收成功返回 HTTP 2xx；流式接口返回错误时，发送端会使用原有普通消息协议补发完整答案，因此接收方应同时兼容普通消息。
+
+平台协议依据：[Telegram 草稿流](https://core.telegram.org/bots/api#sendmessagedraft)、[Slack 流式消息](https://docs.slack.dev/messaging/sending-and-scheduling-messages/#text-streaming-in-messages)、[飞书流式更新文本](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/cardkit-v1/card-element/content)、[钉钉官方卡片 SDK](https://github.com/open-dingtalk/dingtalk-stream-sdk-python/blob/main/dingtalk_stream/card_replier.py)、[Discord 编辑消息](https://docs.discord.com/developers/resources/message#edit-message)。
+
+渠道发来的普通问题由 Agent 使用 `channel_reply` 回复。一次工具调用可按顺序发送多句话，形成少量独立气泡，并在气泡之间保留短暂停顿；目标固定为发起当前轮次的那个配对身份，不会广播到同会话的其他渠道。各渠道仍按自身能力渲染 Markdown、卡片、分段和附件。回复被投递队列接受后，Agent 本轮立即结束，不会再调用模型生成发送回执或重复总结。
+
+气泡边界由 Agent 决定：`channel_reply` 的 `messages` 每项就是一个完整气泡，工具不会按标点拆句。工具参数完整生成后，文字进入可靠投递队列；开启过程输出时，各气泡可通过平台流式接口逐步显示。这是已完成文字的流式投递，不是工具参数生成时的逐 token 推送。
+
+表达方式先读取设置中的全局 **用户习惯**。说话风格、输出偏好、避免事项和备注同时作用于完整 Agent 对话、悬浮球和通讯渠道；渠道拟人回复 Skill 只负责把同一份习惯落实为自然措辞和合理气泡边界，不会另建一套渠道人格，也不会改写技术事实。思考开关、思考强度、模型选择和自动审批仍是当前对话的会话级状态，一个对话中的切换不会改变其他对话。
 
 文件回传使用本机已有的会话产物和渠道投递机制。发送前核对目标身份、文件内容与脱敏要求；“已排队”不等于“已成功送达”。
 
@@ -105,6 +159,7 @@ uv run argusai serve install --dry-run
 - [本地 Agent 桥接](../argusai/gui/agent_runtimes.py)
 - [通信渠道模型](../argusai/core/channels/models.py)
 - [渠道交互工作流](../argusai/skills/channel-interaction/SKILL.md)
+- [渠道拟人回复工作流](../argusai/skills/channel-human-reply/SKILL.md)
 - [无界面宿主 CLI](../argusai/cli/commands/serve.py)
 
 继续阅读：[CLI 参考](CLI-Reference.md) · [数据与安全](Data-and-Safety.md) · [故障排查](Troubleshooting.md)

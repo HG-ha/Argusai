@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.2-0967a6?style=flat-square" alt="Version 0.1.2">
+  <img src="https://img.shields.io/badge/version-0.1.3-0967a6?style=flat-square" alt="Version 0.1.3">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows, macOS and Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="License GPL-3.0-only"></a>
@@ -76,7 +76,8 @@ The project is intended for internal security teams, application security engine
 </td>
 <td width="50%" valign="top">
 <h3>Tools and extensions</h3>
-<p>Python Checks, Agent Tools, Markdown Skills, MCP, local ACP agents, paired messaging channels and desktop automation.</p>
+<p>Python Checks, Agent Tools, Markdown Skills, MCP, local ACP agents, paired QQ/Feishu/Telegram and other messaging channels, and desktop automation. QQ supports the official QR binding flow as well as manual App ID / Client Secret setup.</p>
+<p>Channels support platform-adapted live stages and multi-bubble <code>channel_reply</code> responses. The same global user-habits profile also governs desktop chats and the floating entry.</p>
 <p>Orchestrate external scanners and specialist workflows for cloud, IaC, SBOM, offline traffic and firmware.</p>
 <a href="wiki/Integrations.md">Integrations and tool dependencies →</a>
 </td>
@@ -162,7 +163,7 @@ Alerts and remote state come from materials supplied by the user or configured t
 
 ## Quick start
 
-The current version is `0.1.2`. Source execution needs Python 3.12+, uv, Node.js 18+ and npm. From the repository root:
+The current version is `0.1.3`. Source execution needs Python 3.12+, uv, Node.js 18+ and npm. From the repository root:
 
 ```sh
 uv sync --locked

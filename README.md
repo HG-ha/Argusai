@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.2-0967a6?style=flat-square" alt="版本 0.1.2">
+  <img src="https://img.shields.io/badge/version-0.1.3-0967a6?style=flat-square" alt="版本 0.1.3">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows、macOS 与 Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="许可证 GPL-3.0-only"></a>
@@ -76,7 +76,8 @@ ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全
 </td>
 <td width="50%" valign="top">
 <h3>工具生态与开放扩展</h3>
-<p>Python Check、Agent Tool、Markdown Skill、MCP、本地 ACP Agent、配对通信渠道，以及桌面自动化。</p>
+<p>Python Check、Agent Tool、Markdown Skill、MCP、本地 ACP Agent、QQ/飞书/Telegram 等配对通信渠道，以及桌面自动化。QQ 支持官方扫码绑定，也保留 App ID / Client Secret 手动配置。</p>
+<p>渠道回复支持平台适配的流式阶段消息和 <code>channel_reply</code> 多气泡回复；表达遵循全局用户习惯，软件内对话与悬浮球同样生效。</p>
 <p>编排外部扫描器，接入云、IaC、SBOM、离线流量、固件等专项工作流。</p>
 <a href="wiki/Integrations.md">扩展、渠道与工具依赖 →</a>
 </td>
@@ -162,7 +163,7 @@ flowchart TB
 
 ## 快速开始
 
-当前版本为 `0.1.2`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
+当前版本为 `0.1.3`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
 
 ```sh
 uv sync --locked

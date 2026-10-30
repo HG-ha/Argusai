@@ -21,6 +21,7 @@ DEFAULT_TOOL_ALWAYS_ALLOW: list[str] = [
     "list_assistant_skills",
     "channel_list_targets",
     "channel_delivery_status",
+    "channel_reply",
 ]
 
 TOOL_POLICY_EXTENSION = "extension"
@@ -80,6 +81,7 @@ _TIER_BY_TOOL: dict[str, str] = {
     "raw_http_send": TOOL_POLICY_DESTRUCTIVE,
     "channel_list_targets": TOOL_POLICY_EXTENSION,
     "channel_delivery_status": TOOL_POLICY_EXTENSION,
+    "channel_reply": TOOL_POLICY_EXTENSION,
     "channel_send_message": TOOL_POLICY_WRITE,
     "channel_send_file": TOOL_POLICY_WRITE,
 }

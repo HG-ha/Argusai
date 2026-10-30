@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from argusai.core.assistant.streaming import _CONFIRM_TOOLS, _WRITE_TOOLS
+from argusai.core.assistant.streaming import _CONFIRM_TOOLS, _WRITE_TOOLS, tool_kind
 from argusai.core.assistant.tools import build_tool_registry
 from argusai.core.channels.cards import card_text
 from argusai.core.channels.gateway import ChannelGateway
@@ -14,6 +14,7 @@ from argusai.core.channels.store import ChannelStore
 from argusai.core.tools.channel_tools import (
     channel_delivery_status,
     channel_list_targets,
+    channel_reply,
     channel_send_file,
     channel_send_message,
 )
@@ -50,6 +51,25 @@ def _paired(tmp_path):
         ["chat", "status", "send"],
     )
     return store, channel, identity
+
+
+def test_runtime_stream_bridge_routes_paired_thread_and_checks_send_permission(tmp_path):
+    store, channel, identity = _paired(tmp_path)
+    runtime = ChannelRuntimeManager(store, _gateway(store))
+    frames = []
+    runtime._adapters[channel.id] = SimpleNamespace(
+        stream_mode=lambda: "webhook_v1",
+        stream_update=lambda **frame: frames.append(frame) or True,
+    )
+    assert runtime.stream_capability(identity.id) == "webhook_v1"
+    assert runtime.stream_live_update(identity.id, source_message_id="source", text="answer", final=True)
+    assert frames == [{"chat_id": identity.external_chat_id,
+                       "source_message_id": "source", "thread_id": identity.external_thread_id,
+                       "text": "answer", "final": True}]
+    store.set_identity_permissions(identity.id, ["chat"])
+    assert runtime.stream_capability(identity.id) == "staged"
+    assert runtime.stream_live_update(identity.id, source_message_id="source2", text="blocked") is False
+    assert len(frames) == 1
 
 
 def test_outbox_is_identity_bound_leased_and_retried(tmp_path) -> None:
@@ -718,6 +738,149 @@ def test_channel_send_prefers_turn_source_over_fanout(tmp_path) -> None:
     assert fs_identity.id not in {item["identity_id"] for item in result["deliveries"]}
 
 
+def test_channel_reply_queues_ordered_bubbles_only_for_turn_source(tmp_path) -> None:
+    store, channel, identity = _paired(tmp_path)
+
+    class Runtime:
+        def enqueue_outbound(self, **kwargs):
+            return store.enqueue_outbound(**kwargs)
+
+    session = SimpleNamespace(
+        _current_turn_source="channel",
+        _current_turn_source_ref=identity.id,
+        _current_turn_id="turn-7",
+        _current_turn_channel_message_id="webhook-message-7",
+        channel_live=True,
+    )
+    api = SimpleNamespace(
+        _channels_store=lambda: store,
+        _channels_runtime=lambda: Runtime(),
+        _assistant_sessions={"session-1": session},
+    )
+
+    result = channel_reply(
+        api,
+        ["先说结论。", "证据在第二条。"],
+        pause_ms=420,
+        _session_id="session-1",
+    )
+
+    assert result["ok"] is True
+    assert result["route_mode"] == "turn_source"
+    assert result["delivery_count"] == 2
+    assert result["terminal_delivery"] is True
+    assert result["identity_id"] == identity.id
+    jobs = list(reversed(store.list_outbound(session_id="session-1")))
+    assert [job["text"] for job in jobs] == ["先说结论。", "证据在第二条。"]
+    assert [job["meta"]["sequence"] for job in jobs] == [1, 2]
+    assert [job["meta"]["delay_before_ms"] for job in jobs] == [0, 420]
+    assert [job["meta"]["native_stream_source_message_id"] for job in jobs] == [
+        "webhook-message-7",
+        "webhook-message-7",
+    ]
+    assert not hasattr(session, "_channel_reply_delivered_turn")
+
+    session._current_turn_source = "gui"
+    blocked = channel_reply(api, ["不该发出"], _session_id="session-1")
+    assert blocked["ok"] is False
+    assert len(store.list_outbound(session_id="session-1")) == 2
+
+
+def test_qq_channel_reply_keeps_native_stream_source_in_durable_outbox(tmp_path) -> None:
+    store = ChannelStore(tmp_path / "channels")
+    channel = store.upsert_channel({
+        "id": "qq-test",
+        "provider": "qq",
+        "name": "QQ",
+        "enabled": True,
+    })
+    pairing = store.create_pairing(channel.id, bound_session_id="session-1")
+    identity = store.consume_pairing(
+        channel.id,
+        pairing["code"],
+        external_user_id="qq-user",
+        external_chat_id="qq-user",
+    )
+    identity = store.set_identity_permissions(identity.id, ["chat", "send"])
+
+    class Runtime:
+        def enqueue_outbound(self, **kwargs):
+            return store.enqueue_outbound(**kwargs)
+
+    session = SimpleNamespace(
+        _current_turn_source="channel",
+        _current_turn_source_ref=identity.id,
+        _current_turn_channel_message_id="qq-message-7",
+        channel_live=True,
+    )
+    api = SimpleNamespace(
+        _channels_store=lambda: store,
+        _channels_runtime=lambda: Runtime(),
+        _assistant_sessions={"session-1": session},
+    )
+
+    result = channel_reply(api, ["第一条", "第二条"], _session_id="session-1")
+
+    assert result["ok"] is True
+    jobs = list(reversed(store.list_outbound(session_id="session-1")))
+    assert [job["meta"]["native_stream_source_message_id"] for job in jobs] == [
+        "qq-message-7",
+        "qq-message-7",
+    ]
+
+
+def test_qq_channel_reply_outbox_prefers_native_stream_delivery(tmp_path) -> None:
+    store = ChannelStore(tmp_path / "channels")
+    channel = store.upsert_channel({
+        "id": "qq-test",
+        "provider": "qq",
+        "name": "QQ",
+        "enabled": True,
+    })
+    pairing = store.create_pairing(channel.id, bound_session_id="session-1")
+    identity = store.consume_pairing(
+        channel.id,
+        pairing["code"],
+        external_user_id="qq-user",
+        external_chat_id="qq-user",
+    )
+    identity = store.set_identity_permissions(identity.id, ["chat", "send"])
+    streamed = []
+    sent = []
+
+    class Adapter:
+        def send_streamed_reply(self, reply, *, source_message_id, delivery_id):
+            streamed.append((reply, source_message_id, delivery_id))
+            return True
+
+        def send(self, reply):
+            sent.append(reply)
+
+    runtime = ChannelRuntimeManager(store, _gateway(store))
+    runtime._adapters[channel.id] = Adapter()
+    try:
+        runtime.enqueue_outbound(
+            identity_id=identity.id,
+            session_id="session-1",
+            text="像人在输入",
+            meta={
+                "channel_reply": True,
+                "native_stream_source_message_id": "qq-message-8",
+            },
+        )
+        assert runtime.drain_outbox_once() == 1
+    finally:
+        runtime.shutdown()
+
+    assert [(reply.text, source) for reply, source, _delivery in streamed] == [
+        ("像人在输入", "qq-message-8"),
+    ]
+    assert sent == []
+    job = store.list_outbound(session_id="session-1")[0]
+    assert job["state"] == "sent"
+    assert streamed[0][2] == f"{job['id']}:0"
+
+
 def test_channel_send_fans_out_to_all_session_targets(tmp_path) -> None:
     store = ChannelStore(tmp_path / "channels")
     tg = store.upsert_channel({"id": "tg", "provider": "telegram", "name": "TG", "enabled": True})
@@ -796,6 +959,7 @@ def test_channel_tools_have_stable_schemas_and_confirmation_policy(tmp_path) -> 
     registry = build_tool_registry(api, session_id="session-1", allow_web_search=False)
     target_tool = registry.get("channel_list_targets")
     message_tool = registry.get("channel_send_message")
+    reply_tool = registry.get("channel_reply")
     file_tool = registry.get("channel_send_file")
 
     assert target_tool is not None
@@ -804,5 +968,11 @@ def test_channel_tools_have_stable_schemas_and_confirmation_policy(tmp_path) -> 
     assert message_tool.required == ["text"]
     assert file_tool is not None
     assert file_tool.required == ["path"]
+    assert reply_tool is not None
+    assert reply_tool.required == ["messages"]
+    assert reply_tool.kind == "mutating"
+    assert "channel_reply" not in _WRITE_TOOLS
+    assert "channel_reply" not in _CONFIRM_TOOLS
+    assert tool_kind("channel_reply") == "mutating"
     assert {"channel_send_message", "channel_send_file"} <= _WRITE_TOOLS
     assert {"channel_send_message", "channel_send_file"} <= _CONFIRM_TOOLS

@@ -45,7 +45,7 @@ _MENTION_TOKEN_RE = re.compile(r"@_user_\d+")
 
 
 def _normalize_inbound_text(text: str) -> str:
-    """Strip provider mention placeholders so ``@Bot /status`` stays a command."""
+    """Normalize a command-routing view; never use it as the chat message body."""
     cleaned = _MENTION_TOKEN_RE.sub(" ", str(text or ""))
     cleaned = cleaned.translate(INVISIBLE_SPACE)
     return re.sub(r"\s+", " ", cleaned).strip()
@@ -717,7 +717,11 @@ class ChannelGateway:
         },))
 
     def handle(self, event: ChannelEvent) -> ChannelReply:
-        text = _normalize_inbound_text(event.text)
+        message = str(event.text or "")
+        # Commands tolerate provider mentions and rich-text whitespace. Keep
+        # ordinary chat intact: transcripts, code indentation and emoji joiners
+        # are user content, not command-formatting noise.
+        text = _normalize_inbound_text(message)
         self._use_locale(None)
         if infer_chat_kind(
             event.provider,
@@ -1147,7 +1151,7 @@ class ChannelGateway:
         # wrap up the current step and will run this message next.
         result = self.turn_handler({
             "session_id": identity.bound_session_id,
-            "message": text,
+            "message": message,
             "attachments": list(event.attachments),
             "hide_user_message": self._has_pending_user_decision(session_status),
             "message_source": "channel",

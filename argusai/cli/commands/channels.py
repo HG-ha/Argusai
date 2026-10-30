@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import time
 from typing import Any, Optional
@@ -219,7 +220,11 @@ def add_cmd(
         f"[hud.dim]id={cid}[/]  ({ch.get('provider')})  "
         f"enabled={'yes' if ch.get('enabled') else 'no'}"
     )
-    if provider_key == "wechat":
+    if provider_key == "qq" and not secrets:
+        get_console().print(
+            f"[hud.dim]Next: argusai channels login-qq {cid}[/]"
+        )
+    elif provider_key == "wechat":
         get_console().print(
             f"[hud.dim]Next: argusai channels login-wechat {cid}[/]"
         )
@@ -509,6 +514,75 @@ def grant_cmd(
         json_out=json_out,
         human=f"[ok]granted[/]  {resolved} → {granted}",
     )
+
+
+@app.command("login-qq")
+def login_qq_cmd(
+    channel_id: str = typer.Argument(..., help="Existing QQ channel id."),
+    timeout: float = typer.Option(300.0, "--timeout", help="Seconds to wait for scan."),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Bind a QQ bot through the official QR Onboard flow."""
+    set_json_mode(json_out)
+    api = headless_api()
+    login_id = ""
+    try:
+        started = api.start_qq_login(channel_id)
+        if not started.get("ok"):
+            fail(str(started.get("error") or "QQ QR start failed"), json_out=json_out)
+        login_id = str(started.get("login_id") or "")
+        if not login_id:
+            fail("QQ QR start returned no login id", json_out=json_out)
+        deadline = time.monotonic() + max(30.0, float(timeout))
+        shown_qr = False
+        last_status = ""
+        while time.monotonic() < deadline:
+            polled = api.poll_qq_login(login_id, channel_id)
+            if not polled.get("ok"):
+                fail(str(polled.get("error") or "QQ QR poll failed"), json_out=json_out)
+            status = str(polled.get("status") or "")
+            qr_url = str(polled.get("qr_url") or "")
+            if qr_url and not shown_qr and not json_out:
+                try:
+                    import segno
+
+                    output = io.StringIO()
+                    segno.make(qr_url, error="m").terminal(out=output, compact=True)
+                    get_console().print(output.getvalue(), markup=False, highlight=False)
+                except Exception:
+                    pass
+                get_console().print(
+                    Panel(
+                        Text.from_markup(
+                            f"Scan with mobile QQ:\n[accent]{qr_url}[/]\n\n"
+                            f"channel [brand]{channel_id}[/] · waiting…"
+                        ),
+                        title="[brand]QQ QR binding[/]",
+                        border_style=OPS_BORDER,
+                    )
+                )
+                shown_qr = True
+            if status == "confirmed":
+                if json_out:
+                    ok_payload(dict(polled), json_out=True)
+                else:
+                    get_console().print(f"[ok]QQ bot bound[/]  {channel_id}")
+                return
+            if status in {"error", "expired", "canceled"}:
+                fail(
+                    str(polled.get("error") or f"QQ QR binding {status}"),
+                    json_out=json_out,
+                )
+            if status != last_status and not json_out:
+                get_console().print(f"[hud.dim]status: {status or 'starting'}[/]")
+                last_status = status
+            time.sleep(0.5)
+        api.cancel_qq_login(login_id)
+        fail("timed out waiting for QQ scan", json_out=json_out)
+    finally:
+        if login_id:
+            api.cancel_qq_login(login_id)
+        api.shutdown_background_services()
 
 
 @app.command("login-wechat")

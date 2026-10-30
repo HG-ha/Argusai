@@ -360,6 +360,38 @@ function preferLastConversation() {
   return false
 }
 
+function isChannelSession(row) {
+  return row?.origin === 'channel' || row?.session_type === 'channel'
+}
+
+/**
+ * Keep transport-owned conversations out of the desktop Agent tab strip.
+ * They remain available to Communications and the session management center;
+ * this only prevents a saved channel id from becoming the main Agent chat
+ * after app restart.
+ */
+function reconcileDesktopSessions(rows) {
+  const allRows = Array.isArray(rows) ? rows : []
+  const channelIds = new Set(
+    allRows.filter(isChannelSession).map(row => row.id).filter(Boolean),
+  )
+  let removed = false
+  for (let index = tabs.length - 1; index >= 0; index -= 1) {
+    const tab = tabs[index]
+    if (!channelIds.has(tab.sessionId)) continue
+    tab._pollerRunning = false
+    tab.activeRunId = ''
+    tabs.splice(index, 1)
+    removed = true
+  }
+  if (tabs.length === 0) openTab()
+  if (!tabs.some(tab => tab.sessionId === activeTabId.value)) {
+    activeTabId.value = tabs[0]?.sessionId || ''
+  }
+  if (removed) persistTabs()
+  return allRows.filter(row => !isChannelSession(row))
+}
+
 async function refreshSessions(force = false) {
   const now = Date.now()
   if (!force && now - lastSessionsRefreshAt < SESSION_LIST_REFRESH_MS) {
@@ -369,7 +401,7 @@ async function refreshSessions(force = false) {
   sessionsRefreshPromise = (async () => {
     try {
       const data = await api.listAssistantSessions()
-      if (Array.isArray(data)) sessions.value = data
+      if (Array.isArray(data)) sessions.value = reconcileDesktopSessions(data)
       lastSessionsRefreshAt = Date.now()
       // Backfill tab names from disk so freshly-restored tabs get a real name.
       for (const s of sessions.value) {

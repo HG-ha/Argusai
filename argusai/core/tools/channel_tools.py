@@ -469,6 +469,94 @@ def channel_send_message(
     }
 
 
+def channel_reply(
+    api: Any,
+    messages: list[str],
+    pause_ms: int = 350,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Reply to the current channel user as ordered, human-paced bubbles.
+
+    Unlike ``channel_send_message`` this is not a proactive cross-recipient
+    write: it is valid only while handling a paired channel turn and is pinned
+    to that exact source identity. The Agent chooses the wording and bubble
+    boundaries after applying the global user-habits profile; the tool never
+    rewrites facts or invents conversational filler.
+    """
+    session_id = _session_id(kwargs)
+    if not isinstance(messages, list):
+        return {"ok": False, "error": "messages must be an array of strings"}
+    bubbles = [str(item or "").strip() for item in messages]
+    bubbles = [item for item in bubbles if item]
+    if not bubbles:
+        return {"ok": False, "error": "at least one non-empty message is required"}
+    if len(bubbles) > 8:
+        return {"ok": False, "error": "channel_reply accepts at most 8 messages"}
+    if any(len(item) > 12000 for item in bubbles):
+        return {"ok": False, "error": "each channel_reply message must be at most 12000 characters"}
+
+    identity = _turn_source_identity(api, session_id)
+    if identity is None:
+        return {
+            "ok": False,
+            "error": (
+                "channel_reply is only available inside a paired channel-authored turn; "
+                "use channel_send_message for proactive desktop or cross-recipient delivery"
+            ),
+        }
+    delay = max(0, min(int(pause_ms or 0), 2000))
+    causal_meta = _origin_causal_meta(api, session_id)
+    session = getattr(api, "_assistant_sessions", {}).get(session_id)
+    native_stream_source = ""
+    if bool(getattr(session, "channel_live", True)):
+        native_stream_source = str(
+            getattr(session, "_current_turn_channel_message_id", "") or ""
+        ).strip()
+    deliveries: list[dict[str, Any]] = []
+    for index, bubble in enumerate(bubbles):
+        job = api._channels_runtime().enqueue_outbound(
+            identity_id=identity.id,
+            session_id=session_id,
+            text=bubble,
+            meta={
+                **causal_meta,
+                "channel_reply": True,
+                "sequence": index + 1,
+                "sequence_total": len(bubbles),
+                "delay_before_ms": 0 if index == 0 else delay,
+                # Tool-call text is unavailable to the normal token stream.
+                # Preserve the Agent's bubble boundary and let the reliable
+                # outbox replay this completed bubble through the provider's
+                # native/edit stream when supported.
+                "native_stream_source_message_id": native_stream_source,
+            },
+        )
+        deliveries.append(_delivery_result(
+            job,
+            identity,
+            sequence=index + 1,
+            delay_before_ms=0 if index == 0 else delay,
+        ))
+
+    return {
+        "ok": True,
+        "queued": True,
+        # The assistant loop treats an accepted channel_reply as the final
+        # action of this turn. Rejected/failed calls never set this flag, so
+        # the model can still recover or explain the failure.
+        "terminal_delivery": True,
+        "route_mode": "turn_source",
+        "delivery_count": len(deliveries),
+        "deliveries": deliveries,
+        "delivery_ids": [item["delivery_id"] for item in deliveries],
+        "identity_id": identity.id,
+        "channel_id": identity.channel_id,
+        "provider": identity.provider,
+        "pause_ms": delay,
+        "note": "Reply accepted; channel_reply terminates the current Agent turn.",
+    }
+
+
 def channel_send_file(
     api: Any,
     path: str,

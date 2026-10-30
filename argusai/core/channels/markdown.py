@@ -14,6 +14,9 @@ subset, so a single string cannot satisfy all of them:
 * DingTalk action cards render headings, emphasis, links, and lists, but no
   code fences or tables.
 * Discord already renders CommonMark natively; only tables need help.
+* QQ Bot Markdown preserves headings, emphasis, links, quotes and fenced code;
+  pipe tables become fenced text. The transport falls back to plain text when
+  the bot has not been granted QQ's separately reviewed Markdown permission.
 
 Anything a target cannot render is degraded into readable plain text instead of
 leaking raw syntax characters at the user.
@@ -31,6 +34,7 @@ FEISHU = "feishu"
 WECOM = "wecom"
 DINGTALK = "dingtalk"
 DISCORD = "discord"
+QQ = "qq"
 PLAIN = "plain"
 RAW = "raw"
 
@@ -185,6 +189,23 @@ DIALECTS: dict[str, Dialect] = {
         code_block=lambda body, lang: f"```{lang}\n{body}\n```",
         bullet="- ",
         chunk_limit=1900,
+    ),
+    # QQ Bot Markdown requires separate platform approval. Keep the native
+    # syntax here; the adapter owns the permission-aware plain-text fallback.
+    # A conservative 3,800-char chunk leaves room below the 4,000-char limit.
+    QQ: Dialect(
+        name=QQ,
+        bold=lambda value: f"**{value}**",
+        italic=lambda value: f"*{value}*",
+        strike=lambda value: f"~~{value}~~",
+        code=lambda value: f"`{value}`",
+        link=lambda text, url: f"[{text}]({url})" if text else url,
+        heading=lambda level, value: f"{'#' * min(max(level, 1), 3)} {value}",
+        quote=lambda value: f"> {value}",
+        code_block=lambda body, lang: f"```{lang}\n{body}\n```",
+        bullet="- ",
+        chunk_limit=3800,
+        tables_as_code=True,
     ),
 }
 

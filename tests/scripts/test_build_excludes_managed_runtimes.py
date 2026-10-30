@@ -31,6 +31,7 @@ def test_native_defaults(monkeypatch, system, mode, tag):
     assert "--include-package=websockets" in flags
     assert "--include-package=lark_oapi.core" in flags
     assert "--include-package=lark_oapi.ws" in flags
+    assert "--include-package=qqbot_agent_sdk" in flags
     assert "--include-package=lark_oapi" not in flags
     assert "--nofollow-import-to=lark_oapi.api.*" in flags
     assert "--include-data-files=argusai/core/reverse/ghidra_scripts/*.py=argusai/core/reverse/ghidra_scripts/" in flags

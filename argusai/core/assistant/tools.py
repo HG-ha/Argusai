@@ -711,6 +711,8 @@ def build_tool_registry(api: Any, session_id: str | None = None, allow_web_searc
                 required = ["name"]
             elif tool_name == "channel_send_message":
                 required = ["text"]
+            elif tool_name == "channel_reply":
+                required = ["messages"]
             elif tool_name == "channel_send_file":
                 required = ["path"]
 

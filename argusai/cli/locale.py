@@ -569,6 +569,10 @@ _CLI_LABELS: dict[str, dict[str, str]] = {
         "en": "Grant every identity permission.",
         "zh": "授予该身份全部权限。",
     },
+    "help_channels_login_qq": {
+        "en": "Bind a QQ bot through the official QR Onboard flow.",
+        "zh": "通过官方二维码 Onboard 流程绑定 QQ 机器人。",
+    },
     "help_channels_login_wechat": {
         "en": "Complete WeChat iLink QR sign-in for a channel.",
         "zh": "完成微信 iLink 扫码登录。",

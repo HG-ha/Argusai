@@ -487,15 +487,27 @@ class AssistantSessionsMixin:
                         and not self._looks_like_hidden_confirmation(m)
                         and not self._looks_like_cron_trigger(m)
                     ]
-                    latest_origin = next(
+                    # A conversation's surface is determined by where its
+                    # first authored user turn came from. Using the *latest*
+                    # source made a desktop conversation flip to "channel"
+                    # after a paired remote follow-up (and vice versa), which
+                    # then let the main Agent UI restore the wrong surface on
+                    # restart.
+                    first_origin = next(
                         (
                             str(m.get("source") or "")
-                            for m in reversed(data.get("history", []))
-                            if m.get("role") == "user" and str(m.get("source") or "")
+                            for m in data.get("history", [])
+                            if m.get("role") == "user"
+                            and not m.get("hidden")
+                            and not m.get("ui_hidden")
                         ),
                         "",
                     )
-                    origin = "channel" if latest_origin == "channel" else "gui"
+                    origin = (
+                        "channel"
+                        if first_origin in {"channel", "channel_decision"}
+                        else "gui"
+                    )
                     session_type = (
                         "channel"
                         if origin == "channel"

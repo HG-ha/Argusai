@@ -95,6 +95,7 @@ def test_card_projection_allows_sensitive_tools_with_explicit_confirmation() -> 
 @pytest.mark.parametrize(
     ("provider", "expected_key"),
     [
+        ("qq", "keyboard"),
         ("telegram", "reply_markup"),
         ("discord", "components"),
         ("slack", "blocks"),
@@ -104,7 +105,7 @@ def test_card_projection_allows_sensitive_tools_with_explicit_confirmation() -> 
         ("webhook", "actions"),
     ],
 )
-def test_seven_provider_payloads_keep_text_and_actions(provider: str, expected_key: str) -> None:
+def test_provider_payloads_keep_text_and_actions(provider: str, expected_key: str) -> None:
     reply = ChannelReply(
         text="Approve this operation",
         external_chat_id="chat-1",

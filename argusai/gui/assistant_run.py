@@ -1013,6 +1013,25 @@ class AssistantRunMixin:
 
         session = self._assistant_sessions[session_id]
         self._apply_session_auto_approve_policy(session)
+        # Keep the inbound provider message id on the in-memory turn only.  A
+        # channel_reply tool call is generated as JSON arguments, so it cannot
+        # use the ordinary assistant text-token callback.  The durable outbox
+        # uses this id to hand an accepted QQ bubble back to the provider's
+        # native stream endpoint instead of degrading to one completed post.
+        channel_context = (
+            params.get("channel")
+            if isinstance(params.get("channel"), dict)
+            else {}
+        )
+        is_channel_turn = str(params.get("message_source") or "") in {
+            "channel",
+            "channel_decision",
+        }
+        session._current_turn_channel_message_id = (
+            str(channel_context.get("message_id") or "").strip()
+            if is_channel_turn
+            else ""
+        )
         from dataclasses import replace
         from argusai.core.agent_runtimes import normalize_session_runtime_binding
 

@@ -349,6 +349,57 @@ class ChannelRuntimeManager:
         self._outbox_wake.set()
         return job
 
+    def stream_capability(self, identity_id: str) -> str:
+        identity = self.store.get_identity(identity_id)
+        if "send" not in identity.permissions:
+            return "staged"
+        with self._lock:
+            adapter = self._adapters.get(identity.channel_id)
+        return adapter.stream_mode() if adapter is not None else "staged"
+
+    def stream_live_update(
+        self,
+        identity_id: str,
+        *,
+        source_message_id: str,
+        text: str,
+        final: bool = False,
+    ) -> bool:
+        """Use a provider-native in-place stream when the adapter supports it.
+
+        Native stream frames are deliberately not persisted in the outbox: they
+        are transient progress tied to a still-valid inbound message. The final
+        caller retains the normal outbox/synchronous reply as a fallback when
+        this returns False.
+        """
+        try:
+            identity = self.store.get_identity(str(identity_id or ""))
+            if "send" not in identity.permissions:
+                return False
+            with self._lock:
+                adapter = self._adapters.get(identity.channel_id)
+            sender = getattr(adapter, "stream_update", None) if adapter is not None else None
+            if not callable(sender):
+                return False
+            extra = {} if identity.provider == "qq" else {
+                "thread_id": identity.external_thread_id,
+            }
+            return bool(sender(
+                chat_id=identity.external_chat_id,
+                source_message_id=source_message_id,
+                text=text,
+                final=final,
+                **extra,
+            ))
+        except Exception:
+            log.warning(
+                "native channel stream failed identity_id=%s final=%s",
+                identity_id,
+                final,
+                exc_info=True,
+            )
+            return False
+
     def _ensure_watchdog(self) -> None:
         thread = self._watchdog_thread
         if thread is not None and thread.is_alive():
@@ -483,17 +534,55 @@ class ChannelRuntimeManager:
                     adapter = self._adapters.get(identity.channel_id)
                 if adapter is None:
                     raise RuntimeError("channel is not connected in the active host")
+                meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+                if meta.get("channel_reply") and delivered == 0:
+                    try:
+                        delay_ms = max(0, min(int(meta.get("delay_before_ms") or 0), 2000))
+                    except (TypeError, ValueError):
+                        delay_ms = 0
+                    if delay_ms and self._outbox_stop.wait(delay_ms / 1000):
+                        raise RuntimeError("channel host stopped before delayed reply delivery")
                 for index, part in enumerate(self._outbound_parts(job)):
                     if index < delivered:
                         continue
-                    adapter.send(ChannelReply(
+                    reply = ChannelReply(
                         text=str(part.get("text") or ""),
                         external_chat_id=identity.external_chat_id,
                         external_thread_id=identity.external_thread_id,
                         blocks=tuple(part.get("blocks") or ()),
                         locale=self._locale(),
                         attachments=tuple(part.get("attachments") or ()),
-                    ))
+                    )
+                    streamed = False
+                    source_message_id = str(
+                        meta.get("native_stream_source_message_id") or ""
+                    ).strip()
+                    stream_sender = getattr(adapter, "send_streamed_reply", None)
+                    if (
+                        source_message_id
+                        and not reply.blocks
+                        and not reply.attachments
+                        and callable(stream_sender)
+                    ):
+                        try:
+                            streamed = bool(stream_sender(
+                                reply,
+                                source_message_id=source_message_id,
+                                delivery_id=f"{job_id}:{index}",
+                            ))
+                        except Exception:
+                            # A provider stream is transient. Preserve the durable
+                            # outbox guarantee by falling back to the provider's
+                            # ordinary message instead of retrying a half-open stream.
+                            log.warning(
+                                "%s outbox stream failed; falling back to normal "
+                                "delivery job_id=%s",
+                                identity.provider,
+                                job_id,
+                                exc_info=True,
+                            )
+                    if not streamed:
+                        adapter.send(reply)
                     delivered = index + 1
                     self.store.record_outbound_progress(job_id, delivered)
                 handler = self.outbound_delivered_handler

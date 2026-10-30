@@ -126,6 +126,42 @@ class SessionChatLoopMixin:
         self._prompt_system_catalog = catalog
         return catalog
 
+    def _turn_prompt_tool_names(self, source: str | None = None) -> list[str]:
+        """Return the frozen core plus tools scoped to this turn's surface."""
+        names = list(getattr(self, "_prompt_tool_names", None) or [])
+        # channel_reply belongs only to a paired-channel turn. Attach it to
+        # every Agent round on that surface without polluting GUI/floating-ball
+        # schemas or permanently growing the session's frozen core.
+        names = [name for name in names if name != "channel_reply"]
+        turn_source = str(
+            source if source is not None else getattr(self, "_current_turn_source", "")
+        ).strip()
+        if (
+            turn_source in {"channel", "channel_decision"}
+            and self.registry.get("channel_reply") is not None
+        ):
+            names.append("channel_reply")
+        return names
+
+    @staticmethod
+    def _channel_reply_turn_policy() -> str:
+        """Stable channel rules included once in the request's leading system message."""
+        return (
+            "## Current paired-channel delivery contract\n"
+            "This contract applies to the current turn regardless of conversation length, "
+            "summaries, earlier reply style, or examples in history. `channel_reply` is attached "
+            "for this turn. You, the Agent, choose message boundaries; the runtime must not split "
+            "or rewrite your answer. For an ordinary conversational answer containing two or more "
+            "distinct thoughts, or one that would otherwise become a long chat block, you MUST "
+            "finish the work and then call `channel_reply` once with 2–4 short, natural bubbles in "
+            "the ordered `messages` array. Split by meaning and conversational rhythm, never by "
+            "punctuation. Each item is exactly one intended bubble. Use a short `pause_ms`; write no "
+            "assistant prose before or after the call. An accepted `channel_reply` is terminal. A "
+            "single short cohesive thought, list, code block, command with its explanation, or URL "
+            "with its label may stay together. Never use proactive `channel_send_message` for the "
+            "ordinary reply to this inbound message."
+        )
+
     def _note_prompt_prefix(self, prefix: str) -> None:
         digest = hashlib.sha256(prefix.encode("utf-8", errors="ignore")).hexdigest()[:16]
         previous = str(getattr(self, "_prompt_prefix_sha", "") or "")
@@ -176,7 +212,7 @@ class SessionChatLoopMixin:
             )
             selected = apply_project_workspace_tools(self, selected)
             self._merge_prompt_tool_names(selected)
-        active_names = list(self._prompt_tool_names)
+        active_names = self._turn_prompt_tool_names()
         tools = self.registry.to_openai_tools(active_names)
         tools, _ = self._activate_discovered_tool_schemas(
             active_names,
@@ -184,7 +220,7 @@ class SessionChatLoopMixin:
             tool_calls_made,
             0,
         )
-        return list(self._prompt_tool_names), tools
+        return active_names, tools
 
     def _workspace_capability_note(self) -> str:
         """Tell the model which directory this conversation actually works in."""
@@ -652,14 +688,25 @@ class SessionChatLoopMixin:
                 selection_message,
                 allow_web_search=bool(getattr(self, "allow_web_search", True)),
             )
+            if msg_source in {"channel", "channel_decision"}:
+                # The source is runtime metadata, not a phrase in the user's
+                # message, so keyword matching cannot discover this tool.
+                selected = sorted({*selected, "channel_reply"})
             selected = apply_project_workspace_tools(self, selected)
             if getattr(self, "_prompt_tool_names", None):
-                active_names = list(self._prompt_tool_names)
+                active_names = self._turn_prompt_tool_names(msg_source)
             else:
-                active_names = self._merge_prompt_tool_names(selected)
+                self._merge_prompt_tool_names(selected)
+                active_names = self._turn_prompt_tool_names(msg_source)
             tools = self.registry.to_openai_tools(active_names)
             skill_text = _select_skill_text(selection_message, selected)
-            active_catalog = self._frozen_system_catalog(active_names)
+            # Keep the cached system catalogue surface-neutral. The channel
+            # turn appends its own precise channel_reply instructions below;
+            # putting that dynamic schema in the frozen catalogue would leak
+            # it into later GUI/floating-ball turns.
+            active_catalog = self._frozen_system_catalog(
+                list(getattr(self, "_prompt_tool_names", None) or [])
+            )
         profile_text = ""
         try:
             from argusai.core.workspace.user_profile import profile_prompt_summary
@@ -699,6 +746,8 @@ class SessionChatLoopMixin:
                 getattr(self, "_should_agent_self_decide", lambda: False)()
             ),
         )
+        if msg_source in {"channel", "channel_decision"}:
+            system += "\n\n" + self._channel_reply_turn_policy()
         if self.registry.get("team_room_pass") is not None:
             system += (
                 "\n\n## Team Room\n"
@@ -897,7 +946,10 @@ class SessionChatLoopMixin:
                 "role": "user",
                 "content": "Present the typed runtime event above as the user-facing notification now.",
             })
-        self._attach_volatile_context(messages, context_text + memory_text + skill_note)
+        self._attach_volatile_context(
+            messages,
+            context_text + memory_text + skill_note,
+        )
 
         # Layer 1 of child-completion delivery: one compact synthetic message
         # per turn, appended after the volatile tail so it is the last thing the
