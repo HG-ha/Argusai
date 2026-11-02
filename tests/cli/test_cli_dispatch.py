@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+import json
+import sys
+
+import pytest
 
 from typer.testing import CliRunner
 
@@ -103,6 +107,53 @@ def test_root_help_mentions_auto_detect() -> None:
     assert result.exit_code == 0
     assert "--gui" in result.stdout
     assert "--chat" in result.stdout
+    assert "--self-check-gui" not in result.stdout
+
+
+@pytest.mark.parametrize("report,exit_code", [
+    ({"ok": True, "supported": True, "runtime": "netfx", "dotnet_version": "4.0.30319", "dlls": {}}, 0),
+    ({"ok": False, "supported": True, "error": "Cannot find Microsoft.Web.WebView2.Core.dll"}, 1),
+    ({"ok": False, "supported": False, "error": "only supported on Windows"}, 2),
+])
+def test_gui_self_check_dispatches_before_console_and_user_config(monkeypatch, capsys, report, exit_code) -> None:
+    from argusai import __main__ as entry
+    from argusai.gui import _helpers as helpers
+    from argusai.core.settings import SettingsManager
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("self-check must not hide/relaunch the console or read user settings")
+
+    monkeypatch.setattr(sys, "argv", ["ArgusAI.exe", "--self-check-gui"])
+    monkeypatch.setattr(entry, "_hide_console_for_desktop_launch", forbidden)
+    monkeypatch.setattr(entry, "_bootstrap_logging", forbidden)
+    monkeypatch.setattr(SettingsManager, "__init__", forbidden)
+    monkeypatch.setattr(helpers, "self_check_gui", lambda: report)
+    with pytest.raises(SystemExit) as exc:
+        entry.main()
+    assert exc.value.code == exit_code
+    assert json.loads(capsys.readouterr().out) == report
+
+
+@pytest.mark.parametrize("platform,exit_code", [("win32", 1), ("linux", 1), ("darwin", 1), ("freebsd13", 2)])
+def test_gui_self_check_import_failure_has_platform_aware_json(monkeypatch, capsys, platform, exit_code) -> None:
+    from argusai import __main__ as entry
+    from argusai.gui import _helpers as helpers
+
+    def fail():
+        raise ImportError("GUI bridge unavailable")
+
+    monkeypatch.setattr(sys, "argv", ["ArgusAI", "--self-check-gui"])
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(helpers, "self_check_gui", fail)
+    monkeypatch.setattr(entry, "_hide_console_for_desktop_launch", lambda: pytest.fail("must keep console"))
+    with pytest.raises(SystemExit) as exc:
+        entry.main()
+    report = json.loads(capsys.readouterr().out)
+    assert exc.value.code == exit_code
+    assert report["ok"] is False
+    assert report["platform"] == platform
+    assert report["supported"] is (exit_code == 1)
+    assert report["error"] == "ImportError: GUI bridge unavailable"
 
 
 def test_root_chat_passes_concrete_attachment_default(monkeypatch) -> None:

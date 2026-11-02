@@ -15,6 +15,9 @@ dependencies = [
     # under CoreCLR. Pin the reviewed upstream fix until it reaches PyPI; this
     # keeps native Windows ARM64 source installs and frozen builds usable.
     "pywebview @ git+https://github.com/r0x0r/pywebview.git@ec11e828642069eb9b946c1e56dbf0fd7b6e7299",
+    # 3.50 still uses gobject-introspection-1.0 and builds with Ubuntu 24.04.
+    # Newer PyGObject releases require a newer GIRepository/GLib toolchain.
+    "PyGObject==3.50.2; sys_platform == 'linux'",
     "pyyaml>=6.0",
     "jinja2>=3.1.4",
     "cryptography>=44.0",

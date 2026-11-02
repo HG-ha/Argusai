@@ -2,7 +2,7 @@
 
 [Wiki 首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
 
-发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.6`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
+发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.7`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
 
 ## 发行包
 
@@ -10,11 +10,11 @@
 
 | 平台 | 自动发布产物 | 额外运行环境 |
 | --- | --- | --- |
-| Windows x64 | `ArgusAI-0.1.6-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
-| Windows ARM64 | `ArgusAI-0.1.6-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
-| macOS Apple Silicon | `ArgusAI-0.1.6-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
-| Linux x64 | `ArgusAI-0.1.6-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
-| Linux ARM64 | `ArgusAI-0.1.6-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
+| Windows x64 | `ArgusAI-0.1.7-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
+| Windows ARM64 | `ArgusAI-0.1.7-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
+| macOS Apple Silicon | `ArgusAI-0.1.7-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
+| Linux x64 | `ArgusAI-0.1.7-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
+| Linux ARM64 | `ArgusAI-0.1.7-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
 
 这些是自动工作流目前配置的发布平台。其他架构应在对应环境中从源码运行或自行构建，不能仅修改文件名来转换架构。
 
@@ -25,8 +25,8 @@
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\ArgusAI-0.1.6-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\ArgusAI-0.1.6-win-x64-setup.exe.sha256
+Get-FileHash .\ArgusAI-0.1.7-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\ArgusAI-0.1.7-win-x64-setup.exe.sha256
 ```
 
 比较两者的哈希，不要把摘要文件中的文件名也纳入比较。
@@ -34,13 +34,13 @@ Get-Content .\ArgusAI-0.1.6-win-x64-setup.exe.sha256
 Linux：
 
 ```sh
-sha256sum -c ArgusAI-0.1.6-linux-x64.tar.gz.sha256
+sha256sum -c ArgusAI-0.1.7-linux-x64.tar.gz.sha256
 ```
 
 macOS：
 
 ```sh
-shasum -a 256 -c ArgusAI-0.1.6-macos-arm64.dmg.sha256
+shasum -a 256 -c ArgusAI-0.1.7-macos-arm64.dmg.sha256
 ```
 
 ### Windows
@@ -60,8 +60,8 @@ shasum -a 256 -c ArgusAI-0.1.6-macos-arm64.dmg.sha256
 解压 tar.gz 后进入版本目录，启动桌面：
 
 ```sh
-tar -xzf ArgusAI-0.1.6-linux-x64.tar.gz
-cd ArgusAI-0.1.6-linux-x64
+tar -xzf ArgusAI-0.1.7-linux-x64.tar.gz
+cd ArgusAI-0.1.7-linux-x64
 ./ArgusAI --gui
 ```
 
@@ -70,10 +70,11 @@ ARM64 系统将文件名和目录名中的 `linux-x64` 替换为 `linux-arm64`�
 交互终端中直接执行 `./ArgusAI` 会进入 ops 控制台。Linux 桌面依赖按发行版准备；Ubuntu 示例：
 
 ```sh
-sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev
+sudo apt-get install libgtk-3-0 libwebkit2gtk-4.1-0 \
+  gir1.2-gtk-3.0 gir1.2-webkit2-4.1 gir1.2-soup-3.0
 ```
 
-应在实际目标发行版上验证兼容性；缺少共享库时记录错误，不要用不同架构或其他发行版的二进制文件替代缺失库。 GTK 后端还涉及 GObject introspection；源码虚拟环境的 Python 依赖见下节。
+Linux 发布包包含 Python 的 GTK 桥接与相应 typelib，系统仍需提供 GTK、WebKitGTK 及其运行库。应在实际目标发行版上验证兼容性；缺少共享库时记录错误，不要用不同架构或其他发行版的二进制文件替代缺失库。源码环境需要额外的开发依赖，见下节。
 
 ### 自动检查与安装更新
 
@@ -117,15 +118,20 @@ Vite 页面用于前端开发；需要真实 Python 桥接的功能仍依赖桌�
 
 ### Linux 的 Python 图形后端
 
-pywebview 在 Linux 需要可用的 GTK 或 Qt 后端。GTK 使用 PyGObject；系统安装 GTK/WebKitGTK 库，与项目 Python 能否导入 `gi` 是两项检查。使用独立 Python 或 uv 虚拟环境时尤其要核对。
+Linux 构建使用 GTK 3、WebKitGTK 4.1、Soup 3 与 Cairo。项目为 Linux 单独锁定 PyGObject 3.50.2，并由它引入 Pycairo；此版本使用 `gobject-introspection-1.0`，可配合 Ubuntu 24.04 的系统开发库。Windows 和 macOS 不安装这组 Python 依赖。
 
-如果选择 GTK，可在运行应用的同一环境进行自检：
+Ubuntu 24.04 从源码安装前，先准备开发库，再同步锁定依赖：
 
 ```sh
-uv run python -c "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('WebKit2', '4.1'); from gi.repository import Gtk, WebKit2; print('GTK/WebKitGTK available')"
+sudo apt-get install build-essential pkg-config python3-dev \
+  libgirepository1.0-dev libcairo2-dev libffi-dev \
+  libgtk-3-dev libwebkit2gtk-4.1-dev \
+  gir1.2-gtk-3.0 gir1.2-webkit2-4.1 gir1.2-soup-3.0
+uv sync --locked
+uv run python -c "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('WebKit2', '4.1'); gi.require_version('Soup', '3.0'); gi.require_foreign('cairo'); from gi.repository import Gtk, WebKit2, Soup; import webview.platforms.gtk; print('GTK/WebKitGTK backend available')"
 ```
 
-若报 `No module named gi` 或缺少 typelib，按 [pywebview 官方 Linux 安装说明](https://pywebview.flowrl.com/guide/installation.html)与发行版的 PyGObject 配置补齐 Python 后端、introspection 包和原生依赖，并再次自检。安装系统 `python3-gi` 后，也需确认当前应用解释器能够访问它。CLI 和纯文件分析的依赖范围与桌面后端不同。
+应使用运行或构建 ArgusAI 的同一个 Python 完成自检。仅安装系统的 `python3-gi`，不会自动把它提供给独立 Python 或 uv 虚拟环境。若缺少 `gi`、Cairo、typelib 或共享库，先核对该环境与系统依赖，再按 [pywebview 官方 Linux 安装说明](https://pywebview.flowrl.com/guide/installation.html)补齐。`build.py` 会在编译前检查完整 GTK 后端，封包时检查 Python 原生桥接与必要 typelib。版本选择依据见 [PyGObject 3.50.2 官方源码](https://download.gnome.org/sources/pygobject/3.50/pygobject-3.50.2.tar.gz)。
 
 ### 验证安装
 

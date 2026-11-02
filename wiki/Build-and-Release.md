@@ -148,14 +148,14 @@ Python 版本源是 `argusai/__init__.py` 的 `__version__`，pyproject 动态�
 
 ```sh
 python scripts/bump_version.py
-python scripts/bump_version.py --check --tag v0.1.6
+python scripts/bump_version.py --check --tag v0.1.7
 ```
 
 发布下一版时，先更新版本再校验匹配标签，例如：
 
 ```sh
-python scripts/bump_version.py 0.1.6
-python scripts/bump_version.py --check --tag v0.1.6
+python scripts/bump_version.py 0.1.7
+python scripts/bump_version.py --check --tag v0.1.7
 ```
 
 随后检查 README、Wiki、产物示例和变更说明中的版本是否也需要更新。校验命令不会修改文件。
@@ -181,7 +181,7 @@ flowchart TD
     H --> W[同步官网版本信息到 main]
 ```
 
-- 推送 `v*` 标签是正式发布的唯一入口，如 `v0.1.6`。标签必须与 Python、前端版本一致，并指向这次推送验证的源码提交。
+- 推送 `v*` 标签是正式发布的唯一入口，如 `v0.1.7`。标签必须与 Python、前端版本一致，并指向这次推送验证的源码提交。
 - 五个原生构建目标和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
 - 前端构建后收集第三方许可声明，再在原生构建前核验；声明随应用资源分发。
 - 包装后的 CLI 必须启动并报告预期版本，才能上传平台 artifact。
@@ -194,9 +194,9 @@ flowchart TD
 维护者先把版本、发布说明和代码提交到仓库，确认当前提交就是待发布源码，再推送对应标签。例如：
 
 ```sh
-python scripts/bump_version.py --check --tag v0.1.6
-git tag -a v0.1.6 -m "ArgusAI v0.1.6"
-git push origin refs/tags/v0.1.6
+python scripts/bump_version.py --check --tag v0.1.7
+git tag -a v0.1.7 -m "ArgusAI v0.1.7"
+git push origin refs/tags/v0.1.7
 ```
 
 需要先检查打包结果时，在 Actions 中手动运行 `Release packages`，填写目标 ref。通过后再为同一提交打版本标签。
@@ -207,18 +207,18 @@ git push origin refs/tags/v0.1.6
 
 ArgusAI 自有代码采用 [GPL-3.0-only](../LICENSE)，第三方组件保留各自许可，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。正式 Release 的附件会同时提供：
 
-- `ArgusAI-0.1.6-source.tar.gz`
-- `ArgusAI-0.1.6-source.tar.gz.sha256`
+- `ArgusAI-0.1.7-source.tar.gz`
+- `ArgusAI-0.1.7-source.tar.gz.sha256`
 
-独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.6/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
+独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.7/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
 
 归档从已跟踪的提交内容生成，不读取工作区未提交修改、未跟踪文件或 `.git` 数据。用户配置、密钥、会话与流量资料应保持未跟踪；发布前仍要检查待发布提交，避免把私有材料误提交到其他路径。
 
 下载后先将本地计算的 SHA-256 与旁边的 `.sha256` 文件核对，再解压。在仓库根目录按本文构建前提准备工具后执行对应平台命令。例如：
 
 ```sh
-tar -xzf ArgusAI-0.1.6-source.tar.gz
-cd ArgusAI-0.1.6
+tar -xzf ArgusAI-0.1.7-source.tar.gz
+cd ArgusAI-0.1.7
 uv sync --locked --group build
 uv run --locked --group build python build.py --dry-run --jobs 2
 ```

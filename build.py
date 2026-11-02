@@ -25,6 +25,18 @@ ROOT = Path(__file__).resolve().parent
 REMOVED_RUNTIMES = ("python-runtime", "node-runtime", "js-tools", "wabt")
 GHIDRA_SCRIPTS = ("decompile_function.py", "disassemble_function.py", "list_functions.py")
 WINDOWS_ARM_RUNTIME_CONFIG = "argusai/gui/windows-arm64.runtimeconfig.json"
+WINDOWS_WEBVIEW_RESOURCES = (
+    "webview/lib/Microsoft.Web.WebView2.Core.dll",
+    "webview/lib/Microsoft.Web.WebView2.WinForms.dll",
+    "webview/lib/net462/Microsoft.Web.WebView2.Core.dll",
+    "webview/lib/net462/Microsoft.Web.WebView2.WinForms.dll",
+    "webview/lib/pywebview-runtimeconfig.json",
+)
+LINUX_GTK_TYPELIBS = (
+    "GLib-2.0", "GObject-2.0", "Gio-2.0", "Gdk-3.0", "Gtk-3.0",
+    "JavaScriptCore-4.1", "WebKit2-4.1", "Soup-3.0",
+)
+LINUX_GTK_NATIVE_MODULES = ("gi/_gi", "gi/_gi_cairo", "cairo/_cairo")
 LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "SOURCE_CODE.txt",
                "python/THIRD_PARTY_NOTICES.txt", "python/manifest.json")
 
@@ -206,8 +218,9 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
                   # that import chain. Nuitka 4.1.3's built-in pywebview
                   # plug-in also rejects the newer split webview2core module,
                   # so replace that stale platform allow-list with explicit
-                  # Windows backend modules. The generic data/DLL plug-ins
-                  # still collect webview/lib and WebView2Loader.
+                  # Windows backend modules. Generic collection handles the
+                  # CoreCLR pair; our config adds netfx's nested net462 pair
+                  # and keeps the native WebView2Loader beside the executable.
                   "--disable-plugin=pywebview",
                   "--user-package-configuration-file=scripts/packaging/nuitka-package.config.yml",
                   "--include-module=webview.platforms.winforms",
@@ -222,7 +235,9 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
             flags.append(f"--include-data-files={win32_helper}=webview/platforms/win32.py")
         flags.append(f"--output-filename={args.app_name}.exe")
     elif args.system == "Linux":
-        flags.append(f"--output-filename={args.app_name}")
+        flags += [f"--output-filename={args.app_name}", "--enable-plugin=gi",
+                  "--include-package=gi", "--include-package=cairo",
+                  "--include-module=webview.platforms.gtk"]
     else:
         flags += [f"--macos-target-arch={args.target_arch}", f"--macos-app-mode={'console' if args.console else 'gui'}"]
         if args.mode == "app":
@@ -308,6 +323,24 @@ def copy_legal(destination: Path, *roots: Path) -> None:
     raise ValueError("Missing complete packaged license directory")
 
 
+def check_linux_gui_backend() -> None:
+    """Check the build interpreter, not an unrelated system Python's gi."""
+    try:
+        gi = importlib.import_module("gi")
+        for namespace, version in (("Gtk", "3.0"), ("WebKit2", "4.1"), ("Soup", "3.0")):
+            gi.require_version(namespace, version)
+        gi.require_foreign("cairo")
+        for module in ("gi._gi", "gi._gi_cairo", "cairo._cairo", "gi.repository.Gtk",
+                       "gi.repository.WebKit2", "gi.repository.Soup", "webview.platforms.gtk"):
+            importlib.import_module(module)
+    except (ImportError, ValueError, OSError) as exc:
+        raise ValueError(
+            f"Linux GTK/WebKitGTK backend is unavailable in {sys.executable}: {exc}. "
+            "Install the GTK 3, WebKitGTK 4.1, Soup 3 and GObject introspection build "
+            "dependencies, then uv sync --locked --group build in this environment."
+        ) from exc
+
+
 def prepare(args: argparse.Namespace) -> Path | None:
     # Fail before the expensive native compilation when an explicitly
     # requested installer cannot be produced on this machine.
@@ -345,6 +378,8 @@ def prepare(args: argparse.Namespace) -> Path | None:
             raise ValueError("Install build dependencies: uv sync --group build; then uv run --group build python build.py")
     if args.system == "Linux" and not shutil.which("patchelf"):
         raise ValueError("Install patchelf using your system package manager")
+    if args.system == "Linux":
+        check_linux_gui_backend()
     prepare_legal(args)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch
     executable = vendor / ("innoextract.exe" if args.system == "Windows" else "innoextract")
@@ -358,11 +393,20 @@ def prepare(args: argparse.Namespace) -> Path | None:
     helper = None
     if args.system == "Windows":
         import webview
-        helper = Path(webview.__file__).resolve().parent / "platforms/win32.py"
+        webview_root = Path(webview.__file__).resolve().parent
+        missing = [name for name in WINDOWS_WEBVIEW_RESOURCES
+                   if not nonempty_file(webview_root.parent / name)]
+        if missing:
+            raise ValueError(f"Missing or empty pywebview Windows resources: {missing}")
+        helper = webview_root / "platforms/win32.py"
         if not helper.is_file():
             raise ValueError(f"Missing pywebview helper: {helper}")
     args.output.mkdir(parents=True, exist_ok=True)
     return helper
+
+
+def nonempty_file(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
 
 
 def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> None:
@@ -372,13 +416,24 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
     required += [f"argusai/core/reverse/ghidra_scripts/{name}" for name in GHIDRA_SCRIPTS]
     required += [f"argusai/legal/{name}" for name in LEGAL_FILES]
     if args.system == "Windows":
-        required.append("WebView2Loader.dll")
+        required += ["WebView2Loader.dll", *WINDOWS_WEBVIEW_RESOURCES]
     if args.system == "Windows" and args.target_arch == "arm64":
         required.append(WINDOWS_ARM_RUNTIME_CONFIG)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch
     if vendor.is_dir():
         required.append(f"argusai/vendor/innoextract/{args.runtime_arch}/{'innoextract.exe' if args.system == 'Windows' else 'innoextract'}")
-    missing = [name for name in required if not any((root / name).exists() for root in roots)]
+    windows_files = {"WebView2Loader.dll", *WINDOWS_WEBVIEW_RESOURCES} if args.system == "Windows" else set()
+    missing = [name for name in required
+               if not any(nonempty_file(root / name) if name in windows_files else (root / name).exists()
+                          for root in roots)]
+    if args.system == "Linux":
+        missing += [f"girepository/{name}.typelib" for name in LINUX_GTK_TYPELIBS
+                    if not any(nonempty_file(root / "girepository" / f"{name}.typelib") for root in roots)]
+        # Native extension suffixes can include the target CPython ABI tag.
+        # The dot prevents _gi_cairo.so from masking a missing _gi.so.
+        missing += [f"{module}.*so" for module in LINUX_GTK_NATIVE_MODULES
+                    if not any(nonempty_file(candidate) for root in roots
+                               for candidate in (root / module).parent.glob((root / module).name + ".*so"))]
     if missing:
         raise ValueError(f"Missing packaged resources: {missing}")
     forbidden = [f"argusai/vendor/{name}" for name in REMOVED_RUNTIMES]

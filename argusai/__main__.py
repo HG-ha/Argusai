@@ -39,6 +39,21 @@ def main() -> None:
 
         channel_sidecar_main()
         return
+    if "--self-check-gui" in sys.argv[1:]:
+        import json
+
+        try:
+            from argusai.gui._helpers import self_check_gui
+
+            report = self_check_gui()
+        except Exception as exc:
+            supported = sys.platform in {"win32", "darwin"} or sys.platform.startswith("linux")
+            backend = {"win32": "edgechromium", "darwin": "wkwebview"}.get(sys.platform, "gtkwebkit2" if supported else "")
+            report = {"ok": False, "supported": supported, "platform": sys.platform, "backend": backend,
+                      "runtime": "", "dotnet_version": "", "dlls": {},
+                      "error": f"{type(exc).__name__}: {exc}", "stage": "import"}
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        raise SystemExit(0 if report.get("ok") else (1 if report.get("supported") else 2))
     if "--self-check-browser" in sys.argv[1:]:
         import json
 

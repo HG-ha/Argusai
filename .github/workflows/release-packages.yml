@@ -230,7 +230,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config ccache patchelf lld \
-            libgtk-3-dev libwebkit2gtk-4.1-dev
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgirepository1.0-dev libcairo2-dev libffi-dev python3-dev \
+            gir1.2-gtk-3.0 gir1.2-webkit2-4.1 gir1.2-soup-3.0 \
+            xvfb xauth dbus-x11
       - name: Ensure NSIS is available
         if: runner.os == 'Windows'
         shell: python
@@ -365,6 +368,30 @@ jobs:
           "DOTNET_ROOT=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "DOTNET_ROOT_ARM64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $desktopRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Install Windows x64 Desktop runtime for GUI verification
+        if: matrix.runtime == 'win-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+          $desktopRoot = Join-Path $env:RUNNER_TEMP 'dotnet-x64'
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer
+          & $installer -Runtime dotnet -Channel 10.0 -Architecture x64 -InstallDir $desktopRoot -NoPath
+          & $installer -Runtime windowsdesktop -Channel 10.0 -Architecture x64 -InstallDir $desktopRoot -NoPath
+          $dotnet = Join-Path $desktopRoot 'dotnet.exe'
+          if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
+            throw 'x64 Windows Desktop runtime installation did not produce dotnet.exe'
+          }
+          $runtimes = & $dotnet --list-runtimes
+          $runtimeExitCode = $LASTEXITCODE
+          if ($runtimeExitCode -ne 0 -or
+              -not ($runtimes -match 'Microsoft.NETCore.App 10\.') -or
+              -not ($runtimes -match 'Microsoft.WindowsDesktop.App 10\.')) {
+            throw 'x64 .NETCore and WindowsDesktop 10.x runtimes were not installed together'
+          }
+          "DOTNET_ROOT=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "DOTNET_ROOT_X64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $desktopRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install locked Python dependencies
         run: uv sync --locked --group build --group dev --python python
       - name: Verify native Python and Node architectures
@@ -408,6 +435,29 @@ jobs:
                    "from System import Environment; "
                    "print('Native ARM64 WinForms backend loaded, CLR', Environment.Version)")
           subprocess.run(["uv", "run", "--locked", "--group", "build", "python", "-c", probe], check=True, timeout=120)
+      - name: Smoke-test source Unix GUI backends
+        if: runner.os != 'Windows'
+        shell: python
+        run: |
+          import json
+          import platform
+          import subprocess
+
+          system = platform.system()
+          expected = {"Linux": ("linux", "gtkwebkit2"), "Darwin": ("darwin", "wkwebview")}
+          if system not in expected:
+              raise SystemExit(f"Unsupported Unix GUI system: {system}")
+          command = ["uv", "run", "--locked", "--group", "build", "python", "-m", "argusai", "--self-check-gui"]
+          if system == "Linux":
+              command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
+          result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+          if result.returncode:
+              raise SystemExit(f"Source GUI backend failed: {result.stdout}\n{result.stderr}")
+          report = json.loads(result.stdout)
+          print(json.dumps(report, ensure_ascii=False))
+          expected_platform, expected_backend = expected[system]
+          if report.get("ok") is not True or report.get("platform") != expected_platform or report.get("backend") != expected_backend:
+              raise SystemExit("Source GUI did not load its expected platform backend")
       - name: Test release tooling
         run: uv run --locked --group build pytest tests/scripts/ -q
       - name: Test update verification, native installer helpers and GUI handoff
@@ -453,6 +503,81 @@ jobs:
           metadata = json.loads(result.stdout)
           if metadata.get("version") != os.environ["RELEASE_VERSION"]:
               raise SystemExit("Packaged executable version does not match release metadata")
+      - name: Smoke-test packaged Windows GUI backends
+        if: runner.os == 'Windows'
+        env:
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+        shell: python
+        run: |
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          executable = Path("dist/ArgusAI.dist/ArgusAI.exe").resolve()
+          arch = os.environ["EXPECTED_ARCH"]
+          if arch not in {"x64", "arm64"}:
+              raise SystemExit(f"Unsupported Windows GUI architecture: {arch}")
+          runtimes = ("netfx", "coreclr") if arch == "x64" else ("coreclr",)
+          expected_dlls = {"Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"}
+          for runtime in runtimes:
+              environment = dict(os.environ, PYTHONNET_RUNTIME=runtime)
+              environment.pop("PYTHONNET_CORECLR_RUNTIME_CONFIG", None)
+              result = subprocess.run([str(executable), "--self-check-gui"],
+                                      env=environment, capture_output=True, text=True, timeout=120)
+              if result.returncode:
+                  raise SystemExit(f"Packaged GUI {runtime} failed: {result.stdout}\n{result.stderr}")
+              report = json.loads(result.stdout)
+              print(json.dumps(report, ensure_ascii=False))
+              if report.get("ok") is not True or report.get("runtime") != runtime:
+                  raise SystemExit(f"Packaged GUI did not load the requested CLR: {runtime}")
+              dlls = report.get("dlls") or {}
+              if set(dlls) != expected_dlls:
+                  raise SystemExit("Packaged GUI did not load both WebView2 assemblies")
+              for name, location in dlls.items():
+                  path = Path(location).resolve()
+                  if not path.is_relative_to(executable.parent) or not path.is_file() or not path.stat().st_size:
+                      raise SystemExit(f"WebView2 assembly was not loaded from the package: {name}")
+                  framework_dll = "net462" in path.parts
+                  if framework_dll != (runtime == "netfx"):
+                      raise SystemExit(f"WebView2 assembly does not match {runtime}: {name}")
+      - name: Smoke-test packaged Unix GUI backends
+        if: runner.os != 'Windows'
+        shell: python
+        run: |
+          import json
+          import os
+          import platform
+          import plistlib
+          import subprocess
+          from pathlib import Path
+
+          system = platform.system()
+          if system == "Darwin":
+              app = Path("dist/ArgusAI.app")
+              with (app / "Contents/Info.plist").open("rb") as stream:
+                  name = plistlib.load(stream)["CFBundleExecutable"]
+              executable = (app / "Contents/MacOS" / name).resolve()
+              expected_platform, expected_backend = "darwin", "wkwebview"
+              subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True, timeout=120)
+          elif system == "Linux":
+              executable = Path("dist/ArgusAI").resolve()
+              expected_platform, expected_backend = "linux", "gtkwebkit2"
+          else:
+              raise SystemExit(f"Unsupported Unix GUI system: {system}")
+          command = [str(executable), "--self-check-gui"]
+          environment = dict(os.environ)
+          if system == "Linux":
+              # Exercise the packaged typelibs, not a runner override.
+              environment.pop("GI_TYPELIB_PATH", None)
+              command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
+          result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=180)
+          if result.returncode:
+              raise SystemExit(f"Packaged GUI backend failed: {result.stdout}\n{result.stderr}")
+          report = json.loads(result.stdout)
+          print(json.dumps(report, ensure_ascii=False))
+          if report.get("ok") is not True or report.get("platform") != expected_platform or report.get("backend") != expected_backend:
+              raise SystemExit("Packaged GUI did not load its expected platform backend")
       - name: Verify package and create SHA-256 checksum
         shell: python
         run: |

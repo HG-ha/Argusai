@@ -492,6 +492,145 @@ def test_linux_arm64_build_uses_lld_range_extension_thunks():
     )
 
 
+@pytest.mark.parametrize("arch, expected", [("x64", ["netfx", "coreclr"]), ("arm64", ["coreclr"])])
+def test_packaged_gui_probe_loads_each_supported_clr_before_upload(monkeypatch, tmp_path, arch, expected):
+    steps = workflow()["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    probe_name = "Smoke-test packaged Windows GUI backends"
+    probe = next(step for step in steps if step.get("name") == probe_name)
+    assert probe["if"] == "runner.os == 'Windows'"
+    assert names.index("Build native package") < names.index(probe_name) < names.index("Upload package and checksum")
+    installer = next(step for step in steps if step.get("name") == "Install Windows x64 Desktop runtime for GUI verification")
+    assert installer["if"] == "matrix.runtime == 'win-x64'"
+    assert "-Runtime dotnet -Channel 10.0 -Architecture x64" in installer["run"]
+    assert "-Runtime windowsdesktop -Channel 10.0 -Architecture x64" in installer["run"]
+    assert names.index(installer["name"]) < names.index("Install locked Python dependencies")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("EXPECTED_ARCH", arch)
+    monkeypatch.setenv("PYTHONNET_CORECLR_RUNTIME_CONFIG", "outside-user-config.json")
+    executable = tmp_path / "dist/ArgusAI.dist/ArgusAI.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"packaged fixture")
+    calls = []
+
+    def run(command, **kwargs):
+        assert command == [str(executable), "--self-check-gui"]
+        assert "PYTHONNET_CORECLR_RUNTIME_CONFIG" not in kwargs["env"]
+        assert kwargs["timeout"] == 120
+        runtime = kwargs["env"]["PYTHONNET_RUNTIME"]
+        calls.append(runtime)
+        directory = executable.parent / "webview/lib"
+        if runtime == "netfx":
+            directory /= "net462"
+        directory.mkdir(parents=True, exist_ok=True)
+        dlls = {}
+        for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+            path = directory / name
+            path.write_bytes(b"assembly fixture")
+            dlls[name] = str(path)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"ok": True, "runtime": runtime, "dlls": dlls}), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    exec(probe["run"], {})
+    assert calls == expected
+
+
+@pytest.mark.parametrize("system, expected_platform, backend", [("Linux", "linux", "gtkwebkit2"), ("Darwin", "darwin", "wkwebview")])
+@pytest.mark.parametrize("packaged", [False, True])
+def test_unix_gui_smoke_loads_real_platform_backend_before_publication(monkeypatch, tmp_path, system, expected_platform, backend, packaged):
+    import platform
+    import plistlib
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(platform, "system", lambda: system)
+    monkeypatch.setenv("GI_TYPELIB_PATH", "/outside/runner/typelibs")
+    steps = workflow()["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    step_name = "Smoke-test packaged Unix GUI backends" if packaged else "Smoke-test source Unix GUI backends"
+    probe = next(step for step in steps if step.get("name") == step_name)
+    assert probe["if"] == "runner.os != 'Windows'"
+    if packaged:
+        assert names.index("Build native package") < names.index(step_name) < names.index("Upload package and checksum")
+    else:
+        assert names.index("Install locked Python dependencies") < names.index(step_name) < names.index("Build native package")
+    info = tmp_path / "dist/ArgusAI.app/Contents/Info.plist"
+    info.parent.mkdir(parents=True)
+    info.write_bytes(plistlib.dumps({"CFBundleExecutable": "ArgusAI"}))
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "codesign":
+            assert system == "Darwin" and packaged
+            assert command[1:4] == ["--verify", "--deep", "--strict"]
+            return SimpleNamespace(returncode=0)
+        assert command[-1] == "--self-check-gui"
+        if system == "Linux":
+            assert command[:4] == ["dbus-run-session", "--", "xvfb-run", "-a"]
+            if packaged:
+                assert "GI_TYPELIB_PATH" not in kwargs["env"]
+        if not packaged:
+            assert command[-9:] == ["uv", "run", "--locked", "--group", "build", "python", "-m", "argusai", "--self-check-gui"]
+        report = {"ok": True, "platform": expected_platform, "backend": backend}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    exec(probe["run"], {})
+    assert len(calls) == (2 if packaged and system == "Darwin" else 1)
+
+
+@pytest.mark.parametrize("packaged", [False, True])
+@pytest.mark.parametrize("failure", ["native_load", "reported_failure", "wrong_platform", "wrong_backend"])
+def test_unix_gui_smoke_blocks_dependency_or_backend_failures(monkeypatch, tmp_path, packaged, failure):
+    import platform
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    report = {"ok": failure != "reported_failure", "platform": "darwin" if failure == "wrong_platform" else "linux",
+              "backend": "qt" if failure == "wrong_backend" else "gtkwebkit2"}
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+        returncode=1 if failure == "native_load" else 0, stdout=json.dumps(report), stderr="missing GTK fixture"))
+    name = "Smoke-test packaged Unix GUI backends" if packaged else "Smoke-test source Unix GUI backends"
+    with pytest.raises(SystemExit):
+        exec(python_step("build", name), {})
+
+
+def test_linux_build_declares_gi_typelibs_and_headless_test_dependencies():
+    dependencies = next(step["run"] for step in workflow()["jobs"]["build"]["steps"]
+                        if step.get("name") == "Install Linux build dependencies")
+    for package in ("libgirepository1.0-dev", "libcairo2-dev", "libffi-dev", "python3-dev",
+                    "gir1.2-gtk-3.0", "gir1.2-webkit2-4.1", "gir1.2-soup-3.0", "xvfb", "xauth", "dbus-x11"):
+        assert package in dependencies.split()
+
+
+@pytest.mark.parametrize("failure", ["load_error", "wrong_runtime", "missing_assembly", "outside_package", "wrong_variant", "empty_dll"])
+def test_packaged_gui_probe_blocks_unusable_or_external_assemblies(monkeypatch, tmp_path, failure):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("EXPECTED_ARCH", "x64")
+    root = tmp_path / "dist/ArgusAI.dist"
+    root.mkdir(parents=True)
+
+    def run(_command, **_kwargs):
+        directory = tmp_path / "global-sdk" if failure == "outside_package" else root / "webview/lib/net462"
+        if failure == "wrong_variant":
+            directory = root / "webview/lib"
+        directory.mkdir(parents=True, exist_ok=True)
+        dlls = {}
+        for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+            path = directory / name
+            path.write_bytes(b"" if failure == "empty_dll" else b"assembly fixture")
+            dlls[name] = str(path)
+        if failure == "missing_assembly":
+            dlls.pop("Microsoft.Web.WebView2.WinForms.dll")
+        report = {"ok": True, "runtime": "coreclr" if failure == "wrong_runtime" else "netfx", "dlls": dlls}
+        return SimpleNamespace(returncode=1 if failure == "load_error" else 0,
+                               stdout=json.dumps(report), stderr="Missing SDK fixture" if failure == "load_error" else "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit):
+        exec(python_step("build", "Smoke-test packaged Windows GUI backends"), {})
+
+
 @pytest.mark.parametrize("present, same", [(False, True), (True, True), (True, False)])
 def test_tag_push_preflight_requires_existing_tag_and_validated_target(source_repository, monkeypatch, present, same):
     _, commit = source_repository

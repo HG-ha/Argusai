@@ -18,3 +18,17 @@
         filename_code: "os.path.join(os.path.dirname(webview.__file__), 'lib', 'runtimes', 'win-x86', 'native', 'WebView2Loader.dll')"
       dest_path: '.'
       when: 'win32 and arch_x86'
+
+# The flat WinForms assembly targets CoreCLR. pywebview's netfx fallback resolves
+# only lib/net462, and Nuitka's generic "lib" data collection filters DLLs.
+# Preserve the upstream Framework pair instead of aliasing the CoreCLR files.
+- module-name: 'webview.util' # checksum: b115e47f
+  dlls:
+    - from_filenames:
+        relative_to: 'webview'
+        relative_path: 'lib/net462'
+        prefixes:
+          - 'Microsoft.Web.WebView2.Core'
+          - 'Microsoft.Web.WebView2.WinForms'
+      dest_path: 'webview/lib/net462'
+      when: 'win32'

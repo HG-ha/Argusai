@@ -186,6 +186,7 @@ dependencies = [
     { name = "pillow" },
     { name = "playwright" },
     { name = "prompt-toolkit" },
+    { name = "pygobject", marker = "sys_platform == 'linux'" },
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "pywebview" },
@@ -227,6 +228,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.0" },
     { name = "playwright", specifier = ">=1.58.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.43" },
+    { name = "pygobject", marker = "sys_platform == 'linux'", specifier = "==3.50.2" },
     { name = "pypdf", specifier = ">=5.0" },
     { name = "python-docx", specifier = ">=1.1" },
     { name = "pywebview", git = "https://github.com/r0x0r/pywebview.git?rev=ec11e828642069eb9b946c1e56dbf0fd7b6e7299" },
@@ -1372,6 +1374,12 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f2/cf/77d3e19b7fabd03895caca7857ef51e4c409e0ca6b37ee6e9f7daa50b642/proxy_tools-0.1.0.tar.gz", hash = "sha256:ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010", size = 2978, upload-time = "2014-05-05T21:02:24.606Z" }
 
 [[package]]
+name = "pycairo"
+version = "1.29.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/5e/19ab2572981a996ce96b853a189d2dcced40506b67d9555a7568457abcf2/pycairo-1.29.2.tar.gz", hash = "sha256:3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489", size = 666308, upload-time = "2026-10-04T19:11:03.81Z" }
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1520,6 +1528,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
+
+[[package]]
+name = "pygobject"
+version = "3.50.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pycairo" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/5d/f2946cc6c1baf56dee6e942af8cfa16472538a8ad9d780d9f484e7554288/pygobject-3.50.2.tar.gz", hash = "sha256:ece6b860aab77cb649fdfc6e88d8a83765e7a62f7ffd39a628d6e2a0d397a7ff", size = 1085854, upload-time = "2025-10-18T13:44:45.634Z" }
 
 [[package]]
 name = "pyobjc-core"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import plistlib
+import re
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,6 +57,9 @@ def test_native_defaults(monkeypatch, system, mode, tag):
     else:
         assert "--include-raw-dir=argusai/vendor/sqlmap=argusai/vendor/sqlmap" in flags
         assert "--include-data-dir=argusai/vendor/sqlmap=argusai/vendor/sqlmap" not in flags
+    linux_flags = {"--enable-plugin=gi", "--include-package=gi", "--include-package=cairo",
+                   "--include-module=webview.platforms.gtk"}
+    assert linux_flags.issubset(flags) if system == "Linux" else not linux_flags.intersection(flags)
 
 
 @pytest.mark.parametrize("system,argv", [
@@ -121,12 +125,17 @@ def test_arm64_preparation_does_not_download_x64_vendor(monkeypatch, tmp_path, c
     from scripts import frontend_notices
     monkeypatch.setattr(frontend_notices, "check_notices", lambda path: None)
     monkeypatch.setattr(build, "prepare_legal", lambda args: None)
+    monkeypatch.setattr(build, "check_linux_gui_backend", lambda: None)
     monkeypatch.setattr(build.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setattr(build.shutil, "which", lambda name: f"/tools/{name}")
     monkeypatch.setattr(build, "run", lambda *a, **kw: pytest.fail("ARM64 downloaded an unsupported vendor archive"))
     helper = source / "webview/platforms/win32.py"
     helper.parent.mkdir(parents=True)
     helper.write_text("helper fixture")
+    for name in build.WINDOWS_WEBVIEW_RESOURCES:
+        resource = source / name
+        resource.parent.mkdir(parents=True, exist_ok=True)
+        resource.write_text("pywebview fixture")
     runtime_config = source / build.WINDOWS_ARM_RUNTIME_CONFIG
     runtime_config.parent.mkdir(parents=True, exist_ok=True)
     runtime_config.write_text('{"runtimeOptions": {}}')
@@ -162,6 +171,99 @@ def populate_payload(path, args):
     (path / "argusai/vendor/runners").mkdir(parents=True)
     if args.system == "Windows":
         (path / "WebView2Loader.dll").write_text("native loader fixture")
+        for name in build.WINDOWS_WEBVIEW_RESOURCES:
+            resource = path / name
+            resource.parent.mkdir(parents=True, exist_ok=True)
+            resource.write_text("pywebview fixture")
+    elif args.system == "Linux":
+        for name in build.LINUX_GTK_TYPELIBS:
+            resource = path / "girepository" / f"{name}.typelib"
+            resource.parent.mkdir(parents=True, exist_ok=True)
+            resource.write_bytes(b"typelib fixture")
+        for name in build.LINUX_GTK_NATIVE_MODULES:
+            resource = path / f"{name}.so"
+            resource.parent.mkdir(parents=True, exist_ok=True)
+            resource.write_bytes(b"native extension fixture")
+
+
+@pytest.mark.parametrize("suffix", [".so", ".cpython-312-aarch64-linux-gnu.so"])
+def test_linux_payload_accepts_native_extension_abi_suffixes(monkeypatch, tmp_path, suffix):
+    args = options(monkeypatch, "Linux")
+    monkeypatch.setattr(build, "ROOT", tmp_path / "source")
+    populate_payload(tmp_path, args)
+    for module in build.LINUX_GTK_NATIVE_MODULES:
+        source = tmp_path / f"{module}.so"
+        source.rename(tmp_path / f"{module}{suffix}")
+    build.verify_payload(tmp_path, args)
+
+
+@pytest.mark.parametrize("resource", [
+    *(f"{module}.so" for module in build.LINUX_GTK_NATIVE_MODULES),
+    *(f"girepository/{name}.typelib" for name in build.LINUX_GTK_TYPELIBS),
+])
+@pytest.mark.parametrize("empty", [False, True])
+def test_linux_payload_rejects_missing_gtk_bridge_or_typelib(monkeypatch, tmp_path, resource, empty):
+    args = options(monkeypatch, "Linux")
+    monkeypatch.setattr(build, "ROOT", tmp_path / "source")
+    populate_payload(tmp_path, args)
+    target = tmp_path / resource
+    if empty:
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+    with pytest.raises(ValueError, match=re.escape(resource.removesuffix(".so"))):
+        build.verify_payload(tmp_path, args)
+
+
+def test_linux_gui_preflight_checks_current_python_and_full_backend(monkeypatch):
+    calls = []
+    gi = SimpleNamespace(
+        require_version=lambda name, version: calls.append((name, version)),
+        require_foreign=lambda name: calls.append(("foreign", name)),
+    )
+    def load_module(name):
+        calls.append(name)
+        return gi if name == "gi" else object()
+    monkeypatch.setattr(build.importlib, "import_module", load_module)
+    build.check_linux_gui_backend()
+    assert calls[:5] == ["gi", ("Gtk", "3.0"), ("WebKit2", "4.1"), ("Soup", "3.0"), ("foreign", "cairo")]
+    assert {"gi._gi", "gi._gi_cairo", "cairo._cairo", "gi.repository.Gtk",
+            "gi.repository.WebKit2", "gi.repository.Soup", "webview.platforms.gtk"}.issubset(calls)
+
+
+@pytest.mark.parametrize("missing", ["gi", "gi._gi", "gi._gi_cairo", "cairo._cairo", "webview.platforms.gtk"])
+def test_linux_gui_preflight_reports_missing_backend(monkeypatch, missing):
+    gi = SimpleNamespace(require_version=lambda *_: None, require_foreign=lambda *_: None)
+    def load_module(name):
+        if name == missing:
+            raise ImportError(f"No module named {name}")
+        return gi if name == "gi" else object()
+    monkeypatch.setattr(build.importlib, "import_module", load_module)
+    with pytest.raises(ValueError, match="Linux GTK/WebKitGTK backend is unavailable") as exc:
+        build.check_linux_gui_backend()
+    assert build.sys.executable in str(exc.value)
+    assert missing in str(exc.value)
+
+
+def test_linux_preparation_checks_gui_before_legal_staging_or_compilation(monkeypatch, tmp_path):
+    args = options(monkeypatch, "Linux", "--skip-webui")
+    args.output = tmp_path / "output"
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    index = tmp_path / "argusai/webui/dist/index.html"
+    index.parent.mkdir(parents=True)
+    index.write_text("frontend fixture")
+    from scripts import frontend_notices
+    monkeypatch.setattr(frontend_notices, "check_notices", lambda _: None)
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _: object())
+    monkeypatch.setattr(build.shutil, "which", lambda _: "/tools/patchelf")
+    monkeypatch.setattr(build, "prepare_legal", lambda _: pytest.fail("backend failed after legal staging"))
+    monkeypatch.setattr(build, "run", lambda *_a, **_k: pytest.fail("backend failed after subprocess"))
+    def missing_backend():
+        raise ValueError("Linux GTK backend missing")
+    monkeypatch.setattr(build, "check_linux_gui_backend", missing_backend)
+    with pytest.raises(ValueError, match="Linux GTK backend missing"):
+        build.prepare(args)
+    assert not args.output.exists()
 
 
 def test_payload_rejects_missing_resources_and_bundled_runtime(monkeypatch, tmp_path):
@@ -194,6 +296,76 @@ def test_windows_payload_requires_root_webview2_loader(monkeypatch, tmp_path):
     (tmp_path / "WebView2Loader.dll").unlink()
     with pytest.raises(ValueError, match="WebView2Loader.dll"):
         build.verify_payload(tmp_path, args)
+
+
+@pytest.mark.parametrize("resource", build.WINDOWS_WEBVIEW_RESOURCES)
+@pytest.mark.parametrize("empty", [False, True])
+def test_windows_payload_requires_both_clr_sdk_pairs(monkeypatch, tmp_path, resource, empty):
+    args = options(monkeypatch, "Windows")
+    monkeypatch.setattr(build, "ROOT", tmp_path / "source")
+    populate_payload(tmp_path, args)
+    target = tmp_path / resource
+    if empty:
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+    with pytest.raises(ValueError, match=re.escape(resource)):
+        build.verify_payload(tmp_path, args)
+
+
+@pytest.mark.parametrize("resource", build.WINDOWS_WEBVIEW_RESOURCES)
+@pytest.mark.parametrize("empty", [False, True])
+def test_windows_preparation_rejects_incomplete_pywebview_sdk(monkeypatch, tmp_path, resource, empty):
+    args = options(monkeypatch, "Windows", "--skip-webui", machine="ARM64")
+    args.output = tmp_path / "output"
+    source = tmp_path / "source"
+    monkeypatch.setattr(build, "ROOT", source)
+    index = source / "argusai/webui/dist/index.html"
+    index.parent.mkdir(parents=True)
+    index.write_text("frontend fixture")
+    from scripts import frontend_notices
+    monkeypatch.setattr(frontend_notices, "check_notices", lambda _path: None)
+    monkeypatch.setattr(build, "prepare_legal", lambda _args: None)
+    monkeypatch.setattr(build.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(build.shutil, "which", lambda name: f"/tools/{name}")
+    monkeypatch.setattr(build, "run", lambda *_args, **_kwargs: pytest.fail("unexpected subprocess"))
+    helper = source / "webview/platforms/win32.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("helper fixture")
+    arm_config = source / build.WINDOWS_ARM_RUNTIME_CONFIG
+    arm_config.parent.mkdir(parents=True, exist_ok=True)
+    arm_config.write_text('{"runtimeOptions": {}}')
+    for name in build.WINDOWS_WEBVIEW_RESOURCES:
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("SDK fixture")
+    target = source / resource
+    if empty:
+        target.write_bytes(b"")
+    else:
+        target.unlink()
+    monkeypatch.setitem(build.sys.modules, "webview", SimpleNamespace(__file__=str(source / "webview/__init__.py")))
+    with pytest.raises(ValueError, match=re.escape(resource)):
+        build.prepare(args)
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("runtime,subdir", [("coreclr", ""), ("netfx", "net462")])
+def test_real_pywebview_resolver_finds_matching_packaged_pair(monkeypatch, tmp_path, runtime, subdir):
+    util = pytest.importorskip("webview.util")
+    args = options(monkeypatch, "Windows")
+    populate_payload(tmp_path, args)
+    monkeypatch.setattr(util, "__file__", str(tmp_path / "webview/util.py"))
+    monkeypatch.setattr(util.sys, "argv", [str(tmp_path / "ArgusAI.exe")])
+    monkeypatch.setenv("PYTHONNET_RUNTIME", runtime)
+    for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+        expected = tmp_path / "webview/lib" / subdir / name
+        assert Path(util.interop_dll_path(name)) == expected
+    if runtime == "netfx":
+        # Flat CoreCLR SDK files must never mask a missing Framework pair.
+        (tmp_path / "webview/lib/net462/Microsoft.Web.WebView2.Core.dll").unlink()
+        with pytest.raises(FileNotFoundError, match="Microsoft.Web.WebView2.Core.dll"):
+            util.interop_dll_path("Microsoft.Web.WebView2.Core.dll")
 
 
 def test_payload_requires_gpl_and_dependency_notices(monkeypatch, tmp_path):
