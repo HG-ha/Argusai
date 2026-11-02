@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.6",
+  "published_at": "2026-11-02T10:13:41Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.6",
+  "notes": "# ArgusAI v0.1.6\n\n- 修复小队成员忙碌时遗漏 @ 消息，群聊消息排队接续，由成员判断是否回复。\n- 修复小队并发消息与已读状态覆盖，保持私聊和审批续接的可见范围。\n- 修复主 Agent 编辑重发和排队消息直接发送失败，保留附件、语音及引用。\n- 修复本地 Agent 编辑失败回滚及取消时序，避免取消后继续启动。\n- 调整发布流程，仅推送版本标签时打包发布并同步官网更新信息。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.6/ArgusAI-0.1.6-win-x64-setup.exe",
+      "sha256": "4ecacb483d00e930f21b1b2060ce09f0b93b094232cd8ee6e1f83a0a388b5c8b",
+      "size": 69962834
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.6/ArgusAI-0.1.6-win-arm64-setup.exe",
+      "sha256": "a993665baa669cefd93ab87e52f2addfef07de34053da505e2f980fe8f5905fc",
+      "size": 58924460
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.6/ArgusAI-0.1.6-linux-x64.tar.gz",
+      "sha256": "f4705f8b040ed9de371eb725f3bdb0e9330127e921248ce91e09ad9b50c4e1b5",
+      "size": 111709887
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.6/ArgusAI-0.1.6-linux-arm64.tar.gz",
+      "sha256": "a6042f0eca112733ba10947dfd739f81bcb379e0722aa5173621905bb428dc9f",
+      "size": 103184211
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.6/ArgusAI-0.1.6-macos-arm64.dmg",
+      "sha256": "4021b5d5c30f44d36fef28297c8e20c2019d4f56758cc971aafdd823763866e8",
+      "size": 100507543
+    }
+  }
+}
