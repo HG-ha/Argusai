@@ -148,14 +148,14 @@ Python 版本源是 `argusai/__init__.py` 的 `__version__`，pyproject 动态�
 
 ```sh
 python scripts/bump_version.py
-python scripts/bump_version.py --check --tag v0.1.5
+python scripts/bump_version.py --check --tag v0.1.6
 ```
 
 发布下一版时，先更新版本再校验匹配标签，例如：
 
 ```sh
-python scripts/bump_version.py 0.1.5
-python scripts/bump_version.py --check --tag v0.1.5
+python scripts/bump_version.py 0.1.6
+python scripts/bump_version.py --check --tag v0.1.6
 ```
 
 随后检查 README、Wiki、产物示例和变更说明中的版本是否也需要更新。校验命令不会修改文件。
@@ -166,27 +166,40 @@ python scripts/bump_version.py --check --tag v0.1.5
 
 ```mermaid
 flowchart TD
-    A[Release published / 手动运行] --> B[校验版本并固定源码 commit]
+    A[推送 v* 版本标签] --> B[校验版本并固定源码 commit]
+    M[手动选择 ref 验证构建] --> B
     B --> C[Windows x64 与 ARM64<br/>macOS ARM64<br/>Linux x64 与 ARM64]
     C --> D[发布工具测试与前端构建]
     D --> E[原生构建与 CLI 版本烟测]
     E --> F[安装包与 SHA-256 上传为 artifacts]
     B --> J[从同一 commit 导出源码归档与 SHA-256]
     J --> K[上传源码 artifact]
-    F --> G{正式发布请求且平台与源码全部成功}
+    F --> G{版本标签触发且平台与源码全部成功}
     K --> G
     G -->|是| H[重新校验全部文件并创建或更新 Release]
     G -->|否| I[保留 artifacts，不发布附件]
+    H --> W[同步官网版本信息到 main]
 ```
 
-- Release 发布事件要求标签与 Python、前端版本一致；支持匹配的版本标签，如 `v0.1.5`。
+- 推送 `v*` 标签是正式发布的唯一入口，如 `v0.1.6`。标签必须与 Python、前端版本一致，并指向这次推送验证的源码提交。
 - 五个原生构建目标和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
 - 前端构建后收集第三方许可声明，再在原生构建前核验；声明随应用资源分发。
 - 包装后的 CLI 必须启动并报告预期版本，才能上传平台 artifact。
 - 每份安装包和源码归档均附带 `.sha256`。汇总作业要求五个原生包、一个源码包和六份校验文件全部存在，重新校验实际字节，并检查源码提交标识及关键文件后统一上传。
-- 手动运行可选择 ref。`publish_release` 默认为 `false`，此时只保存 Actions artifacts，包括 `ArgusAI-版本-source`，当前 artifacts 保留 14 天。
-- 维护者显式将 `publish_release` 设为 `true` 后，工作流仍会先完成五个平台与源码构建。全部校验成功后，才按源码版本创建标签与正式 Release，写入仓库中的版本说明并上传全部附件；任一构建失败都不会提前发布空 Release。
-- 已存在的同名正式 Release 必须指向同一提交，工作流才会覆盖上传附件；标签错指、草稿状态或提交不一致都会停止发布。
+- 手动运行可选择 ref，只执行构建验证并保留 Actions artifacts，包括 `ArgusAI-版本-source`，当前 artifacts 保留 14 天。
+- 版本标签触发的五个平台与源码作业全部成功后，汇总作业才会创建正式 Release，使用该提交中的版本说明并上传全部附件。任一构建失败都会阻止发布。
+- 已存在的同名正式 Release，其标签提交和发布说明均须与验证的源码一致，才会覆盖上传附件；错误标签、草稿或说明不一致会停止发布。
+- 官网同步在正式发布成功后执行，只提交生成的版本信息到 `main`。推送 `main` 和发布 Release 事件都不会触发这条打包流水线，官网同步也不会再次发版。
+
+维护者先把版本、发布说明和代码提交到仓库，确认当前提交就是待发布源码，再推送对应标签。例如：
+
+```sh
+python scripts/bump_version.py --check --tag v0.1.6
+git tag -a v0.1.6 -m "ArgusAI v0.1.6"
+git push origin refs/tags/v0.1.6
+```
+
+需要先检查打包结果时，在 Actions 中手动运行 `Release packages`，填写目标 ref。通过后再为同一提交打版本标签。
 
 工作流能生成打包结果，不等于完成所有 GUI、浏览器、代理与设备集成验收。正式发布前还应在目标系统检查实际启动和所需功能。
 
@@ -194,18 +207,18 @@ flowchart TD
 
 ArgusAI 自有代码采用 [GPL-3.0-only](../LICENSE)，第三方组件保留各自许可，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。正式 Release 的附件会同时提供：
 
-- `ArgusAI-0.1.5-source.tar.gz`
-- `ArgusAI-0.1.5-source.tar.gz.sha256`
+- `ArgusAI-0.1.6-source.tar.gz`
+- `ArgusAI-0.1.6-source.tar.gz.sha256`
 
-独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.5/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
+独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.6/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
 
 归档从已跟踪的提交内容生成，不读取工作区未提交修改、未跟踪文件或 `.git` 数据。用户配置、密钥、会话与流量资料应保持未跟踪；发布前仍要检查待发布提交，避免把私有材料误提交到其他路径。
 
 下载后先将本地计算的 SHA-256 与旁边的 `.sha256` 文件核对，再解压。在仓库根目录按本文构建前提准备工具后执行对应平台命令。例如：
 
 ```sh
-tar -xzf ArgusAI-0.1.5-source.tar.gz
-cd ArgusAI-0.1.5
+tar -xzf ArgusAI-0.1.6-source.tar.gz
+cd ArgusAI-0.1.6
 uv sync --locked --group build
 uv run --locked --group build python build.py --dry-run --jobs 2
 ```

@@ -29,6 +29,7 @@ log = logging.getLogger("argusai.gui.teams")
 
 _TEAM_ID_RE = re.compile(r"^[a-f0-9]{8,32}$")
 _TEAM_ACTIVE_STATES = {"queued", "running", "closing"}
+_TEAM_ROOM_LOCK_INIT = threading.Lock()
 _BARE_CANCEL_NOTICE = re.compile(
     r"^\[已中止\]\s*(?:已取消当前助手运行。?|已中止，本轮已执行\s*\d+\s*个工具操作。?)\s*$"
 )
@@ -59,10 +60,15 @@ class TeamsMixin:
 
     @property
     def _team_room_lock(self) -> threading.RLock:
-        lock = getattr(self, "__team_room_lock", None)
+        lock = getattr(self, "_team_room_mutex", None)
         if lock is None:
-            lock = threading.RLock()
-            self.__team_room_lock = lock
+            # Member completions run on different threads. Publish one lock
+            # per API instance before any room read/modify/write transaction.
+            with _TEAM_ROOM_LOCK_INIT:
+                lock = getattr(self, "_team_room_mutex", None)
+                if lock is None:
+                    lock = threading.RLock()
+                    self._team_room_mutex = lock
         return lock
 
     def _validate_team_id(self, team_id: str) -> str:
@@ -119,15 +125,20 @@ class TeamsMixin:
         }
 
     def _team_meta(self, team_id: str) -> dict[str, Any]:
-        path = self._team_path(team_id)
-        if not path.exists():
-            raise FileNotFoundError("team not found")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["team_id"] = self._validate_team_id(team_id)
-        return data
+        with self._team_room_lock:
+            path = self._team_path(team_id)
+            if not path.exists():
+                raise FileNotFoundError("team not found")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["team_id"] = self._validate_team_id(team_id)
+            return data
 
     def _save_team_meta(self, team_id: str, data: dict[str, Any]) -> None:
-        """Persist team metadata. Retry the replace: Windows denies it while a reader holds the file."""
+        """Persist metadata while the caller holds the room transaction lock.
+
+        Retry the replace: Windows denies it while an external reader holds
+        the file. Lock the whole read/modify/write, not only this final write.
+        """
         path = self._team_path(team_id)
         payload = dict(data)
         payload["team_id"] = self._validate_team_id(team_id)
@@ -215,6 +226,7 @@ class TeamsMixin:
         *,
         through_sequence: int | None = None,
         consume: bool = True,
+        exclude_message_ids: set[str] | None = None,
     ) -> tuple[str, int]:
         """Format unread room messages for one member and optionally advance its cursor."""
         with self._team_room_lock:
@@ -247,6 +259,8 @@ class TeamsMixin:
 
         rows: list[str] = []
         for item in unread:
+            if str(item.get("id") or "") in (exclude_message_ids or set()):
+                continue
             if str(item.get("sender_agent_id") or "") == agent_id:
                 continue
             if str(item.get("visibility") or "group") == "private":
@@ -280,14 +294,25 @@ class TeamsMixin:
             previous,
         )
 
-    def _set_team_room_cursor(self, team_id: str, agent_id: str, sequence: int) -> None:
+    def _set_team_room_cursor(
+        self,
+        team_id: str,
+        agent_id: str,
+        sequence: int,
+        *,
+        expected_sequence: int | None = None,
+    ) -> None:
         with self._team_room_lock:
             data = self._team_meta(team_id)
             cursors = data.setdefault("member_cursors", {})
             if not isinstance(cursors, dict):
                 cursors = {}
                 data["member_cursors"] = cursors
-            cursors[agent_id] = max(0, int(sequence))
+            current = max(0, int(cursors.get(agent_id) or 0))
+            if expected_sequence is not None and current != max(0, int(expected_sequence)):
+                return
+            requested = max(0, int(sequence))
+            cursors[agent_id] = requested if expected_sequence is not None else max(current, requested)
             self._save_team_meta(team_id, data)
 
     def _reply_scope_queue(self, data: dict[str, Any], agent_id: str) -> list[str]:
@@ -333,14 +358,41 @@ class TeamsMixin:
                 data.get("member_reply_scopes", {}).pop(agent_id, None)
             self._save_team_meta(team_id, data)
 
-    def team_member_room_context(self, parent_session_id: str, agent_id: str) -> str:
+    def team_member_room_context(
+        self,
+        parent_session_id: str,
+        agent_id: str,
+        *,
+        input_refs: list[str] | None = None,
+    ) -> str:
         """Core hook: provide and consume unread room messages before a member turn."""
         sid = str(parent_session_id or "")
         if not sid.startswith("team-"):
             return ""
         team_id = sid[len("team-"):]
         try:
-            context, _previous = self._team_room_context(team_id, str(agent_id or ""))
+            refs = {str(ref) for ref in input_refs or [] if ref}
+            through_sequence = None
+            if refs:
+                with self._team_room_lock:
+                    data = self._team_meta(team_id)
+                    positions = [
+                        int(item.get("sequence") or 0)
+                        for item in data.get("messages") or []
+                        if isinstance(item, dict) and str(item.get("id") or "") in refs
+                    ]
+                if not positions:
+                    # The bounded room preview may have expired. The queued
+                    # item still carries its body; do not read later requests
+                    # into this older turn or consume their cursor early.
+                    return ""
+                through_sequence = max(positions)
+            context, _previous = self._team_room_context(
+                team_id,
+                str(agent_id or ""),
+                through_sequence=through_sequence,
+                exclude_message_ids=refs,
+            )
             return context
         except Exception:
             log.debug("cannot provide Team Room context", exc_info=True)
@@ -350,14 +402,22 @@ class TeamsMixin:
     def _mentioned_member_ids(content: str, roster: list[dict[str, Any]], sender_id: str) -> list[str]:
         text = str(content or "").lower()
         peers = [item for item in roster if str(item.get("agent_id") or "") != sender_id]
-        if any(token in text for token in ("@all", "@everyone", "@全体", "@全员")):
+        # A role is an address, not a substring of another role or an email.
+        left = r"(?<![A-Za-z0-9_@])@"
+        right = r"(?![\w·-]|\.[A-Za-z0-9])"
+        if re.search(left + r"(?:all|everyone|全体成员|全体|全员)" + right, text):
             return [str(item.get("agent_id") or "") for item in peers]
-        mentioned: list[str] = []
+        matches: list[tuple[int, int, str]] = []
         for item in peers:
-            role_name = str(item.get("role") or "").strip()
-            if role_name and f"@{role_name.lower()}" in text:
-                mentioned.append(str(item.get("agent_id") or ""))
-        return mentioned
+            role_name = str(item.get("role") or "").strip().lower()
+            if role_name:
+                for match in re.finditer(left + re.escape(role_name) + right, text):
+                    matches.append((match.start(), len(role_name), str(item.get("agent_id") or "")))
+        longest: dict[int, int] = {}
+        for start, length, _agent_id in matches:
+            longest[start] = max(longest.get(start, 0), length)
+        mentioned = {agent_id for start, length, agent_id in matches if length == longest[start]}
+        return [str(item.get("agent_id") or "") for item in peers if str(item.get("agent_id") or "") in mentioned]
 
     def publish_team_member_output(
         self,
@@ -367,7 +427,7 @@ class TeamsMixin:
         content: str,
         visibility: str | None = None,
     ) -> None:
-        """Core hook: persist a member reply and wake explicitly @mentioned peers."""
+        """Persist a member reply and queue public messages for its teammates."""
         sid = str(parent_session_id or "")
         text = str(content or "").strip()
         if not sid.startswith("team-") or not text:
@@ -414,27 +474,87 @@ class TeamsMixin:
                     else []
                 ),
             )
-            sequence = int(entry.get("sequence") or 0)
-            for target_id in mentioned:
-                room_context, previous = self._team_room_context(
-                    team_id,
-                    target_id,
-                    through_sequence=sequence,
-                    consume=True,
-                )
-                if not room_context:
-                    continue
-                result = manager.send_input(
-                    target_id,
-                    room_context,
-                    resume=True,
-                    room_visibility="group",
-                )
-                if not result.get("ok"):
-                    self._set_team_room_cursor(team_id, target_id, previous)
+            recipients = [
+                str(item.get("agent_id") or "") for item in roster
+                if str(item.get("agent_id") or "") != str(agent_id or "")
+                and str(item.get("status") or "") != "closed"
+            ] if visibility == "group" else []
+            self._route_team_room_message(team_id, entry, manager, recipients, original_content=text)
             _push_teams({"team_id": team_id, "reason": "member_message"})
         except Exception:
             log.debug("cannot publish Team Room member output", exc_info=True)
+
+    def _route_team_room_message(
+        self,
+        team_id: str,
+        entry: dict[str, Any],
+        manager: Any,
+        recipients: list[str],
+        *,
+        original_content: str | None = None,
+    ) -> None:
+        """Deliver public peer traffic independently of its background read cursor."""
+        if entry.get("visibility") == "private":
+            return
+        message_id = str(entry.get("id") or "")
+        if not message_id:
+            return
+        sender_id = str(entry.get("sender_agent_id") or "")
+        sender_role = str(entry.get("sender_role") or "member")
+        content = str(entry.get("content") or "").strip()
+        if not content:
+            return
+        original = str(original_content or content).strip()
+        roles_by_id = dict(zip(entry.get("target_agent_ids") or [], entry.get("target_roles") or []))
+        explicit_targets = set(entry.get("target_agent_ids") or [])
+        for target_id in dict.fromkeys(recipients):
+            if not target_id or target_id == sender_id:
+                continue
+            try:
+                explicit = target_id in explicit_targets
+                envelope = (
+                    ("[Team Room · explicit peer @mention]\n" if explicit else "[Team Room · group message]\n")
+                    + f"Message: {message_id}\nFrom: @{sender_role}\n"
+                    + ("You were explicitly mentioned.\n\n" if explicit else "Shared group context; you were not explicitly mentioned.\n\n")
+                )
+                request = content
+                if len(original) > len(content):
+                    # The room preview is bounded, but an @request after that
+                    # preview must still reach its recipient. Keep the actual
+                    # request's surrounding context and make the omission clear.
+                    role = str(roles_by_id.get(target_id) or "").lower() if explicit else ""
+                    lowered = original.lower()
+                    position = lowered.rfind(f"@{role}") if role else -1
+                    if position < 0 and explicit:
+                        position = max(lowered.rfind(token) for token in ("@all", "@everyone", "@全体", "@全员"))
+                    if explicit:
+                        if position < 0:
+                            position = len(original) - 1
+                        start = max(0, position - 10000)
+                        request = (
+                            "[Long message truncated: excerpt around your @mention; "
+                            "request missing details from the sender if needed.]\n"
+                            + original[start:start + 23000]
+                        )
+                    else:
+                        request = original[:11000] + "\n[Long group message truncated; middle omitted.]\n" + original[-11000:]
+                result = manager.send_input(
+                    target_id,
+                    envelope + request,
+                    resume=True,
+                    room_visibility="group",
+                    interrupt=False,
+                    input_ref=message_id,
+                    coalesce_key="" if explicit else "team-room",
+                )
+                if not result.get("ok"):
+                    log.debug("Team Room mention %s was not accepted for %s: %s", message_id, target_id, result.get("error"))
+                    continue
+                # Reading and delivery have different acknowledgements. Only
+                # the context provider advances the read cursor; accepting this
+                # message must not skip older, still-unread shared room context.
+            except Exception:
+                log.debug("cannot queue Team Room mention %s for %s", message_id, target_id, exc_info=True)
 
     def _team_projection(
         self,
@@ -510,8 +630,8 @@ class TeamsMixin:
             "messages": [],
             "member_cursors": {},
         }
-        path = self._team_path(team_id)
-        path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        with self._team_room_lock:
+            self._save_team_meta(team_id, record)
         # Materialize the lead session so the members directory exists, then
         # spawn the preset squad. ``spawn_team`` needs a mission — fall back to
         # the team name when the user left the objective blank so the preset
@@ -784,7 +904,7 @@ class TeamsMixin:
                 delivered.append(agent_id)
                 roles.append(role_name)
             else:
-                self._set_team_room_cursor(tid, agent_id, previous_cursor)
+                self._set_team_room_cursor(tid, agent_id, previous_cursor, expected_sequence=sequence)
                 self._discard_one_reply_scope(tid, agent_id, visibility_s)
                 errors.append({
                     "agent_id": agent_id,
@@ -803,22 +923,19 @@ class TeamsMixin:
 
     def update_team(self, team_id: str, patch: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
-            path = self._team_path(team_id)
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        if not path.exists():
+            with self._team_room_lock:
+                data = self._team_meta(team_id)
+                patch = patch or {}
+                if "name" in patch:
+                    name = str(patch.get("name") or "").strip()
+                    if name:
+                        data["name"] = name[:120]
+                if "objective" in patch:
+                    data["objective"] = str(patch.get("objective") or "").strip()[:4000]
+                data["updated_at"] = time.time()
+                self._save_team_meta(team_id, data)
+        except FileNotFoundError:
             return {"ok": False, "error": "team not found"}
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            patch = patch or {}
-            if "name" in patch:
-                name = str(patch.get("name") or "").strip()
-                if name:
-                    data["name"] = name[:120]
-            if "objective" in patch:
-                data["objective"] = str(patch.get("objective") or "").strip()[:4000]
-            data["updated_at"] = time.time()
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         _push_teams({"team_id": self._validate_team_id(team_id), "reason": "updated"})
@@ -853,9 +970,10 @@ class TeamsMixin:
             pass
         removed = False
         try:
-            if path.exists():
-                path.unlink()
-                removed = True
+            with self._team_room_lock:
+                if path.exists():
+                    path.unlink()
+                    removed = True
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
         _push_teams({"team_id": tid, "reason": "deleted"})
@@ -1134,16 +1252,20 @@ class TeamsMixin:
         """Turn the main assistant's authorization mode on for every member."""
         try:
             tid = self._validate_team_id(team_id)
-            data = self._team_meta(tid)
+            self._team_meta(tid)  # Validate before materializing a lead runtime.
             manager = self._team_manager(tid)
             roster = manager.list().get("agents", [])
+            with self._team_room_lock:
+                # Roster callbacks may publish while outside the metadata
+                # lock. Merge this setting into the latest room snapshot.
+                data = self._team_meta(tid)
+                data["greenlight"] = bool(enabled)
+                data["updated_at"] = time.time()
+                self._save_team_meta(tid, data)
         except FileNotFoundError:
             return {"ok": False, "error": "team not found"}
         except (OSError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        data["greenlight"] = bool(enabled)
-        data["updated_at"] = time.time()
-        self._save_team_meta(tid, data)
         applied: list[str] = []
         for member in roster:
             agent_id = str(member.get("agent_id") or "")

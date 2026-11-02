@@ -118,18 +118,27 @@ def python_step(job, name):
     return compile(step["run"], f"workflow:{name}", "exec")
 
 
-def test_release_waits_for_all_platforms_and_manual_publish_is_explicit():
+def test_only_version_tag_pushes_publish_after_all_platforms_succeed():
     config = workflow()
-    assert config["on"]["release"]["types"] == ["published"]
+    assert set(config["on"]) == {"push", "workflow_dispatch"}
+    assert config["on"]["push"] == {"tags": ["v*"]}
     assert config["permissions"] == {"contents": "read"}
     publish = config["jobs"]["publish"]
     assert publish["needs"] == ["validate", "build", "source"]
-    assert config["on"]["workflow_dispatch"]["inputs"]["publish_release"] == {
-        "description": "Publish the verified packages as a Release after every build succeeds.",
-        "required": "false", "default": "false", "type": "boolean",
-    }
-    assert publish["if"] == "github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)"
+    assert set(config["on"]["workflow_dispatch"]["inputs"]) == {"ref"}
+    assert publish["if"] == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
     assert publish["permissions"] == {"contents": "write"}
+    validate = config["jobs"]["validate"]
+    assert validate["steps"][0]["with"]["ref"] == "${{ github.event_name == 'push' && github.sha || inputs.ref || github.sha }}"
+    tag_validation = next(step for step in validate["steps"] if step.get("name") == "Validate release tag target")
+    assert tag_validation["if"] == publish["if"]
+    assert tag_validation["env"]["EVENT_SHA"] == "${{ github.sha }}"
+    website = config["jobs"]["update-website"]
+    assert website["needs"] == ["validate", "publish"]
+    assert website["if"] == publish["if"] + " && needs.publish.result == 'success'"
+    website_step = next(step for step in website["steps"] if step.get("name") == "Generate metadata from the complete published Release and push static files")
+    assert '["git", "push", "origin", "HEAD:main"]' in website_step["run"]
+    assert "--tags" not in website_step["run"]
     build = config["jobs"]["build"]
     assert build["strategy"]["fail-fast"] == "false"
     assert {(row["runtime"], row["os"], row["architecture"]) for row in build["strategy"]["matrix"]["include"]} == {
@@ -484,40 +493,50 @@ def test_linux_arm64_build_uses_lld_range_extension_thunks():
 
 
 @pytest.mark.parametrize("present, same", [(False, True), (True, True), (True, False)])
-def test_manual_preflight_allows_new_tag_but_rejects_wrong_existing_target(source_repository, monkeypatch, present, same):
+def test_tag_push_preflight_requires_existing_tag_and_validated_target(source_repository, monkeypatch, present, same):
     _, commit = source_repository
     if present:
         subprocess.run(["git", "tag", "v0.1.0", commit], check=True)
-    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("EVENT_NAME", "push")
+    monkeypatch.setenv("EVENT_REF", "refs/tags/v0.1.0")
+    monkeypatch.setenv("EVENT_SHA", commit)
     monkeypatch.setenv("RELEASE_TAG", "v0.1.0")
     monkeypatch.setenv("SOURCE_COMMIT", commit if same else "b" * 40)
     code = python_step("validate", "Validate release tag target")
-    if same:
+    if present and same:
         exec(code, {})
     else:
-        with pytest.raises(SystemExit, match="Release tag does not match"):
+        with pytest.raises(SystemExit, match="Release tag does not match" if present else "release tag is missing"):
             exec(code, {})
 
 
-def test_default_manual_run_cannot_execute_release_mutation(monkeypatch):
-    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
-    monkeypatch.setenv("MANUAL_PUBLISH", "false")
+@pytest.mark.parametrize("event, ref", [("workflow_dispatch", "refs/tags/v0.1.0"), ("release", "refs/tags/v0.1.0"), ("push", "refs/heads/main")])
+def test_manual_release_and_branch_events_cannot_execute_release_mutation(monkeypatch, event, ref):
+    monkeypatch.setenv("EVENT_NAME", event)
+    monkeypatch.setenv("EVENT_REF", ref)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("No command should run"))
-    with pytest.raises(SystemExit, match="Publishing was not requested"):
+    with pytest.raises(SystemExit, match="Only version tag pushes"):
         exec(python_step("publish", "Publish verified release assets"), {})
 
 
-@pytest.mark.parametrize("existing", [False, True])
-def test_explicit_manual_publish_creates_with_tracked_notes_or_uploads_existing(source_repository, monkeypatch, existing):
+@pytest.fixture
+def tag_push(source_repository, monkeypatch):
     repository, commit = source_repository
+    subprocess.run(["git", "tag", "v0.1.0", commit], check=True)
+    monkeypatch.setenv("EVENT_NAME", "push")
+    monkeypatch.setenv("EVENT_REF", "refs/tags/v0.1.0")
+    monkeypatch.setenv("EVENT_SHA", commit)
+    monkeypatch.setenv("RELEASE_TAG", "v0.1.0")
+    return repository, commit
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_tag_push_creates_with_tracked_notes_or_uploads_matching_existing_release(tag_push, monkeypatch, existing):
+    repository, commit = tag_push
     assets = repository / "release-assets"
     assets.mkdir()
     publish_assets(assets)
-    if existing:
-        subprocess.run(["git", "tag", "v0.1.0", commit], check=True)
-    monkeypatch.setenv("EVENT_NAME", "workflow_dispatch")
-    monkeypatch.setenv("MANUAL_PUBLISH", "true")
-    monkeypatch.setenv("RELEASE_TAG", "v0.1.0")
+    notes = (repository / "scripts/packaging/release-notes-0.1.0.md").read_text(encoding="utf-8")
     real_run = subprocess.run
     calls = []
     def run(command, **kwargs):
@@ -525,7 +544,7 @@ def test_explicit_manual_publish_creates_with_tracked_notes_or_uploads_existing(
             return real_run(command, **kwargs)
         calls.append(command)
         if command[1:3] == ["release", "view"]:
-            return SimpleNamespace(returncode=0 if existing else 1, stdout=json.dumps({"tagName": "v0.1.0", "isDraft": False}))
+            return SimpleNamespace(returncode=0 if existing else 1, stdout=json.dumps({"tagName": "v0.1.0", "isDraft": False, "body": notes}))
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(subprocess, "run", run)
     exec(python_step("publish", "Publish verified release assets"), {})
@@ -535,6 +554,91 @@ def test_explicit_manual_publish_creates_with_tracked_notes_or_uploads_existing(
     if existing:
         assert "--clobber" in mutation
     else:
+        assert "--verify-tag" in mutation
         assert mutation[mutation.index("--target") + 1] == commit
         assert mutation[mutation.index("--title") + 1] == "ArgusAI v0.1.0"
         assert Path(mutation[mutation.index("--notes-file") + 1]).as_posix() == "scripts/packaging/release-notes-0.1.0.md"
+
+
+@pytest.mark.parametrize("step", [("validate", "Validate release tag target"), ("publish", "Publish verified release assets")])
+def test_tag_push_rejects_source_sha_different_from_the_event(tag_push, monkeypatch, step):
+    monkeypatch.setenv("EVENT_SHA", "b" * 40)
+    with pytest.raises(SystemExit, match="Tag push source does not match"):
+        exec(python_step(*step), {})
+
+
+@pytest.mark.parametrize(
+    "damage, error",
+    [("missing-tag", "release tag is missing"), ("wrong-version", "tag does not match validated version"),
+     ("wrong-checkout", "checkout does not match validated source commit")],
+)
+def test_tag_publish_revalidates_identity_before_any_release_commands(tag_push, monkeypatch, damage, error):
+    if damage == "missing-tag":
+        subprocess.run(["git", "tag", "-d", "v0.1.0"], check=True, capture_output=True)
+    elif damage == "wrong-version":
+        monkeypatch.setenv("RELEASE_VERSION", "9.9.9")
+    else:
+        monkeypatch.setenv("SOURCE_COMMIT", "b" * 40)
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        assert command[0] != "gh", "invalid release identity must prevent Release API commands"
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit, match=error):
+        exec(python_step("publish", "Publish verified release assets"), {})
+
+
+def test_tag_push_preflight_accepts_an_annotated_tag_object(source_repository, monkeypatch):
+    _, commit = source_repository
+    subprocess.run(["git", "-c", "user.name=Release fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "tag.gpgsign=false", "tag", "-a", "v0.1.0", "-m", "version tag", commit], check=True)
+    tag_object = subprocess.check_output(["git", "rev-parse", "v0.1.0"], text=True).strip()
+    assert tag_object != commit
+    monkeypatch.setenv("EVENT_NAME", "push")
+    monkeypatch.setenv("EVENT_REF", "refs/tags/v0.1.0")
+    monkeypatch.setenv("EVENT_SHA", tag_object)
+    monkeypatch.setenv("RELEASE_TAG", "v0.1.0")
+    exec(python_step("validate", "Validate release tag target"), {})
+
+
+@pytest.mark.parametrize(
+    "damage, error",
+    [({"tagName": "v9.9.9"}, "unexpected tag"), ({"isDraft": True}, "draft"), ({"body": "wrong notes"}, "release notes do not match")],
+)
+def test_tag_push_refuses_wrong_existing_release_metadata(tag_push, monkeypatch, damage, error):
+    repository, _ = tag_push
+    assets = repository / "release-assets"
+    assets.mkdir()
+    publish_assets(assets)
+    notes = (repository / "scripts/packaging/release-notes-0.1.0.md").read_text(encoding="utf-8")
+    real_run = subprocess.run
+    calls = []
+
+    def run(command, **kwargs):
+        if command[0] != "gh":
+            return real_run(command, **kwargs)
+        calls.append(command)
+        assert command[1:3] == ["release", "view"], "invalid Release metadata must prevent mutations"
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"tagName": "v0.1.0", "isDraft": False, "body": notes, **damage}))
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit, match=error):
+        exec(python_step("publish", "Publish verified release assets"), {})
+    assert len(calls) == 1
+
+
+def test_tag_push_rejects_uncommitted_release_notes_before_gh_commands(tag_push, monkeypatch):
+    repository, _ = tag_push
+    notes = repository / "scripts/packaging/release-notes-0.1.0.md"
+    notes.write_text("uncommitted replacement", encoding="utf-8")
+    real_run = subprocess.run
+
+    def run(command, **kwargs):
+        assert command[0] != "gh", "release mutations must not run with uncommitted notes"
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit, match="Release notes do not match"):
+        exec(python_step("publish", "Publish verified release assets"), {})

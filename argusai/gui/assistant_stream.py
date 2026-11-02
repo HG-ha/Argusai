@@ -167,9 +167,9 @@ class AssistantStreamMixin:
                 if session_id not in self._assistant_running_sessions:
                     return True
             time.sleep(0.05)
-        with self._assistant_run_lock:
-            self._assistant_running_sessions.discard(session_id)
-        return True
+        # Cancellation is cooperative. A deadline does not release ownership
+        # while the old worker can still mutate this conversation.
+        return False
 
     def _start_assistant_stream(
         self,
@@ -224,6 +224,7 @@ class AssistantStreamMixin:
             job_store=None,
             protect_job_id=protect_job_id,
             cron_job_id=cron_job_id or None,
+            worker_running=True,
         )
         job_store = None
         job = None
@@ -344,7 +345,7 @@ class AssistantStreamMixin:
             try:
                 debug_log(f"assistant_worker_start run_id={run_id} session_id={session_id}")
                 result = self._run_assistant_chat(
-                    params,
+                    {**params, "_assistant_stream_run_id": run_id},
                     on_delta=on_delta,
                     on_status=on_status,
                     on_block=on_block,
@@ -454,6 +455,9 @@ class AssistantStreamMixin:
                 except Exception:
                     pass
             finally:
+                stream = self._assistant_streams.get(run_id)
+                if stream is not None:
+                    stream["worker_running"] = False
                 self._stream_hub().finish(run_id)
                 with self._assistant_run_lock:
                     self._assistant_running_sessions.discard(session_id)
@@ -482,6 +486,8 @@ class AssistantStreamMixin:
         if not stream:
             return
         with stream["lock"]:
+            if stream.get("worker_running"):
+                return
             if stream.get("_gc_scheduled"):
                 return
             stream["_gc_scheduled"] = True

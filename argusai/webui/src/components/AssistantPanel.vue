@@ -1012,8 +1012,7 @@ const panelStyle = computed(() => ({
   height: panelHeight.value + 'px',
 }))
 
-function clearPendingTools() {
-  const tab = activeTab.value
+function clearPendingTools(tab = activeTab.value) {
   if (!tab) return
   tab.pendingTools = []
   tab.pendingTool = null
@@ -3717,7 +3716,7 @@ async function runAssistantStream(
   tab,
   startedRunId,
   assistantIndex,
-  { allowFinalize = true, regenerate = false, userIndex = -1, initialOffset = 0 } = {},
+  { allowFinalize = true, regenerate = false, userIndex = -1, initialOffset = 0, onRegenerateRollback = null } = {},
 ) {
   const ownSeq = tab.runSeq
   tab.activeRunId = startedRunId
@@ -3725,6 +3724,7 @@ async function runAssistantStream(
   let finished = false
   let lastEventAt = Date.now()
   let streamedBlocks = false
+  let regenerateRolledBack = false
   try {
     while (!finished) {
       if (tab.runSeq !== ownSeq) return assistantIndex
@@ -3818,7 +3818,13 @@ async function runAssistantStream(
             const errorText = r.error_code === 'acp_image_unsupported'
               ? t('assistant.acpImagesUnsupportedSend')
               : (r.error || 'Error')
-            updateMsg(assistantIndex, { text: errorText, status: '' }, tab)
+            if (regenerate && r.regenerate_rolled_back && onRegenerateRollback) {
+              regenerateRolledBack = true
+              onRegenerateRollback()
+              showToast(errorText, 'error')
+            } else {
+              updateMsg(assistantIndex, { text: errorText, status: '' }, tab)
+            }
             tab.lastError = errorText
           }
         } else if (kind === 'run_error' || kind === 'error') {
@@ -3853,7 +3859,17 @@ async function runAssistantStream(
     tab.lastError = String(e.message || e)
     recomputeBadge(tab)
   } finally {
+    let released = false
     if (tab.runSeq === ownSeq) {
+      try {
+        released = await waitForAssistantIdle(tab, ownSeq)
+      } catch (error) {
+        // A completed answer is still valid if the bridge cannot confirm
+        // ownership release. Keep the queue and busy state for a retry.
+        if (tab.runSeq === ownSeq) showToast(String(error?.message || error), 'error')
+      }
+    }
+    if (tab.runSeq === ownSeq && released) {
       tab.sending = false
       tab.activeStreamMessage = false
       tab.confirmingAction = false
@@ -3864,7 +3880,7 @@ async function runAssistantStream(
       recomputeBadge(tab)
       if (tab === activeTab.value) {
         scrollBottom({ force: autoFollowScroll.value || isNearBottom() })
-        drainQueuedInput()
+        if (!regenerateRolledBack) drainQueuedInput()
         if (tab.autoApproveMode && !(tab.queuedInputs || []).length) {
           nextTick(() => drainPendingAfterAutoApprove(tab))
         }
@@ -4698,16 +4714,34 @@ function withTimeout(promise, ms, fallback = null) {
   ])
 }
 
+async function startTrackedAssistantTurn(tab, params, action = false) {
+  // A cancellation must wait for an in-flight bridge call to claim (or reject)
+  // its backend slot; an idle query before that receipt cannot prove it stopped.
+  const pending = Promise.resolve().then(() => action
+    ? api.startAssistantActionStream(params)
+    : api.startAssistantStream(params))
+  tab._startPromise = pending
+  tab._startSessionId = params.session_id
+  try { return await pending } finally {
+    if (tab._startPromise === pending) {
+      delete tab._startPromise
+      delete tab._startSessionId
+    }
+  }
+}
+
 async function send(msg, options = {}) {
-  const tab = activeTab.value
-  if (!tab) return
-  const displayText = (msg || tab.inputDraft || '').trim()
-  const pathRefsSnapshot = { ...(tab.inputPathRefs || {}) }
-  const text = composeInputForSend(displayText, tab.inputPathRefs || {})
+  const tab = options.tab || activeTab.value
+  if (!tab) return false
+  const sid = tab.sessionId
+  const queued = options.queuedInput || null
+  const displayText = String(queued?.displayText ?? msg ?? tab.inputDraft ?? '').trim()
+  const pathRefsSnapshot = { ...(queued?.pathRefs || tab.inputPathRefs || {}) }
+  const text = queued ? String(queued.text || '') : composeInputForSend(displayText, pathRefsSnapshot)
   // AI UI Protocol v2 §5.1: the selection rides as a top-level field on the
   // ChatMessage, never spliced into `content`. Backend renders the prompt
   // block at LLM-call time so persistence stays clean.
-  const selectionReference = normalizeSelectionReference(tab.previewSelectionContext)
+  const selectionReference = normalizeSelectionReference(queued ? queued.selectionReference : tab.previewSelectionContext)
   const outboundText = text
   // Checked before the busy guard below: asking while the agent works is the
   // entire reason `/btw` exists.
@@ -4718,8 +4752,10 @@ async function send(msg, options = {}) {
   }
   if (voiceState.value === 'recording') voiceInput.cancel()
 
-  const voicePayload = wireOutboundVoice(tab.pendingVoice)
-  const attachments = (tab.pendingAttachments || [])
+  const pendingVoiceSnapshot = queued ? queued.voice : tab.pendingVoice
+  const pendingAttachmentSnapshot = [...(queued ? queued.attachments || [] : tab.pendingAttachments || [])]
+  const voicePayload = wireOutboundVoice(pendingVoiceSnapshot)
+  const attachments = pendingAttachmentSnapshot
     .filter(a => ['image', 'video', 'text', 'file'].includes(a.type))
     .map(a => {
       const base = {
@@ -4746,22 +4782,23 @@ async function send(msg, options = {}) {
       return base
     })
   if (tab.sending || tab.confirmingAction) {
-    queueUserInput(displayText)
-    return
+    if (!queued) queueUserInput(displayText, tab)
+    return false
   }
-  if (!outboundText && !attachments.length && !voicePayload) return
+  if (!outboundText && !attachments.length && !voicePayload) return false
   tab._historyLoaded = true
   if (!options.hideUserBubble && isDefaultTabName(tab.name)) {
     tab.name = deriveSessionName(text || outboundText, attachments, tab.pendingVoice)
     persistTabs()
   }
-  tab.inputDraft = ''
-  tab.inputPathRefs = {}
-  tab.previewSelectionContext = null
+  if (!queued) {
+    tab.inputDraft = ''
+    tab.inputPathRefs = {}
+    tab.previewSelectionContext = null
+    tab.pendingAttachments = []
+    tab.pendingVoice = null
+  }
   nextTick(resizeAssistantInput)
-  const pendingVoiceSnapshot = tab.pendingVoice
-  tab.pendingAttachments = []
-  tab.pendingVoice = null
   const msgExtra = {}
   if (selectionReference) msgExtra.selectionReference = selectionReference
   if (pendingVoiceSnapshot) msgExtra.voice = pendingVoiceSnapshot
@@ -4774,24 +4811,36 @@ async function send(msg, options = {}) {
   const wireSelectionReference = selectionReference ? JSON.parse(JSON.stringify(selectionReference)) : null
   let assistantIndex = addMsg('assistant', '', null, null, null, null, null, tab)
   updateMsg(assistantIndex, { status: t('assistant.startingAssistant') }, tab)
+  const submissionUids = new Set([tab.messages[userIndex]?._uid, tab.messages[assistantIndex]?._uid].filter(uid => uid != null))
+  const rollbackSubmission = () => {
+    if (tab.sessionId !== sid) return
+    tab.messages = tab.messages.filter(message => !submissionUids.has(message._uid))
+    if (!queued) restoreUnsentInput(tab, { text, displayText, pathRefs: pathRefsSnapshot,
+      attachments: pendingAttachmentSnapshot, voice: pendingVoiceSnapshot, selectionReference })
+  }
 
-  tab.runSeq += 1
+  const ownSeq = ++tab.runSeq
   tab.sending = true
   tab.activeStreamMessage = true
   tab.lastError = ''
-  clearPendingTools()
+  clearPendingTools(tab)
   recomputeBadge(tab)
+  let accepted = false
   try {
     updateMsg(assistantIndex, { status: t('assistant.preparingContext') }, tab)
     const context = await buildContextSnapshot()
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) {
+      rollbackSubmission()
+      return false
+    }
     updateMsg(assistantIndex, { status: t('assistant.startingAssistant') }, tab)
-    const started = await api.startAssistantStream({
+    const started = await startTrackedAssistantTurn(tab, {
       message: outboundText,
       session_id: tab.sessionId,
       page: props.page || '',
       context: plainJson(context),
-      thinking_enabled: thinkingEnabled.value,
-      thinking_effort: thinkingEffort.value,
+      thinking_enabled: Boolean(tab.thinkingEnabled),
+      thinking_effort: tab.thinkingEffort || 'high',
       attachments,
       voice: voicePayload,
       selection_reference: wireSelectionReference,
@@ -4799,50 +4848,88 @@ async function send(msg, options = {}) {
       allow_web_search: Boolean(tab.webSearchAllowed),
       runtime: plainJson(tab.runtime),
     })
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) {
+      if (!started.ok) rollbackSubmission()
+      return Boolean(started.ok)
+    }
     if (!started.ok && /already running/i.test(String(started.error || ''))) {
       // A channel message or a cron job owns this conversation right now. Roll
       // the bubbles back and hand the text to the composer, so nothing is lost
       // and no second turn races the running one.
       tab.messages.splice(assistantIndex, 1)
       if (userIndex >= 0) tab.messages.splice(userIndex, 1)
-      tab.inputDraft = displayText
-      tab.inputPathRefs = pathRefsSnapshot
+      if (!queued) restoreUnsentInput(tab, { text, displayText, pathRefs: pathRefsSnapshot,
+        attachments: pendingAttachmentSnapshot, voice: pendingVoiceSnapshot, selectionReference })
       tab.sending = false
       tab.activeStreamMessage = false
       recomputeBadge(tab)
       nextTick(resizeAssistantInput)
       showToast(t('assistant.busyElsewhere'), 'error')
-      return
+      return false
     }
     if (!started.ok) throw new Error(started.error || 'Failed to start assistant stream')
+    accepted = true
     if (started.resolved_external) {
       tab.messages.splice(assistantIndex, 1)
       tab.confirmingAction = false
       recomputeBadge(tab)
-      return
+      return true
     }
     tab.liveJob = started.job || null
     if (tab === activeTab.value) autoFollowScroll.value = true
     await runAssistantStream(tab, started.run_id, assistantIndex, { userIndex })
   } catch (e) {
-    updateMsg(assistantIndex, { text: 'Error: ' + (e.message || e) }, tab)
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) {
+      if (!accepted) rollbackSubmission()
+      return accepted
+    }
+    if (!accepted) {
+      tab.messages.splice(assistantIndex, 1)
+      if (userIndex >= 0) tab.messages.splice(userIndex, 1)
+      if (!queued) restoreUnsentInput(tab, { text, displayText, pathRefs: pathRefsSnapshot,
+        attachments: pendingAttachmentSnapshot, voice: pendingVoiceSnapshot, selectionReference })
+      showToast(String(e.message || e), 'error')
+    } else {
+      updateMsg(assistantIndex, { text: 'Error: ' + (e.message || e) }, tab)
+    }
     tab.lastError = String(e.message || e)
     tab.sending = false
     tab.activeStreamMessage = false
     recomputeBadge(tab)
   }
+  return accepted
 }
 
-function queueUserInput(raw = '') {
-  const tab = activeTab.value
+function restoreUnsentInput(tab, item) {
+  if (!tab.inputDraft && !tab.pendingAttachments?.length && !tab.pendingVoice
+    && !tab.previewSelectionContext && !Object.keys(tab.inputPathRefs || {}).length) {
+    tab.inputDraft = item.displayText ?? item.text ?? ''
+    tab.inputPathRefs = { ...(item.pathRefs || {}) }
+    tab.pendingAttachments = [...(item.attachments || [])]
+    tab.pendingVoice = item.voice || null
+    tab.previewSelectionContext = item.selectionReference || null
+  } else {
+    tab.queuedInputs = [item, ...(tab.queuedInputs || [])]
+  }
+}
+
+function queueUserInput(raw = '', tab = activeTab.value) {
   if (!tab) return
   const displayText = String(raw || tab.inputDraft || '').trim()
   const pathRefs = { ...(tab.inputPathRefs || {}) }
   const text = composeInputForSend(displayText, pathRefs)
-  if (!text) return
-  tab.queuedInputs = [...(tab.queuedInputs || []), { text, displayText, pathRefs, ts: Date.now() }]
+  const attachments = [...(tab.pendingAttachments || [])]
+  const voice = tab.pendingVoice || null
+  if (!text && !attachments.length && !voice) return
+  tab.queuedInputs = [...(tab.queuedInputs || []), {
+    text, displayText, pathRefs, attachments, voice,
+    selectionReference: normalizeSelectionReference(tab.previewSelectionContext), ts: Date.now(),
+  }]
   tab.inputDraft = ''
   tab.inputPathRefs = {}
+  tab.pendingAttachments = []
+  tab.pendingVoice = null
+  tab.previewSelectionContext = null
   if (tab.sending) {
     api.pauseAssistantAfterCurrentResponse(tab.sessionId).catch(() => {})
   }
@@ -4884,10 +4971,13 @@ function drainQueuedInput() {
   if (!tab) return
   if (tab.sending || tab.confirmingAction || tab.pendingTools.length) return
   const next = (tab.queuedInputs || []).shift()
-  if (!next || !String(next.text || '').trim()) return
-  setTimeout(() => {
+  if (!next) return
+  const sid = tab.sessionId
+  setTimeout(async () => {
+    if (tab.sessionId !== sid) return
     if (!tab.sending && !tab.confirmingAction && !tab.pendingTools.length) {
-      send(next.text)
+      const accepted = await send(next.text, { tab, queuedInput: next })
+      if (!accepted && tab.sessionId === sid) tab.queuedInputs = [next, ...tab.queuedInputs]
     } else {
       tab.queuedInputs = [next, ...tab.queuedInputs]
     }
@@ -4901,25 +4991,28 @@ async function sendQueuedNow(index) {
   const items = [...(tab.queuedInputs || [])]
   const item = items[index]
   if (!item) return
-  const text = String(item.text || '').trim()
-  if (!text) return
-
-  tab.queuedInputs = items.filter((_, i) => i !== index)
-
-  const busy = tab.sending || tab.confirmingAction || (tab.pendingTools?.length > 0)
+  const sid = tab.sessionId
+  let busy = tab.sending || tab.confirmingAction || (tab.pendingTools?.length > 0)
+  if (!busy) {
+    try {
+      const backend = await api.listAssistantRunJobs(sid)
+      if (typeof backend?.running !== 'boolean') throw new Error(t('assistant.assistantClosingWait'))
+      busy = backend.running
+    } catch (error) {
+      showToast(String(error?.message || error), 'error')
+      return
+    }
+  }
+  if (tab.sessionId !== sid) return
   if (busy) {
-    cancelRun()
-    await nextTick()
-    await new Promise(resolve => setTimeout(resolve, 0))
+    if (!await cancelRun(tab)) return
   }
-
-  if (tab.sending || tab.confirmingAction || tab.pendingTools?.length > 0) {
-    tab.queuedInputs = [...(tab.queuedInputs || []), item]
-    showToast(t('assistant.assistantClosingWait'), 'info')
-    return
-  }
-
-  await send(text)
+  if (tab.sessionId !== sid || tab.sending || tab.confirmingAction || tab.pendingTools?.length) return
+  const currentIndex = (tab.queuedInputs || []).indexOf(item)
+  if (currentIndex < 0) return
+  tab.queuedInputs.splice(currentIndex, 1)
+  const accepted = await send(item.text, { tab, queuedInput: item })
+  if (!accepted && tab.sessionId === sid) tab.queuedInputs.splice(currentIndex, 0, item)
 }
 
 function previousUserMessage(index) {
@@ -5194,32 +5287,44 @@ async function regenerateFromUser(userMessage, replacementText) {
   if (tab.pendingTools?.length) return
   const text = String(replacementText || '').trim()
   const targetIndex = tab.messages.findIndex(message => message?._uid === userMessage?._uid)
-  const targetTimestamp = Number(userMessage?.ts || 0) / 1000
-  if (!text || targetIndex < 0 || !Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
+  const sid = tab.sessionId
+  const originalMessages = [...tab.messages]
+  if (!text || targetIndex < 0) {
     showToast(t('assistant.locateMessageFailed'), 'error')
     return
   }
 
-  tab.runSeq += 1
+  const ownSeq = ++tab.runSeq
   tab.sending = true
   tab.activeStreamMessage = false
   tab.lastError = ''
   recomputeBadge(tab)
   let assistantIndex = -1
   try {
+    // Optimistic messages have a local timestamp until a done event arrives.
+    // A cancelled stream may never deliver that event, so resolve the exact
+    // persisted user turn instead of relaxing the backend's branch check.
+    const history = await api.getAssistantHistory(sid)
+    if (!history?.ok) throw new Error(history?.error || t('assistant.historyLoadTimeout'))
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
+    const targetTimestamp = resolvePersistedUserTimestamp(tab.messages, targetIndex, history.history)
+    if (!targetTimestamp) throw new Error(t('assistant.locateMessageFailed'))
+    updateMsg(targetIndex, { ts: targetTimestamp * 1000 }, tab)
     const context = await buildContextSnapshot()
-    const started = await api.startAssistantStream({
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
+    const started = await startTrackedAssistantTurn(tab, {
       message: text,
       session_id: tab.sessionId,
       page: props.page || '',
       context: plainJson(context),
       regenerate: true,
       regenerate_user_before: targetTimestamp,
-      thinking_enabled: thinkingEnabled.value,
-      thinking_effort: thinkingEffort.value,
+      thinking_enabled: Boolean(tab.thinkingEnabled),
+      thinking_effort: tab.thinkingEffort || 'high',
       allow_web_search: Boolean(tab.webSearchAllowed),
       runtime: plainJson(tab.runtime),
     })
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
     if (!started.ok) throw new Error(started.error || 'Failed to start assistant stream')
     tab.liveJob = started.job || null
 
@@ -5237,8 +5342,8 @@ async function regenerateFromUser(userMessage, replacementText) {
     if (tab.renderWindowStart > targetIndex) {
       tab.renderWindowStart = Math.max(0, targetIndex)
     }
-    cancelEditUserMessage()
-    clearPendingTools()
+    if (tab === activeTab.value) cancelEditUserMessage()
+    clearPendingTools(tab)
     tab.confirmingAction = false
     tab.activeStreamMessage = true
     assistantIndex = addMsg('assistant', '', null, null, null, null, null, tab)
@@ -5248,9 +5353,20 @@ async function regenerateFromUser(userMessage, replacementText) {
       tab,
       started.run_id,
       assistantIndex,
-      { regenerate: true, userIndex: targetIndex },
+      {
+        regenerate: true, userIndex: targetIndex,
+        onRegenerateRollback: () => {
+          if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
+          tab.messages = originalMessages
+          if (tab === activeTab.value) {
+            editingUserMessageUid.value = userMessage._uid
+            editingUserMessageText.value = text
+          }
+        },
+      },
     )
   } catch (e) {
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
     if (assistantIndex >= 0) {
       updateMsg(assistantIndex, { text: 'Error: ' + (e.message || e), status: '' }, tab)
     } else {
@@ -5261,6 +5377,33 @@ async function regenerateFromUser(userMessage, replacementText) {
     tab.activeStreamMessage = false
     recomputeBadge(tab)
   }
+}
+
+function resolvePersistedUserTimestamp(localMessages, targetIndex, persistedMessages) {
+  const target = localMessages[targetIndex]
+  if (target?.role !== 'user') return 0
+  const persisted = (persistedMessages || []).filter(message => message?.role === 'user'
+    && !message.hidden && !message.ui_hidden)
+  const targetText = String(target.text || '').trim()
+  const sameContent = message => {
+    const content = String(message.content ?? message.text ?? '').trim()
+    if (content === targetText) return true
+    const attachments = target.attachments || []
+    const stored = message.attachments || []
+    const sameAttachments = attachments.length > 0 && attachments.length === stored.length
+      && attachments.every((item, index) => item.type === stored[index]?.type
+        && (item.id && stored[index]?.id ? item.id === stored[index].id : item.name === stored[index]?.name))
+    const sameVoice = target.voice?.id && target.voice.id === message.voice?.id
+    return Boolean((sameAttachments || sameVoice) && (!targetText || content.startsWith(targetText + '\n')))
+  }
+  const timestamp = Number(target.ts || 0) / 1000
+  const exact = persisted.filter(message => Math.abs(Number(message.timestamp || 0) - timestamp) <= 0.001)
+  if (exact.length === 1) return Number(exact[0].timestamp)
+  const localUsers = localMessages.filter(message => message?.role === 'user' && !message.hidden && !message.ui_hidden)
+  if (localUsers.length !== persisted.length) return 0
+  const ordinal = localUsers.indexOf(target)
+  const candidate = persisted[ordinal]
+  return candidate && sameContent(candidate) ? Number(candidate.timestamp || 0) : 0
 }
 
 async function regenerateMessage(index) {
@@ -5464,6 +5607,8 @@ async function submitPendingBatch(intent) {
   if (!tab || tab.confirmingAction || !tab.pendingTools.length) return
   const resolvesExternal = tab.sending && canResolvePendingWhileSending(tab)
   if (tab.sending && !resolvesExternal) return
+  const sid = tab.sessionId
+  let ownSeq = tab.runSeq
   // Loom22 §9: typed confirmation RPC — never encode decisions in chat text.
   const pending = tab.pendingTools[0]
   const binding = {
@@ -5504,29 +5649,33 @@ async function submitPendingBatch(intent) {
   tab.confirmingAction = true
   if (resolvesExternal) {
     try {
-      const resolved = await api.startAssistantActionStream({
-        session_id: tab.sessionId,
+      const resolved = await startTrackedAssistantTurn(tab, {
+        session_id: sid,
         action: confirmation,
-      })
+      }, true)
+      if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
       if (!resolved?.ok) throw new Error(resolved?.error || t('assistant.confirmationExpired'))
       if (!resolved.resolved_external) {
         throw new Error(t('assistant.confirmationExpired'))
       }
       markExternalConfirmationResolved(tab, confirmation)
-      clearPendingTools()
+      clearPendingTools(tab)
     } catch (error) {
+      if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
       tab.lastError = String(error?.message || error)
       showToast(tab.lastError, 'error')
     } finally {
-      tab.confirmingAction = false
-      recomputeBadge(tab)
+      if (tab.sessionId === sid && tab.runSeq === ownSeq) {
+        tab.confirmingAction = false
+        recomputeBadge(tab)
+      }
     }
     return
   }
-  clearPendingTools()
+  clearPendingTools(tab)
   let assistantIndex = addMsg('assistant', '', null, null, null, null, null, tab)
   updateMsg(assistantIndex, { status: t('assistant.startingAssistant') }, tab)
-  tab.runSeq += 1
+  ownSeq = ++tab.runSeq
   tab.sending = true
   tab.activeStreamMessage = true
   tab.lastError = ''
@@ -5534,23 +5683,26 @@ async function submitPendingBatch(intent) {
   try {
     updateMsg(assistantIndex, { status: t('assistant.preparingContext') }, tab)
     const context = await buildContextSnapshot()
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
     updateMsg(assistantIndex, { status: t('assistant.startingAssistant') }, tab)
-    const started = await api.startAssistantActionStream({
-      session_id: tab.sessionId,
+    const started = await startTrackedAssistantTurn(tab, {
+      session_id: sid,
       job_id: String(tab.liveJob?.job_id || ''),
       page: props.page || '',
       context: plainJson(context),
-      thinking_enabled: thinkingEnabled.value,
-      thinking_effort: thinkingEffort.value,
+      thinking_enabled: Boolean(tab.thinkingEnabled),
+      thinking_effort: tab.thinkingEffort || 'high',
       action: confirmation,
       allow_web_search: Boolean(tab.webSearchAllowed),
       runtime: plainJson(tab.runtime),
-    })
+    }, true)
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
     if (!started.ok) throw new Error(started.error || 'Failed to start assistant stream')
     tab.liveJob = started.job || null
     if (tab === activeTab.value) autoFollowScroll.value = true
     await runAssistantStream(tab, started.run_id, assistantIndex)
   } catch (e) {
+    if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
     updateMsg(assistantIndex, { text: 'Error: ' + (e.message || e) }, tab)
     tab.lastError = String(e.message || e)
     tab.sending = false
@@ -6119,17 +6271,35 @@ async function loadHistory() {
   }
 }
 
-async function cancelRun() {
-  const tab = activeTab.value
-  if (!tab) return
+async function waitForAssistantIdle(tab, ownSeq = tab.runSeq) {
+  const sid = tab.sessionId
+  let failures = 0
+  while (tab.sessionId === sid && tab.runSeq === ownSeq) {
+    let result
+    try {
+      result = await withTimeout(api.listAssistantRunJobs(sid), HISTORY_LOAD_TIMEOUT_MS, null)
+    } catch (_) { /* retry transient bridge failures without releasing the queue */ }
+    if (typeof result?.running !== 'boolean') {
+      if (++failures >= 3) throw new Error(result?.error || t('assistant.assistantClosingWait'))
+      await sleep(100)
+      continue
+    }
+    failures = 0
+    if (!result.running) return true
+    await sleep(100)
+  }
+  return false
+}
+
+async function cancelRun(tabOverride = null) {
+  const tab = tabOverride?.sessionId ? tabOverride : activeTab.value
+  if (!tab) return false
+  if (tab._cancelPromise) return tab._cancelPromise
   const sid = String(tab.sessionId || '')
-  tab.runSeq += 1
-  tab.sending = false
+  const pendingStart = tab._startSessionId === sid ? tab._startPromise : null
+  const ownSeq = ++tab.runSeq
+  tab.sending = true
   tab.activeStreamMessage = false
-  tab.activeRunId = ''
-  tab.liveJob = null
-  tab.confirmingAction = false
-  clearPendingTools()
   recomputeBadge(tab)
 
   const cancelLabel = t('assistant.cancelled')
@@ -6147,8 +6317,7 @@ async function cancelRun() {
       text: prevText
         ? (prevText.startsWith(cancelPrefix) ? prevText : `${cancelPrefix} ${unprefixedText}`)
         : cancelLabel,
-      status: '',
-      startedAt: null,
+      status: t('assistant.assistantClosingWait'),
       cancelled: true,
     }
     tab.messages[lastIdx] = next
@@ -6156,11 +6325,41 @@ async function cancelRun() {
     addMsg('assistant', cancelLabel, null, null, null, null, null, tab)
   }
 
-  setTimeout(() => {
-    api.cancelAssistantRun(sid)
-      .catch(e => console.warn('cancelAssistantRun failed', e))
-      .finally(() => { refreshRunJobs(tab).catch(() => {}) })
-  }, 0)
+  const pending = (async () => {
+    try {
+      if (pendingStart) {
+        // A rejected start has no worker, but still needs a definitive receipt
+        // before cancellation can safely release a queued replacement.
+        try { await pendingStart } catch (_) { /* cancel any existing owner below */ }
+      }
+      if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return false
+      const response = await api.cancelAssistantRun(sid)
+      if (!response?.ok) throw new Error(response?.error || t('assistant.assistantClosingWait'))
+      if (!await waitForAssistantIdle(tab, ownSeq)) return false
+      if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return false
+      tab.sending = false
+      tab.confirmingAction = false
+      tab.activeRunId = ''
+      tab.liveJob = null
+      clearPendingTools(tab)
+      const tail = tab.messages[tab.messages.length - 1]
+      if (tail?.cancelled) { tail.status = ''; tail.startedAt = null }
+      recomputeBadge(tab)
+      refreshRunJobs(tab).catch(() => {})
+      return true
+    } catch (error) {
+      if (tab.sessionId === sid && tab.runSeq === ownSeq) {
+        tab.lastError = String(error?.message || error)
+        recomputeBadge(tab)
+        showToast(tab.lastError, 'error')
+      }
+      return false
+    }
+  })()
+  tab._cancelPromise = pending
+  try { return await pending } finally {
+    if (tab._cancelPromise === pending) delete tab._cancelPromise
+  }
 }
 
 function handleCardAction(value, block) {

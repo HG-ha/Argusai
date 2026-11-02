@@ -127,6 +127,15 @@ ends, and members share a group room.
 
 Members are depth-1. They can talk in the room. They cannot recruit further agents. Only you or the user add members. To give an order, `team_message_send` or `team_member_send_input` — do not `spawn_agent` a duplicate.
 
+Public member replies are delivered to the other team members. Busy members
+finish their current turn first; ordinary messages can arrive as one ordered
+batch. Members decide whether their role, new evidence, a correction, or a
+concrete dependency needs a reply. Otherwise they use `team_room_pass` silently,
+without acknowledgements or agreement-only posts. An explicit `@exact-role`
+request is a separate work item and must be addressed; private messages remain
+private. Shared context is unread room history supplied at the next turn, not
+every member's full private history or an unlimited replay on every message.
+
 ### Lead the objective through completion
 
 `completed` means a member's current turn ended; `idle` means no member is

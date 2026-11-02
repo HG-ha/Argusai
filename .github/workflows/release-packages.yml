@@ -1,26 +1,21 @@
 name: Release packages
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       ref:
         description: "Git ref to build; empty uses the selected branch."
         required: false
         type: string
-      publish_release:
-        description: "Publish the verified packages as a Release after every build succeeds."
-        required: false
-        default: false
-        type: boolean
 
 # Compilation jobs only read the repository. Only publish can change a Release.
 permissions:
   contents: read
 
 concurrency:
-  group: release-packages-${{ github.event.release.tag_name || github.run_id }}
+  group: release-packages-${{ github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: false
 
 env:
@@ -41,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref || github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.ref || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
@@ -53,7 +48,7 @@ jobs:
         id: metadata
         shell: python
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
         run: |
           import os
           import subprocess
@@ -72,27 +67,31 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(f"## ArgusAI {version}\n\nSource commit: `{commit}`\n")
       - name: Validate release tag target
-        if: github.event_name == 'release' || inputs.publish_release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_TAG: ${{ steps.metadata.outputs.release_tag }}
           SOURCE_COMMIT: ${{ steps.metadata.outputs.commit }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
         shell: python
         run: |
           import os
           import subprocess
 
           ref = f"refs/tags/{os.environ['RELEASE_TAG']}"
+          if os.environ["EVENT_NAME"] != "push" or os.environ.get("EVENT_REF") != ref:
+              raise SystemExit("Release validation requires the pushed version tag")
           exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", ref])
           if exists.returncode not in (0, 1):
               raise SystemExit("Cannot inspect release tag")
-          if exists.returncode == 0:
-              target = subprocess.run(["git", "rev-parse", "--verify", ref + "^{commit}"],
+          if exists.returncode != 0:
+              raise SystemExit("Pushed release tag is missing from the checkout")
+          for target_ref, label in ((ref, "Release tag"), (os.environ.get("EVENT_SHA", ""), "Tag push source")):
+              target = subprocess.run(["git", "rev-parse", "--verify", target_ref + "^{commit}"],
                                       capture_output=True, text=True)
               if target.returncode or target.stdout.strip() != os.environ["SOURCE_COMMIT"]:
-                  raise SystemExit("Release tag does not match validated source commit")
-          elif os.environ["EVENT_NAME"] == "release":
-              raise SystemExit("Published release tag is missing from the checkout")
+                  raise SystemExit(f"{label} does not match validated source commit")
 
   source:
     name: Archive matching source
@@ -482,7 +481,7 @@ jobs:
 
   publish:
     name: Attach verified packages to Release
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [validate, build, source]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -493,7 +492,8 @@ jobs:
       SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
       RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
       EVENT_NAME: ${{ github.event_name }}
-      MANUAL_PUBLISH: ${{ inputs.publish_release }}
+      EVENT_REF: ${{ github.ref }}
+      EVENT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -574,12 +574,14 @@ jobs:
           from pathlib import Path
 
           event = os.environ["EVENT_NAME"]
-          requested = os.environ.get("MANUAL_PUBLISH", "").lower() == "true"
-          if event != "release" and not (event == "workflow_dispatch" and requested):
-              raise SystemExit("Publishing was not requested")
+          event_ref = os.environ.get("EVENT_REF", "")
+          if event != "push" or not event_ref.startswith("refs/tags/v"):
+              raise SystemExit("Only version tag pushes can publish a Release")
           version = os.environ["RELEASE_VERSION"]
           commit = os.environ["SOURCE_COMMIT"]
           tag = os.environ["RELEASE_TAG"]
+          if tag != f"v{version}" or event_ref != f"refs/tags/{tag}":
+              raise SystemExit("Pushed release tag does not match validated version")
           actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           if actual != commit:
               raise SystemExit("Publish checkout does not match validated source commit")
@@ -587,37 +589,36 @@ jobs:
           exists = subprocess.run(["git", "show-ref", "--verify", "--quiet", ref])
           if exists.returncode not in (0, 1):
               raise SystemExit("Cannot inspect release tag before publishing")
-          if exists.returncode == 0:
-              target = subprocess.run(["git", "rev-parse", "--verify", ref + "^{commit}"],
+          if exists.returncode != 0:
+              raise SystemExit("Pushed release tag is missing from the checkout")
+          for target_ref, label in ((ref, "Release tag"), (os.environ.get("EVENT_SHA", ""), "Tag push source")):
+              target = subprocess.run(["git", "rev-parse", "--verify", target_ref + "^{commit}"],
                                       capture_output=True, text=True)
               if target.returncode or target.stdout.strip() != commit:
-                  raise SystemExit("Release tag does not match validated source commit")
-          elif event == "release":
-              raise SystemExit("Published release tag is missing from the checkout")
+                  raise SystemExit(f"{label} does not match validated source commit")
+          notes = Path(f"scripts/packaging/release-notes-{version}.md")
+          if not notes.is_file() or not notes.read_bytes().strip():
+              raise SystemExit(f"Missing tracked release notes: {notes}")
+          committed_notes = subprocess.check_output(["git", "show", f"{commit}:{notes.as_posix()}"])
+          if committed_notes != notes.read_bytes():
+              raise SystemExit("Release notes do not match the validated commit")
           assets = sorted(str(path) for path in Path("release-assets").iterdir())
-          result = subprocess.run(["gh", "release", "view", tag, "--json", "tagName,isDraft"],
+          result = subprocess.run(["gh", "release", "view", tag, "--json", "tagName,isDraft,body"],
                                   capture_output=True, text=True)
           if result.returncode == 0:
               release = json.loads(result.stdout)
               if release.get("tagName") != tag or release.get("isDraft"):
                   raise SystemExit("Existing release is a draft or has an unexpected tag")
-              if exists.returncode != 0:
-                  raise SystemExit("Existing release tag is missing from the checkout")
+              if str(release.get("body") or "").strip() != notes.read_text(encoding="utf-8").strip():
+                  raise SystemExit("Existing release notes do not match the validated commit")
               subprocess.run(["gh", "release", "upload", tag, *assets, "--clobber"], check=True)
           else:
-              if event == "release":
-                  raise SystemExit("Published release could not be read; refusing to create a replacement")
-              notes = Path(f"scripts/packaging/release-notes-{version}.md")
-              if not notes.is_file() or not notes.read_bytes().strip():
-                  raise SystemExit(f"Missing tracked release notes: {notes}")
-              committed_notes = subprocess.check_output(["git", "show", f"{commit}:{notes.as_posix()}"])
-              if committed_notes != notes.read_bytes():
-                  raise SystemExit("Release notes do not match the validated commit")
-              subprocess.run(["gh", "release", "create", tag, "--target", commit,
+              subprocess.run(["gh", "release", "create", tag, "--verify-tag", "--target", commit,
                               "--title", f"ArgusAI v{version}", "--notes-file", str(notes), *assets], check=True)
 
   update-website:
     name: Synchronize and verify the public update feed
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.publish.result == 'success'
     needs: [validate, publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 12

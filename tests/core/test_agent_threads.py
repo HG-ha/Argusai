@@ -408,6 +408,7 @@ def test_agent_thread_recovers_interrupted_snapshot_as_paused(tmp_path: Path) ->
                 "updated_at": 1,
                 "events": [],
                 "pending_inputs": [],
+                "waiting_for_slot": True,
             }
         ),
         encoding="utf-8",
@@ -419,6 +420,8 @@ def test_agent_thread_recovers_interrupted_snapshot_as_paused(tmp_path: Path) ->
     assert recovered["status"] == "paused"
     assert recovered["status_message"] == "Recovered after an interrupted process"
     assert recovered["events"][-1]["type"] == "crash_recovered"
+    assert manager._records["agent-recover"]["peer_resume_blocked"] is True
+    assert not manager._records["agent-recover"].get("waiting_for_slot")
 
 
 def test_external_agent_spawn_persists_explicit_acp_backend(tmp_path: Path, monkeypatch) -> None:
@@ -849,3 +852,576 @@ def test_team_member_tool_session_override_replaces_lead_session() -> None:
     finally:
         tool_session_override.reset(token)
     assert kwargs["_session_id"] == "member-1"
+
+
+@pytest.mark.parametrize("backend", ["native", "acp"])
+@pytest.mark.parametrize("interrupt", [False, True])
+@pytest.mark.parametrize("coalesce", [False, True])
+def test_peer_delivery_queues_exact_message_and_deduplicates_durably(
+    tmp_path: Path, monkeypatch, backend: str, interrupt: bool, coalesce: bool,
+) -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[tuple[str, list]] = []
+    parent = _parent(tmp_path)
+
+    async def _turn(message, attachments=None):
+        calls.append((message, list(attachments or [])))
+        if len(calls) == 1:
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+
+    if backend == "native":
+        async def _chat(self, message="", attachments=None, **_kwargs):
+            await _turn(message, attachments)
+            return ChatResponse(text="result", status="done")
+
+        monkeypatch.setattr(AssistantSession, "chat", _chat)
+        monkeypatch.setattr(
+            "argusai.core.assistant.agent_threads._create_isolated_ai_provider",
+            lambda *_args, **_kwargs: _Provider(),
+        )
+    else:
+        settings = parent.registry.api.settings_mgr.get()
+        settings.data_root = str(tmp_path / "data")
+        settings.agent_runtimes = [{
+            "id": "fake-acp", "backend": "acp", "enabled": True, "command": "fake-acp",
+        }]
+        parent.registry.api._assistant_tool_broker = SimpleNamespace(
+            register_session=lambda *_args, **_kwargs: "mock-token", mcp_server=lambda *_args: {},
+            permission_handler=lambda *_args: None, unregister=lambda *_args: None,
+        )
+
+        async def _acp(_config, _binding, *, message, attachments=None, **_kwargs):
+            await _turn(message, attachments)
+            return SimpleNamespace(
+                ok=True, text="ACP result", error="", error_code="", stop_reason="end_turn",
+                acp_session_id="mock-acp", config_options=[], updates=[],
+            )
+
+        monkeypatch.setattr("argusai.core.agent_runtimes.run_acp_turn", _acp)
+
+    manager = AgentThreadManager(parent)
+    try:
+        if backend == "native":
+            aid = manager.spawn(role="A", objective="finish original work")["agent"]["agent_id"]
+        else:
+            aid = manager.spawn_external(runtime_id="fake-acp", role="A", objective="finish original work")["agent"]["agent_id"]
+        assert started.wait(timeout=2)
+        # Preserve the full 24k room body even with its additional typed wrapper.
+        body = "[Team Room event]\n" + "e" * 300 + "\n" + "x" * 23980 + "UNIQUE_PEER_TAIL"
+        attachment = {"name": "original.txt", "data_base64": "aGk="}
+        receipt = manager.send_input(
+            aid, body, resume=True, interrupt=interrupt, input_ref="room-message-1",
+            room_visibility="group", attachments=[attachment],
+            coalesce_key="team-room" if coalesce else "",
+        )
+        assert receipt["ok"] is True
+        assert manager._runtimes[aid]["child"]._pause_after_current_response is interrupt
+        duplicate = manager.send_input(aid, body, interrupt=False, input_ref="room-message-1")
+        assert duplicate["ok"] is True and duplicate["duplicate"] is True
+        attachment["name"] = "mutated.txt"
+        assert manager.send_input(
+            aid, "separate room request", interrupt=False, input_ref="room-message-2", room_visibility="group",
+            coalesce_key="team-room" if coalesce else "",
+        )["ok"] is True
+        stored = json.loads(manager._path(aid).read_text(encoding="utf-8"))
+        merged = coalesce and not interrupt
+        assert stored["pending_input_count"] == (1 if merged else 2)
+        assert stored["pending_inputs"][0]["input_refs"] == (
+            ["room-message-1", "room-message-2"] if merged else ["room-message-1"]
+        )
+        assert stored["pending_inputs"][0]["room_visibility"] == "group"
+        assert stored["pending_inputs"][0]["attachments"][0]["name"] == "original.txt"
+        release.set()
+        done = manager.wait([aid], timeout_seconds=3)["agents"][0]
+        assert done["status"] == "completed" and done["pending_input_count"] == 0
+        assert len(calls) == (2 if merged else 3)
+        expected_body = body if not interrupt else body[:24000]
+        if merged:
+            from argusai.core.assistant.agent_threads import _COALESCED_INPUT_SEPARATOR
+            expected_body += _COALESCED_INPUT_SEPARATOR + "separate room request"
+        assert calls[1][0] == expected_body
+        assert calls[1][1][0]["name"] == "original.txt"
+        if not merged:
+            assert calls[2][0] == "separate room request"
+        assert manager.send_input(aid, "retry", interrupt=False, input_ref="room-message-1")["duplicate"] is True
+        restored = AgentThreadManager(parent)
+        try:
+            assert restored.send_input(aid, "retry", interrupt=False, input_ref="room-message-1")["duplicate"] is True
+            assert not restored._runtimes
+        finally:
+            restored.shutdown()
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_peer_input_waits_behind_existing_confirmation_without_clearing_it(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _chat(self, message="", *, confirmation_action=False, **_kwargs):
+        if confirmation_action:
+            calls.append("confirmation")
+            self._pending = None
+            return ChatResponse(text="approved", status="done")
+        if not calls:
+            calls.append("original")
+            self._pending = {
+                "confirmations": [{"name": "write_probe", "arguments": {}, "tool_call": {"id": "write-1"}}],
+                "tool_calls": [], "messages": [], "assistant_response": {}, "decisions": {},
+            }
+            return ChatResponse(text="authorize first", status="awaiting_confirmation")
+        calls.append(message)
+        return ChatResponse(text="peer processed", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="A", objective="original work")["agent"]["agent_id"]
+        pending = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        confirmation = pending["pending_confirmation"]
+        receipt = manager.send_input(aid, "@A follow-up", interrupt=False, input_ref="room-waiting")
+        assert receipt["ok"] is True
+        assert receipt["agent"]["status"] == "paused"
+        assert receipt["agent"]["pending_confirmation"] == confirmation
+        assert calls == ["original"]
+        assert manager.send_input(aid, "ordinary human input")["error_code"] == "agent_confirmation_required"
+        tool = confirmation["pending_tools"][0]
+        assert manager.confirm(aid, {
+            "type": "confirmation_decision", "pending_id": tool["pending_id"],
+            "version": tool["version"], "call_id": tool["id"], "verdict": "allow",
+        })["ok"] is True
+        done = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert done["status"] == "completed"
+        assert calls == ["original", "confirmation", "@A follow-up"]
+    finally:
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_action", ["pause", "close", "halt"])
+def test_parent_stop_takes_priority_over_accepted_peer_queue(tmp_path: Path, monkeypatch, stop_action: str) -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        started.set()
+        while not release.is_set():
+            await asyncio.sleep(0.005)
+        return ChatResponse(text="original result", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="A", objective="original work")["agent"]["agent_id"]
+        assert started.wait(timeout=2)
+        assert manager.send_input(aid, "peer request", interrupt=False, input_ref="room-stop")["ok"] is True
+        assert getattr(manager, stop_action)(aid)["ok"] is True
+        release.set()
+        stopped = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert stopped["status"] == ("closed" if stop_action == "close" else "paused")
+        assert stopped["pending_input_count"] == (0 if stop_action == "halt" else 1)
+        assert manager.send_input(aid, "retry old request", interrupt=False, input_ref="room-stop")["duplicate"] is True
+        assert len(calls) == 1
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_waiter", [None, "pause", "close"])
+def test_peer_capacity_waiters_resume_only_when_a_slot_retires(
+    tmp_path: Path, monkeypatch, stop_waiter: str | None,
+) -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        if len(calls) == 1:
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+        return ChatResponse(text="finished", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    parent = _parent(tmp_path)
+    parent.registry.api.settings_mgr.get().assistant_team_max_parallel = 1
+    manager = AgentThreadManager(parent)
+    try:
+        ids = [manager.spawn(role=role, objective=f"work-{role}", start_immediately=False)["agent"]["agent_id"] for role in ("A", "B", "C")]
+        assert manager.send_input(ids[0], "start original")["ok"] is True
+        assert started.wait(timeout=2)
+        for aid, text in zip(ids[1:], ("peer-B", "peer-C")):
+            result = manager.send_input(aid, text, interrupt=False, input_ref=text)
+            assert result["ok"] is True and result["agent"]["waiting_for_slot"] is True
+            assert aid not in manager._runtimes
+        assert manager.active_agent_count() == 1
+        assert manager.send_input(ids[1], "retry", interrupt=False, input_ref="peer-B")["duplicate"] is True
+        if stop_waiter:
+            assert getattr(manager, stop_waiter)(ids[1])["ok"] is True
+        release.set()
+        results = manager.wait(ids, timeout_seconds=3)["agents"]
+        assert results[2]["status"] == "completed"
+        assert any("peer-C" in text for text in calls)
+        assert sum("peer-B" in text for text in calls) == (0 if stop_waiter else 1)
+        assert results[1]["status"] == ({"pause": "paused", "close": "closed"}.get(stop_waiter, "completed"))
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_peer_ref_history_is_bounded_but_pending_refs_still_deduplicate(tmp_path: Path) -> None:
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="A", objective="wait", start_immediately=False)["agent"]["agent_id"]
+        assert manager.pause(aid)["ok"] is True
+        for index in range(260):
+            assert manager.send_input(aid, "queued peer", interrupt=False, input_ref=f"room-{index}")["ok"] is True
+        record = manager._records[aid]
+        assert len(record["accepted_input_refs"]) == 256
+        assert "room-0" not in record["accepted_input_refs"]
+        assert manager.send_input(aid, "retry pending", interrupt=False, input_ref="room-0")["duplicate"] is True
+        assert manager.get(aid)["agent"]["status"] == "paused"
+        assert not manager._runtimes
+        manager.halt(aid)
+        assert manager.send_input(aid, "retry stopped", interrupt=False, input_ref="room-259")["duplicate"] is True
+        assert manager.get(aid)["agent"]["pending_input_count"] == 0
+    finally:
+        manager.shutdown()
+
+
+def test_ordinary_peer_batches_respect_text_budget_and_explicit_request_order(tmp_path: Path, monkeypatch) -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        if len(calls) == 1:
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+        return ChatResponse(text="finished", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="A", objective="finish current work")["agent"]["agent_id"]
+        assert started.wait(timeout=2)
+        messages = [
+            ("a", "A" * 20000, "team-room"),
+            ("b", "B" * 6000, "team-room"),
+            ("c", "ordinary-tail-C", "team-room"),
+            ("at", "@A explicit request", ""),
+            ("d", "ordinary-D", "team-room"),
+            ("e", "ordinary-E", "team-room"),
+        ]
+        for ref, text, key in messages:
+            assert manager.send_input(
+                aid, text, interrupt=False, input_ref=ref, coalesce_key=key, room_visibility="group",
+            )["ok"] is True
+        pending = manager._records[aid]["pending_inputs"]
+        assert [item["input_refs"] for item in pending] == [["a"], ["b", "c"], ["at"], ["d", "e"]]
+        assert all(len(item["text"]) <= 26000 for item in pending)
+        assert manager._runtimes[aid]["child"]._pause_after_current_response is False
+        release.set()
+        assert manager.wait([aid], timeout_seconds=3)["agents"][0]["status"] == "completed"
+        assert len(calls) == 5
+        assert calls[1] == "A" * 20000
+        assert calls[2].startswith("B" * 6000) and calls[2].endswith("ordinary-tail-C")
+        assert calls[3] == "@A explicit request"
+        assert calls[4].startswith("ordinary-D") and calls[4].endswith("ordinary-E")
+        assert sum(text.count("ordinary-tail-C") for text in calls) == 1
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_coalesced_refs_stay_deduplicated_while_batch_is_active(tmp_path: Path, monkeypatch) -> None:
+    started, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        if len(calls) == 1:
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.005)
+        return ChatResponse(text="finished", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="A", objective="wait", start_immediately=False)["agent"]["agent_id"]
+        manager.pause(aid)
+        for index in range(260):
+            assert manager.send_input(
+                aid, f"observation-{index}", interrupt=False, input_ref=f"room-{index}",
+                coalesce_key="team-room", room_visibility="group",
+            )["ok"] is True
+        assert manager._records[aid]["pending_input_count"] == 1
+        assert "room-0" not in manager._records[aid]["accepted_input_refs"]
+        assert manager.send_input(aid, "pending retry", interrupt=False, input_ref="room-0")["duplicate"] is True
+        assert manager.send_input(aid, "resume explicitly")["ok"] is True
+        assert started.wait(timeout=2)
+        stored = json.loads(manager._path(aid).read_text(encoding="utf-8"))
+        assert len(stored["active_input_refs"]) == 260
+        assert not any("room-0" in item.get("input_refs", []) for item in stored["pending_inputs"] if isinstance(item, dict))
+        assert manager.send_input(aid, "active retry", interrupt=False, input_ref="room-0")["duplicate"] is True
+        release.set()
+        assert manager.wait([aid], timeout_seconds=3)["agents"][0]["status"] == "completed"
+        assert len(calls) == 2
+        assert manager.send_input(aid, "recent retry", interrupt=False, input_ref="room-259")["duplicate"] is True
+        assert manager.send_input(
+            aid, "fresh observation", interrupt=False, input_ref="room-new", coalesce_key="team-room", room_visibility="group",
+        )["ok"] is True
+        assert manager.wait([aid], timeout_seconds=3)["agents"][0]["status"] == "completed"
+        assert calls[-1] == "fresh observation" and len(calls) == 3
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_private_confirmation_keeps_its_own_room_visibility(tmp_path: Path, monkeypatch, automatic: bool) -> None:
+    published: list[tuple[str, str | None]] = []
+
+    async def _chat(self, message="", *, confirmation_action=False, **_kwargs):
+        if confirmation_action:
+            self._pending = None
+            return ChatResponse(text="private final evidence", status="done")
+        self._pending = {
+            "confirmations": [{"name": "write_probe", "arguments": {}, "tool_call": {"id": "write-1"}}],
+            "tool_calls": [], "messages": [], "assistant_response": {}, "decisions": {},
+        }
+        return ChatResponse(text="private authorization needed", status="awaiting_confirmation")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    parent = _parent(tmp_path)
+    parent.registry.session_id = "team-private-confirm"
+    manager = AgentThreadManager(parent)
+    set_team_room_hooks(output_publisher=lambda _sid, _aid, _role, text, visibility: published.append((text, visibility)))
+    try:
+        aid = manager.spawn(role="A", objective="private work", start_immediately=False)["agent"]["agent_id"]
+        assert manager.send_input(aid, "private instruction", room_visibility="private")["ok"] is True
+        pending = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert manager._records[aid]["pending_room_visibility"] == "private"
+        stored = json.loads(manager._path(aid).read_text(encoding="utf-8"))
+        assert stored["pending_room_visibility"] == "private"
+        if automatic:
+            parent.set_auto_approve_tool("write_probe", True)
+            assert aid in manager.sync_auto_approve_from_parent()["auto_resolved"]
+        else:
+            tool = pending["pending_confirmation"]["pending_tools"][0]
+            assert manager.confirm(aid, {
+                "type": "confirmation_decision", "pending_id": tool["pending_id"],
+                "version": tool["version"], "call_id": tool["id"], "verdict": "allow",
+            })["ok"] is True
+        assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+        assert published == [
+            ("private authorization needed", "private"), ("private final evidence", "private"),
+        ]
+        assert "pending_room_visibility" not in manager._records[aid]
+    finally:
+        set_team_room_hooks()
+        manager.shutdown()
+
+
+def test_room_context_provider_receives_only_current_batch_refs(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    context_calls: list[list[str]] = []
+    rows = [("leader", "earlier leader background"), ("ordinary", "ordinary input"), ("at", "@A future request")]
+    cursor = 0
+
+    def _context(_sid, _aid, *, input_refs=None):
+        nonlocal cursor
+        refs = list(input_refs or [])
+        context_calls.append(refs)
+        limit = max((i + 1 for i, (ref, _) in enumerate(rows) if ref in refs), default=len(rows))
+        result = "\n".join(text for index, (ref, text) in enumerate(rows) if cursor < index + 1 <= limit and ref not in refs)
+        cursor = max(cursor, limit)
+        return result
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        return ChatResponse(text="done", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    set_team_room_hooks(context_provider=_context)
+    try:
+        aid = manager.spawn(role="A", objective="work", start_immediately=False)["agent"]["agent_id"]
+        manager.pause(aid)
+        manager.send_input(aid, "ordinary input", interrupt=False, input_ref="ordinary", coalesce_key="team-room")
+        manager.send_input(aid, "@A future request", interrupt=False, input_ref="at")
+        manager.send_input(aid, "resume explicitly")
+        assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+        assert context_calls == [["ordinary"], ["at"], []]
+        assert "earlier leader background" in calls[0]
+        assert calls[0].count("ordinary input") == 1
+        assert "future request" not in calls[0]
+        assert calls[1].count("@A future request") == 1
+    finally:
+        set_team_room_hooks()
+        manager.shutdown()
+
+
+def test_context_provider_internal_type_error_is_not_retried(tmp_path: Path, monkeypatch) -> None:
+    reads: list[list[str]] = []
+
+    def _context(_sid, _aid, *, input_refs=None):
+        reads.append(list(input_refs or []))
+        raise TypeError("provider failed after consuming its cursor")
+
+    async def _chat(self, *_args, **_kwargs):
+        return ChatResponse(text="done", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    set_team_room_hooks(context_provider=_context)
+    try:
+        aid = manager.spawn(role="A", objective="work", start_immediately=False)["agent"]["agent_id"]
+        manager.send_input(aid, "peer input", interrupt=False, input_ref="peer-1")
+        assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+        assert reads == [["peer-1"]]
+    finally:
+        set_team_room_hooks()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_action", ["pause", "halt", "close", "shutdown"])
+def test_native_stop_during_context_preparation_does_not_start_chat(
+    tmp_path: Path, monkeypatch, stop_action: str,
+) -> None:
+    calls: list[str] = []
+    reads = 0
+
+    def _context(_sid, target, *, input_refs=None):
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            if stop_action == "shutdown":
+                manager.shutdown(wait_timeout=0)
+            else:
+                assert getattr(manager, stop_action)(target)["ok"] is True
+            return "already consumed leader background"
+        return ""
+
+    async def _chat(self, message="", **_kwargs):
+        calls.append(message)
+        return ChatResponse(text="done", status="done")
+
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", lambda *_args, **_kwargs: _Provider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    set_team_room_hooks(context_provider=_context)
+    try:
+        aid = manager.spawn(role="A", objective="work", start_immediately=False)["agent"]["agent_id"]
+        manager.send_input(aid, "peer input", interrupt=False, input_ref="prepare-1", coalesce_key="team-room")
+        stopped = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        future = manager._runtimes.get(aid, {}).get("future")
+        if future:
+            future.result(timeout=2)
+        assert calls == []
+        assert stopped["status"] == ("closed" if stop_action == "close" else "paused")
+        assert stopped["pending_input_count"] == (1 if stop_action in {"pause", "shutdown"} else 0)
+        assert not manager._records[aid].get("active_input_refs")
+        if stop_action == "pause":
+            pending_text = manager._records[aid]["pending_inputs"][0]["text"]
+            assert "already consumed leader background" in pending_text
+            assert manager.send_input(
+                aid, "new peer observation", interrupt=False,
+                input_ref="prepare-2", coalesce_key="team-room",
+            )["ok"] is True
+            # Frozen context belongs to the old prepared item. New traffic
+            # needs its own context read/ack, rather than joining that snapshot.
+            assert manager._records[aid]["pending_input_count"] == 2
+            assert manager.send_input(aid, "resume explicitly")["ok"] is True
+            assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+            assert calls[0].count("already consumed leader background") == 1
+            assert calls[0].count("peer input") == 1
+            assert calls[1] == "new peer observation"
+            assert reads == 3  # Frozen item is not reread; fresh peer/resume are.
+    finally:
+        set_team_room_hooks()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_action", ["pause", "halt", "close"])
+def test_acp_stop_during_permission_preparation_does_not_start_turn(
+    tmp_path: Path, monkeypatch, stop_action: str,
+) -> None:
+    calls: list[str] = []
+    prepared = False
+    parent = _parent(tmp_path)
+    settings = parent.registry.api.settings_mgr.get()
+    settings.data_root = str(tmp_path / "data")
+    settings.agent_runtimes = [{"id": "fake-acp", "backend": "acp", "enabled": True, "command": "fake-acp"}]
+
+    def _permission_handler(_token):
+        nonlocal prepared
+        if not prepared:
+            prepared = True
+            assert getattr(manager, stop_action)(aid)["ok"] is True
+        return None
+
+    parent.registry.api._assistant_tool_broker = SimpleNamespace(
+        register_session=lambda *_args, **_kwargs: "mock-token", mcp_server=lambda *_args: {},
+        permission_handler=_permission_handler, unregister=lambda *_args: None,
+    )
+
+    async def _acp(_config, _binding, *, message, **_kwargs):
+        calls.append(message)
+        return SimpleNamespace(
+            ok=True, text="result", error="", error_code="", stop_reason="end_turn",
+            acp_session_id="mock-acp", config_options=[], updates=[],
+        )
+
+    monkeypatch.setattr("argusai.core.agent_runtimes.run_acp_turn", _acp)
+    manager = AgentThreadManager(parent)
+    try:
+        with monkeypatch.context() as staging:
+            staging.setattr(manager, "_start_locked", lambda _aid: None)
+            aid = manager.spawn_external(runtime_id="fake-acp", role="A", objective="ACP work")["agent"]["agent_id"]
+        with manager._lock:
+            manager._start_locked(aid)
+        stopped = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        future = manager._runtimes.get(aid, {}).get("future")
+        if future:
+            future.result(timeout=2)
+        assert calls == []
+        assert stopped["status"] == ("closed" if stop_action == "close" else "paused")
+        assert stopped["pending_input_count"] == (1 if stop_action == "pause" else 0)
+        if stop_action == "pause":
+            assert manager.send_input(aid, "resume ACP")["ok"] is True
+            assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+            assert len(calls) == 2
+            assert "ACP work" in calls[0] and calls[1] == "resume ACP"
+    finally:
+        manager.shutdown()

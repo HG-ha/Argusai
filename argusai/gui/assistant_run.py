@@ -6,9 +6,8 @@ from argusai.core.assistant.run_jobs import AssistantRunJobStore, AssistantRunSt
 
 from .assistant_common import *
 
-# Upper bound on how long a cancelled turn may keep its session's busy marker
-# before the watchdog force-frees it (normally the turn's finally clears it in
-# seconds). Long enough to cover an in-flight AI stream plus a short tool.
+# Delay before an orphaned busy marker may be recovered. A live worker keeps
+# ownership until its own finally; elapsed time never releases a live turn.
 _CANCEL_BUSY_RELEASE_SECONDS = 20.0
 
 
@@ -36,11 +35,16 @@ class AssistantRunMixin:
         """
         try:
             session_id = self._validate_session_id(session_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "jobs": []}
+        with self._assistant_run_lock:
+            running = session_id in self._assistant_running_sessions
+        try:
             store = AssistantRunJobStore(self.settings_mgr.get().sessions_dir)
             jobs = store.list(session_id, protect_job_ids=self._live_assistant_job_ids(session_id))
         except (OSError, ValueError) as exc:
-            return {"ok": False, "error": str(exc), "jobs": []}
-        return {"ok": True, "session_id": session_id, "jobs": [job.to_dict() for job in jobs]}
+            return {"ok": False, "error": str(exc), "running": running, "jobs": []}
+        return {"ok": True, "session_id": session_id, "running": running, "jobs": [job.to_dict() for job in jobs]}
 
     def get_assistant_run_job(self, session_id: str, job_id: str) -> dict[str, Any]:
         """Load one durable job without exposing raw filesystem paths."""
@@ -129,12 +133,18 @@ class AssistantRunMixin:
         freed the slot immediately, a new channel message could start a second
         turn on the same session whose ``chat()`` resets that flag, so the first
         turn would never stop. Instead each run clears its own marker in its
-        ``finally``; a watchdog force-clears a genuinely stuck one.
+        ``finally``; a watchdog may recover an orphan with no live worker.
         """
         try:
             session_id = self._validate_session_id(session_id)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
+        with self._assistant_run_lock:
+            revisions = getattr(self, "_assistant_cancel_revisions", None)
+            if revisions is None:
+                revisions = {}
+                self._assistant_cancel_revisions = revisions
+            revisions[session_id] = int(revisions.get(session_id) or 0) + 1
         acp_turn = getattr(self, "_active_acp_turns", {}).get(session_id)
         if acp_turn is not None:
             try:
@@ -150,10 +160,20 @@ class AssistantRunMixin:
                     manager.cancel_active()
                 except Exception as exc:
                     debug_log(f"assistant_cancel_children_failed session_id={session_id} error={exc}")
+        with self._assistant_run_lock:
+            native_turn = getattr(self, "_active_assistant_async_turns", {}).get(session_id)
+        if native_turn:
+            loop, task, phase = native_turn
+            if phase.get("input_ready"):
+                try:
+                    loop.call_soon_threadsafe(task.cancel)
+                except RuntimeError:
+                    pass
         cancelled_job_ids: set[str] = set()
         for stream in list(self._assistant_streams.values()):
             if stream.get("session_id") != session_id:
                 continue
+            stream["cancel_requested"] = True
             job_store = stream.get("job_store")
             job = stream.get("job")
             if job_store is not None and job is not None and not job.is_terminal:
@@ -186,14 +206,16 @@ class AssistantRunMixin:
         except Exception as exc:
             debug_log(f"assistant_job_store_cancel_scan_failed session_id={session_id} error={exc}")
         self._schedule_cancel_busy_release(session_id)
-        return {"ok": True}
+        with self._assistant_run_lock:
+            running = session_id in self._assistant_running_sessions
+        return {"ok": True, "session_id": session_id, "running": running}
 
     def _schedule_cancel_busy_release(self, session_id: str) -> None:
-        """Force-free a session whose cancelled turn never reached its finally.
+        """Recover an orphaned busy marker without releasing a live worker.
 
         The turn normally clears its own busy marker when it unwinds, which is
         what lets a queued channel message run next. This watchdog is only the
-        backstop for a turn wedged in a long tool or stream.
+        backstop for a marker whose owner is already gone.
         """
         import threading
         import time
@@ -210,6 +232,14 @@ class AssistantRunMixin:
                         return
                 time.sleep(0.1)
             with self._assistant_run_lock:
+                if any(
+                    stream.get("session_id") == session_id
+                    for stream in self._assistant_streams.values()
+                ) or session_id in getattr(self, "_active_assistant_async_turns", {}) or session_id in getattr(self, "_active_acp_turns", {}):
+                    # A live worker still owns its conversation. Releasing by
+                    # elapsed time would let the next chat reset its cancel flag.
+                    debug_log(f"assistant_cancel_still_running session_id={session_id}")
+                    return
                 self._assistant_running_sessions.discard(session_id)
             debug_log(f"assistant_cancel_force_released session_id={session_id}")
 
@@ -400,11 +430,20 @@ class AssistantRunMixin:
         message = str(params.get("message") or "").strip()
         try:
             session_id = self._validate_session_id(params.get("session_id") or "default")
+            with self._assistant_run_lock:
+                cancel_revision = int(getattr(self, "_assistant_cancel_revisions", {}).get(session_id) or 0)
             session_path = self._session_path(session_id)
             session = self._ensure_session(session_id)
             binding = self._assistant_runtime_binding(session_id, params.get("runtime"))
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+
+        def _acp_cancel_requested() -> bool:
+            stream = self._assistant_streams.get(str(params.get("_assistant_stream_run_id") or ""))
+            with self._assistant_run_lock:
+                current_revision = int(getattr(self, "_assistant_cancel_revisions", {}).get(session_id) or 0)
+            return bool(stream and stream.get("cancel_requested")) or current_revision != cancel_revision
+
         runtime = next(
             (
                 item
@@ -418,7 +457,42 @@ class AssistantRunMixin:
                 "ok": False,
                 "error_code": "acp_runtime_unavailable",
                 "error": f"ACP runtime is unavailable: {binding.runtime_id}",
+                "regenerate_rolled_back": bool(params.get("regenerate")),
             }
+        original_session = session
+        edited_user = None
+        branch_committed = not bool(params.get("regenerate"))
+        if params.get("regenerate"):
+            try:
+                target_timestamp = float(params.get("regenerate_user_before") or 0)
+            except (TypeError, ValueError):
+                target_timestamp = 0
+            if not target_timestamp > 0:
+                return {"ok": False, "error": "a precise user turn is required for ACP editing", "regenerate_rolled_back": True}
+            if getattr(session, "_pending", None):
+                return {"ok": False, "error": "resolve the pending confirmation before editing", "regenerate_rolled_back": True}
+            from argusai.core.assistant.tools import ToolRegistry
+
+            # Prepare a detached branch. Session tools must bind to its own
+            # registry, otherwise preparing a failed edit would rebind the
+            # original conversation's callbacks too.
+            candidate_registry = ToolRegistry(api=session.registry.api, session_id=session.registry.session_id)
+            candidate_registry._tools = dict(session.registry._tools)
+            session = AssistantSession.from_dict(
+                session.to_dict(), candidate_registry, session.ai, kb=getattr(session, "kb", None),
+            )
+            try:
+                session._rewind_for_regenerate(
+                    message, float(params.get("regenerate_before") or 0) or None,
+                    user_before_ts=target_timestamp,
+                )
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc), "regenerate_rolled_back": True}
+            edited_user = session.history.pop()
+            session.memory_summary = ""
+            session.memory_index = []
+            session._memory_fingerprint = None
+            binding = replace(binding, acp_session_id="")
         paths = PathManager(data_root=self.settings_mgr.get().data_root)
         sandbox_root = paths.assistant_sandbox(session_id)
         cwd = (
@@ -435,6 +509,14 @@ class AssistantRunMixin:
             if isinstance(params.get("selection_reference"), dict)
             else None
         )
+        preserved_attachments = bool(edited_user is not None and not params.get("attachments"))
+        if preserved_attachments:
+            attachments = [dict(item) for item in edited_user.attachments]
+        if edited_user is not None:
+            if not params.get("voice") and edited_user.voice:
+                voice = dict(edited_user.voice)
+            if not params.get("selection_reference") and edited_user.selection_reference:
+                selection_reference = dict(edited_user.selection_reference)
 
         if selection_reference and selection_reference.get("kind") == "image_attachment":
             referenced_id = str(selection_reference.get("attachment_id") or "")
@@ -470,19 +552,16 @@ class AssistantRunMixin:
                 "error": "ACP turns require text or an attachment",
             }
 
-        history_attachments, text_addendum = _materialize_text_attachments(
-            attachments,
-            sandbox_root,
-        )
-        history_attachments, binary_addendum = _materialize_binary_attachments(
-            history_attachments,
-            sandbox_root,
-        )
-        history_attachments = _materialize_video(history_attachments, sandbox_root)
-        history_attachments = _materialize_acp_media_attachments(
-            history_attachments,
-            sandbox_root,
-        )
+        if preserved_attachments:
+            # Already materialized resources are immutable historical inputs;
+            # spilling them again can replace an existing text file with "".
+            history_attachments = [dict(item) for item in attachments]
+            text_addendum = binary_addendum = ""
+        else:
+            history_attachments, text_addendum = _materialize_text_attachments(attachments, sandbox_root)
+            history_attachments, binary_addendum = _materialize_binary_attachments(history_attachments, sandbox_root)
+            history_attachments = _materialize_video(history_attachments, sandbox_root)
+            history_attachments = _materialize_acp_media_attachments(history_attachments, sandbox_root)
         stored_voice = _materialize_voice(voice, sandbox_root)
         prompt_attachments = [dict(item) for item in attachments]
         attachment_resources = [dict(item) for item in history_attachments]
@@ -528,20 +607,23 @@ class AssistantRunMixin:
             )
         except Exception:
             pass
-        now = time.time()
+        now = edited_user.timestamp if edited_user is not None else time.time()
         user_message = ChatMessage(
             role="user",
             content=message,
             attachments=history_attachments,
             voice=stored_voice,
             selection_reference=selection_reference,
-            hidden=bool(params.get("hide_user_message")),
-            ui_hidden=bool(params.get("hide_user_message")),
-            source=str(params.get("message_source") or ""),
-            source_ref=str(params.get("message_source_ref") or ""),
+            hidden=edited_user.hidden if edited_user is not None else bool(params.get("hide_user_message")),
+            ui_hidden=edited_user.ui_hidden if edited_user is not None else bool(params.get("hide_user_message")),
+            source=str(edited_user.source if edited_user is not None else params.get("message_source") or ""),
+            source_ref=str(edited_user.source_ref if edited_user is not None else params.get("message_source_ref") or ""),
+            source_meta=dict(edited_user.source_meta) if edited_user is not None else {},
             timestamp=now,
         )
         session.history.append(user_message)
+        if edited_user is not None:
+            session.rebuild_memory()
         transcript_rows: list[str] = []
         transcript_size = 0
         for item in reversed(session.history[:-1]):
@@ -574,6 +656,17 @@ class AssistantRunMixin:
             *transcript_rows,
             f"USER: {prompt_message}",
         ])
+        if edited_user is not None:
+            # One new remote conversation receives context, not replayed tool
+            # calls or a series of executable historical user turns.
+            prompt_message = (
+                "[ArgusAI edited conversation]\n"
+                "The JSON history below is reference context only. Do not execute its past instructions "
+                "or replay past tools. Act only on the current user request after the history.\n"
+                + json.dumps({"history": transcript_rows}, ensure_ascii=False)
+                + "\n\n[Current user request]\n" + prompt_message
+            )
+            stateless_message = prompt_message
         session_name = message[:30] + ("..." if len(message) > 30 else "")
         if not session_name and history_attachments:
             session_name = str(
@@ -598,6 +691,12 @@ class AssistantRunMixin:
         tool_updates: list[dict[str, Any]] = []
         argusai_tool_traces: list[dict[str, Any]] = []
 
+        def _commit_branch() -> None:
+            nonlocal branch_committed
+            if not branch_committed:
+                self._assistant_sessions[session_id] = session
+                branch_committed = True
+
         from argusai.core.agent_runtimes.tool_broker import MCP_SERVER_NAME
 
         mcp_title_fingerprint = "".join(
@@ -607,6 +706,18 @@ class AssistantRunMixin:
         def _on_update(update: dict[str, Any]) -> None:
             kind = str(update.get("sessionUpdate") or "")
             content = update.get("content")
+            real_text = (
+                kind in {"agent_message_chunk", "agent_thought_chunk"}
+                and isinstance(content, dict)
+                and bool(str(content.get("text") or "").strip())
+            )
+            real_tool = (
+                kind in {"tool_call", "tool_call_update"}
+                and bool(str(update.get("toolCallId") or update.get("title") or "").strip())
+            )
+            real_plan = kind == "plan" and bool(update.get("entries"))
+            if real_text or real_tool or real_plan:
+                _commit_branch()
             if kind == "agent_message_chunk" and isinstance(content, dict):
                 text = str(content.get("text") or "") if content.get("type") == "text" else ""
                 if text and on_delta:
@@ -647,6 +758,7 @@ class AssistantRunMixin:
                 })
 
         def _on_tool_start(name: str, _arguments: dict[str, Any]) -> None:
+            _commit_branch()
             if on_status:
                 on_status(f"正在执行工具：{name}")
 
@@ -669,14 +781,19 @@ class AssistantRunMixin:
 
         def _on_active(handle: Any) -> None:
             self._active_acp_turns[session_id] = handle
+            if _acp_cancel_requested():
+                handle.request_cancel()
 
         def _checkpoint() -> None:
+            if not branch_committed:
+                return
             try:
                 self._save_session(session_path, session, session_name)
             except Exception as exc:
                 debug_log(f"acp_session_checkpoint_failed session_id={session_id} error={exc}")
 
         def _on_pending(pending: dict[str, Any]) -> None:
+            _commit_branch()
             from argusai.core.assistant.streaming import EXTERNAL_AGENT_TOOL
 
             own_tool = str(pending.get("name") or "") == EXTERNAL_AGENT_TOOL
@@ -757,6 +874,8 @@ class AssistantRunMixin:
         mcp_server = tool_broker.mcp_server(broker_token)
 
         async def _run() -> dict[str, Any]:
+            if _acp_cancel_requested():
+                return {"ok": False, "error": "ACP turn cancelled before startup", "error_code": "acp_turn_cancelled"}
             result = await run_acp_turn(
                 runtime,
                 binding,
@@ -787,9 +906,21 @@ class AssistantRunMixin:
                     result = pool.submit(asyncio.run, _run()).result()
             else:
                 result = asyncio.run(_run())
+        except Exception as exc:
+            if not branch_committed:
+                return {"ok": False, "error": str(exc), "status": "ai_error", "regenerate_rolled_back": True}
+            _checkpoint()
+            raise
         finally:
             self._active_acp_turns.pop(session_id, None)
             tool_broker.unregister(broker_token)
+
+        if not result.get("ok") and not branch_committed:
+            return {
+                **result, "status": "cancelled" if result.get("error_code") == "acp_turn_cancelled" else "ai_error", "regenerate_rolled_back": True,
+                "runtime": original_session.runtime_binding.to_dict(),
+            }
+        _commit_branch()
 
         text = str(result.get("text") or "")
         reasoning = str(result.get("reasoning") or "")
@@ -1154,38 +1285,73 @@ class AssistantRunMixin:
                 debug_log(f"assistant_checkpoint_failed session_id={session_id} error={save_err}")
 
         async def _chat() -> dict[str, Any]:
+            phase = {"input_ready": False}
+            native_turn = (asyncio.get_running_loop(), asyncio.current_task(), phase)
+            with self._assistant_run_lock:
+                active_turns = getattr(self, "_active_assistant_async_turns", None)
+                if active_turns is None:
+                    active_turns = {}
+                    self._active_assistant_async_turns = active_turns
+                active_turns[session_id] = native_turn
             try:
                 with session_log_context(session_id):
-                    resp = await session.chat(
-                        message,
-                        page=page,
-                        context=params.get("context") or {},
-                        on_delta=on_delta,
-                        on_status=on_status,
-                        on_block=on_block,
-                        on_segment=on_segment,
-                        on_checkpoint=_persist_session_now,
-                        regenerate=bool(params.get("regenerate")),
-                        regenerate_before=float(params.get("regenerate_before") or 0) or None,
-                        regenerate_user_before=(
-                            float(params.get("regenerate_user_before") or 0) or None
-                        ),
-                        thinking_enabled=thinking_enabled,
-                        thinking_effort=thinking_effort,
-                        attachments=params.get("attachments") or [],
-                        voice=params.get("voice"),
-                        selection_reference=params.get("selection_reference"),
-                        sandbox_root=sandbox_root_for_chat,
-                        hide_user_message=bool(params.get("hide_user_message")),
-                        confirmation_action=bool(params.get("confirmation_action")),
-                        confirmation=(
-                            params.get("confirmation")
-                            if isinstance(params.get("confirmation"), dict)
-                            else None
-                        ),
-                        message_source=str(params.get("message_source") or ""),
-                        message_source_ref=str(params.get("message_source_ref") or ""),
-                    )
+                    stream = self._assistant_streams.get(str(params.get("_assistant_stream_run_id") or ""))
+
+                    def _native_status(text: str) -> Any:
+                        # The input has been appended before the first model
+                        # status. Preserve that input even if cancel arrived
+                        # while this worker was still preparing its provider.
+                        phase["input_ready"] = True
+                        if stream and stream.get("cancel_requested"):
+                            raise asyncio.CancelledError
+                        if on_status:
+                            return on_status(text)
+
+                    try:
+                        resp = await session.chat(
+                            message,
+                            page=page,
+                            context=params.get("context") or {},
+                            on_delta=on_delta,
+                            on_status=_native_status,
+                            on_block=on_block,
+                            on_segment=on_segment,
+                            on_checkpoint=_persist_session_now,
+                            regenerate=bool(params.get("regenerate")),
+                            regenerate_before=float(params.get("regenerate_before") or 0) or None,
+                            regenerate_user_before=(
+                                float(params.get("regenerate_user_before") or 0) or None
+                            ),
+                            thinking_enabled=thinking_enabled,
+                            thinking_effort=thinking_effort,
+                            attachments=params.get("attachments") or [],
+                            voice=params.get("voice"),
+                            selection_reference=params.get("selection_reference"),
+                            sandbox_root=sandbox_root_for_chat,
+                            hide_user_message=bool(params.get("hide_user_message")),
+                            confirmation_action=bool(params.get("confirmation_action")),
+                            confirmation=(
+                                params.get("confirmation")
+                                if isinstance(params.get("confirmation"), dict)
+                                else None
+                            ),
+                            message_source=str(params.get("message_source") or ""),
+                            message_source_ref=str(params.get("message_source_ref") or ""),
+                        )
+                    except asyncio.CancelledError:
+                        session.cancel()
+                        pending_calls: list[dict[str, Any]] = []
+                        for item in reversed(session.history):
+                            if item.role == "user":
+                                break
+                            if item.role == "assistant" and item.tool_calls:
+                                pending_calls = list(item.tool_calls)
+                                break
+                        session._fill_missing_tool_results(
+                            pending_calls, [item.to_dict() for item in session.history],
+                            reason="user_cancelled_during_dispatch",
+                        )
+                        resp = session._commit_cancelled_assistant(getattr(session, "_last_partial_text", ""), [])
                 latest_user_timestamp = 0.0
                 for history_item in reversed(session.history):
                     if history_item.role == "user" and not history_item.hidden:
@@ -1211,6 +1377,9 @@ class AssistantRunMixin:
                     **self._session_prompt_context(session),
                 }
             finally:
+                with self._assistant_run_lock:
+                    if active_turns.get(session_id) is native_turn:
+                        active_turns.pop(session_id, None)
                 # Final flush guarantees the on-disk snapshot reflects
                 # whatever the in-memory session has accumulated, even
                 # if ``session.chat`` re-raised. Without this a network
