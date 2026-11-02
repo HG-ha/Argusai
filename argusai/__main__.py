@@ -26,6 +26,43 @@ def _bootstrap_logging() -> None:
         pass
 
 
+def _gui_self_check_report() -> dict:
+    """Keep dependency diagnostics off the self-check's JSON output channel.
+
+    Python redirection alone misses cached streams and native writes to fd 1.
+    Flush both Python and C buffers before restoring that descriptor so a late
+    stdio flush cannot append diagnostics to the JSON printed by ``main``.
+    """
+    import ctypes
+    import os
+    import sys
+    from contextlib import redirect_stdout
+
+    libc = ctypes.CDLL("ucrtbase" if os.name == "nt" else None)
+    fflush = libc.fflush
+    fflush.argtypes = [ctypes.c_void_p]
+    fflush.restype = ctypes.c_int
+    stdout = sys.stdout
+    saved_fd = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        with redirect_stdout(sys.stderr):
+            try:
+                from argusai.gui._helpers import self_check_gui
+
+                return self_check_gui()
+            finally:
+                if stdout is not None:
+                    stdout.flush()
+                sys.stderr.flush()
+                fflush(None)
+    finally:
+        try:
+            os.dup2(saved_fd, 1)
+        finally:
+            os.close(saved_fd)
+
+
 def main() -> None:
     import sys
 
@@ -43,9 +80,7 @@ def main() -> None:
         import json
 
         try:
-            from argusai.gui._helpers import self_check_gui
-
-            report = self_check_gui()
+            report = _gui_self_check_report()
         except Exception as exc:
             supported = sys.platform in {"win32", "darwin"} or sys.platform.startswith("linux")
             backend = {"win32": "edgechromium", "darwin": "wkwebview"}.get(sys.platform, "gtkwebkit2" if supported else "")

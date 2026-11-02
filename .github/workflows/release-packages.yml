@@ -442,6 +442,7 @@ jobs:
           import json
           import platform
           import subprocess
+          import sys
 
           system = platform.system()
           expected = {"Linux": ("linux", "gtkwebkit2"), "Darwin": ("darwin", "wkwebview")}
@@ -449,11 +450,20 @@ jobs:
               raise SystemExit(f"Unsupported Unix GUI system: {system}")
           command = ["uv", "run", "--locked", "--group", "build", "python", "-m", "argusai", "--self-check-gui"]
           if system == "Linux":
-              command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
+              # Ubuntu's xvfb-run merges the command's stderr into stdout.
+              # Preserve capture's stderr pipe before it runs, then restore it.
+              command = ["dbus-run-session", "--", "sh", "-c",
+                         "exec 9>&2; exec xvfb-run -a sh -c 'exec 2>&9 9>&-; exec \"$@\"' -- \"$@\"",
+                         "--", *command]
           result = subprocess.run(command, capture_output=True, text=True, timeout=120)
           if result.returncode:
               raise SystemExit(f"Source GUI backend failed: {result.stdout}\n{result.stderr}")
-          report = json.loads(result.stdout)
+          try:
+              report = json.loads(result.stdout)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Source GUI returned invalid JSON: {exc}\nstdout={result.stdout!r}\nstderr={result.stderr!r}") from exc
+          if system == "Linux" and result.stderr:
+              print(result.stderr, end="", file=sys.stderr)
           print(json.dumps(report, ensure_ascii=False))
           expected_platform, expected_backend = expected[system]
           if report.get("ok") is not True or report.get("platform") != expected_platform or report.get("backend") != expected_backend:
@@ -527,7 +537,10 @@ jobs:
                                       env=environment, capture_output=True, text=True, timeout=120)
               if result.returncode:
                   raise SystemExit(f"Packaged GUI {runtime} failed: {result.stdout}\n{result.stderr}")
-              report = json.loads(result.stdout)
+              try:
+                  report = json.loads(result.stdout)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"Packaged GUI {runtime} returned invalid JSON: {exc}\nstdout={result.stdout!r}\nstderr={result.stderr!r}") from exc
               print(json.dumps(report, ensure_ascii=False))
               if report.get("ok") is not True or report.get("runtime") != runtime:
                   raise SystemExit(f"Packaged GUI did not load the requested CLR: {runtime}")
@@ -550,6 +563,7 @@ jobs:
           import platform
           import plistlib
           import subprocess
+          import sys
           from pathlib import Path
 
           system = platform.system()
@@ -570,11 +584,18 @@ jobs:
           if system == "Linux":
               # Exercise the packaged typelibs, not a runner override.
               environment.pop("GI_TYPELIB_PATH", None)
-              command = ["dbus-run-session", "--", "xvfb-run", "-a", *command]
+              command = ["dbus-run-session", "--", "sh", "-c",
+                         "exec 9>&2; exec xvfb-run -a sh -c 'exec 2>&9 9>&-; exec \"$@\"' -- \"$@\"",
+                         "--", *command]
           result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=180)
           if result.returncode:
               raise SystemExit(f"Packaged GUI backend failed: {result.stdout}\n{result.stderr}")
-          report = json.loads(result.stdout)
+          try:
+              report = json.loads(result.stdout)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Packaged GUI returned invalid JSON: {exc}\nstdout={result.stdout!r}\nstderr={result.stderr!r}") from exc
+          if system == "Linux" and result.stderr:
+              print(result.stderr, end="", file=sys.stderr)
           print(json.dumps(report, ensure_ascii=False))
           if report.get("ok") is not True or report.get("platform") != expected_platform or report.get("backend") != expected_backend:
               raise SystemExit("Packaged GUI did not load its expected platform backend")

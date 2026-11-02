@@ -81,6 +81,38 @@
       "file": "python-pyobjc-12.1.LICENSE.txt",
       "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
     },
+    "pycairo": {
+      "kind": "upstream-license",
+      "version": "1.29.2",
+      "source": "https://files.pythonhosted.org/packages/bb/5e/19ab2572981a996ce96b853a189d2dcced40506b67d9555a7568457abcf2/pycairo-1.29.2.tar.gz",
+      "archive_sha256": "3e69fff74fe64f5ba2dfa31f67c6bdf26413342574047437d2ac520d35e9a489",
+      "documents": [
+        {
+          "archive_member": "pycairo-1.29.2/COPYING",
+          "file": "python-pycairo-1.29.2.COPYING.txt",
+          "sha256": "360b9a526d47c51a7cab7f1ec49ca5893050562d639b742d588934ff84823a72"
+        },
+        {
+          "archive_member": "pycairo-1.29.2/COPYING-LGPL-2.1",
+          "file": "python-pycairo-1.29.2.COPYING-LGPL-2.1.txt",
+          "sha256": "d80c9d084ebfb50ea1ed91bfbc2410d6ce542097a32c43b00781b83adcb8c77f"
+        },
+        {
+          "archive_member": "pycairo-1.29.2/COPYING-MPL-1.1",
+          "file": "python-pycairo-1.29.2.COPYING-MPL-1.1.txt",
+          "sha256": "53692a2ed6c6a2c6ec9b32dd0b820dfae91e0a1fcdf625ca9ed0bdf8705fcc4f"
+        }
+      ]
+    },
+    "pygobject": {
+      "kind": "upstream-license",
+      "version": "3.50.2",
+      "source": "https://files.pythonhosted.org/packages/a7/5d/f2946cc6c1baf56dee6e942af8cfa16472538a8ad9d780d9f484e7554288/pygobject-3.50.2.tar.gz",
+      "archive_sha256": "ece6b860aab77cb649fdfc6e88d8a83765e7a62f7ffd39a628d6e2a0d397a7ff",
+      "archive_member": "pygobject-3.50.2/COPYING",
+      "file": "python-pygobject-3.50.2.COPYING.txt",
+      "sha256": "32434afcc8666ba060e111d715bfdb6c2d5dd8a35fa4d3ab8ad67d8f850d2f2b"
+    },
     "primp": {
       "kind": "missing-original",
       "version": "1.2.3",

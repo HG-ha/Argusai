@@ -168,13 +168,37 @@ def _collect() -> tuple[dict[str, bytes], dict]:
             raw = _original(source)
             add(relative, raw, f"installed distribution RECORD: {relative}")
             has_license |= bool(LICENSE.search(parts[-1]) or any(p.lower().startswith(("licen", "copying")) for p in parts[:-1] if DOCUMENT_DIR.fullmatch(p)))
-        if not has_license:
-            fallback = fallbacks.get("packages", {}).get(name)
+        fallback = fallbacks.get("packages", {}).get(name)
+        # A wheel may carry only a short COPYING summary while the reviewed
+        # upstream set also contains the full alternative license texts.
+        reviewed_set = fallback and "documents" in fallback
+        if not has_license or reviewed_set:
             if not fallback or fallback["version"] != version:
                 raise ValueError(f"Missing original license text for {name}@{version}; no version-matched reviewed fallback")
             if fallback["kind"] == "upstream-license":
-                filename, raw = _fallback(fallback)
-                add(f"reviewed-upstream/{filename}", raw, fallback["source"])
+                originals = fallback.get("documents", [fallback])
+                if not isinstance(originals, list) or not originals:
+                    raise ValueError(f"Reviewed fallback documents must be a nonempty list: {name}@{version}")
+                sdist = entry.get("sdist")
+                archive_sha = fallback.get("archive_sha256")
+                archive_backed = "archive_member" in fallback or "documents" in fallback
+                if archive_backed and (
+                    not isinstance(archive_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", archive_sha)
+                    or not isinstance(sdist, dict) or not sdist.get("url") or not sdist.get("hash")
+                ):
+                    raise ValueError(f"Reviewed archive fallback requires archive_sha256 and complete uv.lock sdist: {name}@{version}")
+                if sdist and archive_sha and (
+                    sdist.get("url") != fallback["source"]
+                    or sdist.get("hash") != "sha256:" + archive_sha
+                ):
+                    raise ValueError(f"Reviewed fallback archive does not match uv.lock: {name}@{version}")
+                for original in originals:
+                    filename, raw = _fallback(original)
+                    member = original.get("archive_member", fallback.get("archive_member"))
+                    source = fallback["source"]
+                    if member:
+                        source += "#" + str(_relative(member))
+                    add(f"reviewed-upstream/{filename}", raw, source)
                 record["reviewed_fallback"] = fallback
             elif fallback["kind"] == "missing-original":
                 record["reviewed_fallback"] = fallback

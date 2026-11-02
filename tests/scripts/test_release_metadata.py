@@ -4,7 +4,9 @@ import importlib.util
 import hashlib
 import io
 import json
+import shutil
 import subprocess
+import sys
 import tarfile
 import tomllib
 from pathlib import Path
@@ -566,7 +568,9 @@ def test_unix_gui_smoke_loads_real_platform_backend_before_publication(monkeypat
             return SimpleNamespace(returncode=0)
         assert command[-1] == "--self-check-gui"
         if system == "Linux":
-            assert command[:4] == ["dbus-run-session", "--", "xvfb-run", "-a"]
+            assert command[:4] == ["dbus-run-session", "--", "sh", "-c"]
+            assert command[4] == 'exec 9>&2; exec xvfb-run -a sh -c \'exec 2>&9 9>&-; exec "$@"\' -- "$@"'
+            assert command[5] == "--"
             if packaged:
                 assert "GI_TYPELIB_PATH" not in kwargs["env"]
         if not packaged:
@@ -577,6 +581,46 @@ def test_unix_gui_smoke_loads_real_platform_backend_before_publication(monkeypat
     monkeypatch.setattr(subprocess, "run", run)
     exec(probe["run"], {})
     assert len(calls) == (2 if packaged and system == "Darwin" else 1)
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not shutil.which("dbus-run-session") or not shutil.which("xvfb-run"),
+                    reason="requires native Linux headless wrappers")
+@pytest.mark.parametrize("packaged", [False, True])
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_linux_gui_wrapper_preserves_real_stderr_exit_and_literal_arguments(monkeypatch, tmp_path, capsys, packaged, exit_code):
+    import platform
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    actual_run = subprocess.run
+    arguments = ["path with spaces", "; echo must-not-execute", "$(must-not-execute)", "quote'\"value"]
+    script = (
+        "import json,os,sys\n"
+        "os.write(2,b'native GUI diagnostic\\n')\n"
+        "print(json.dumps({'ok':True,'platform':'linux','backend':'gtkwebkit2','argv':sys.argv[1:]}))\n"
+        f"raise SystemExit({exit_code})\n"
+    )
+    results = []
+
+    def run(command, **kwargs):
+        assert command[5] == "--"
+        result = actual_run([*command[:6], sys.executable, "-c", script, *arguments], **kwargs)
+        assert result.returncode == exit_code
+        assert json.loads(result.stdout)["argv"] == arguments
+        assert "native GUI diagnostic" in result.stderr
+        assert "native GUI diagnostic" not in result.stdout
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(subprocess, "run", run)
+    step = "Smoke-test packaged Unix GUI backends" if packaged else "Smoke-test source Unix GUI backends"
+    if exit_code:
+        with pytest.raises(SystemExit, match="native GUI diagnostic"):
+            exec(python_step("build", step), {})
+    else:
+        exec(python_step("build", step), {})
+        assert "native GUI diagnostic" in capsys.readouterr().err
+    assert len(results) == 1
 
 
 @pytest.mark.parametrize("packaged", [False, True])
@@ -601,6 +645,22 @@ def test_linux_build_declares_gi_typelibs_and_headless_test_dependencies():
     for package in ("libgirepository1.0-dev", "libcairo2-dev", "libffi-dev", "python3-dev",
                     "gir1.2-gtk-3.0", "gir1.2-webkit2-4.1", "gir1.2-soup-3.0", "xvfb", "xauth", "dbus-x11"):
         assert package in dependencies.split()
+
+
+@pytest.mark.parametrize("packaged", [False, True])
+def test_unix_gui_smoke_preserves_invalid_protocol_output_for_diagnosis(monkeypatch, tmp_path, packaged):
+    import platform
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+        returncode=0, stdout='native stdout fixture\n{"ok": true}', stderr="native stderr fixture"))
+    name = "Smoke-test packaged Unix GUI backends" if packaged else "Smoke-test source Unix GUI backends"
+    with pytest.raises(SystemExit) as failure:
+        exec(python_step("build", name), {})
+    assert "invalid JSON" in str(failure.value)
+    assert "native stdout fixture" in str(failure.value)
+    assert "native stderr fixture" in str(failure.value)
 
 
 @pytest.mark.parametrize("failure", ["load_error", "wrong_runtime", "missing_assembly", "outside_package", "wrong_variant", "empty_dll"])

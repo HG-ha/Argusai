@@ -8,8 +8,10 @@ scripts/macos/*.py text eol=lf
 LICENSE text eol=lf
 # Preserve the exact upstream bytes checked by the notice collector.
 scripts/packaging/*.LICENSE.txt text eol=lf
+scripts/packaging/python-*.COPYING*.txt text eol=lf
 scripts/packaging/webview2-*.NOTICE.txt text eol=lf
 scripts/packaging/*.json text eol=lf
 # Keep the checksum-pinned upstream license's original trailing space.
 scripts/packaging/webview2-*.LICENSE.txt whitespace=-blank-at-eol
+scripts/packaging/python-*.COPYING*.txt whitespace=-blank-at-eol,-blank-at-eof
 scripts/packaging/MIT-SPDX-reference.txt text eol=lf

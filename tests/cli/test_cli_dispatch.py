@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import json
 import sys
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -154,6 +156,83 @@ def test_gui_self_check_import_failure_has_platform_aware_json(monkeypatch, caps
     assert report["platform"] == platform
     assert report["supported"] is (exit_code == 1)
     assert report["error"] == "ImportError: GUI bridge unavailable"
+
+
+@pytest.mark.parametrize("noise", ["python", "native_fd", "native_buffered"])
+@pytest.mark.parametrize("outcome", ["ok", "reported_failure", "exception"])
+def test_gui_self_check_entry_keeps_import_and_backend_diagnostics_on_stderr(noise, outcome) -> None:
+    script = r'''
+import ctypes
+import importlib.abc
+import importlib.util
+import json
+import os
+import sys
+from argusai import __main__ as entry
+
+noise, outcome = sys.argv[1:]
+cached_stdout = sys.stdout
+libc = ctypes.CDLL('ucrtbase' if os.name == 'nt' else None)
+if os.name == 'nt':
+    libc.__acrt_iob_func.argtypes = [ctypes.c_uint]
+    libc.__acrt_iob_func.restype = ctypes.c_void_p
+    libc.fwrite.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_void_p]
+    libc.fwrite.restype = ctypes.c_size_t
+else:
+    libc.printf.argtypes = [ctypes.c_char_p]
+    libc.printf.restype = ctypes.c_int
+
+def emit(phase):
+    text = f'{phase}-{noise}-diagnostic\n'
+    if noise == 'python':
+        print(text, end='')
+        cached_stdout.write(f'{phase}-cached-stream\n')
+    elif noise == 'native_fd':
+        os.write(1, text.encode())
+    else:
+        if os.name == 'nt':
+            libc.fwrite(text.encode(), 1, len(text.encode()), libc.__acrt_iob_func(1))
+        else:
+            libc.printf(text.encode())
+
+class Loader(importlib.abc.Loader):
+    def create_module(self, spec):
+        return None
+    def exec_module(self, module):
+        if module.__name__ == 'argusai.gui':
+            module.__path__ = []
+            emit('import')
+        else:
+            def check():
+                emit('backend')
+                if outcome == 'exception':
+                    raise RuntimeError('real backend failure')
+                return {'ok': outcome == 'ok', 'supported': True, 'platform': sys.platform,
+                        'backend': 'fixture', **({'error': 'real backend failure'} if outcome != 'ok' else {})}
+            module.self_check_gui = check
+
+class Finder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {'argusai.gui', 'argusai.gui._helpers'}:
+            return importlib.util.spec_from_loader(fullname, Loader(), is_package=fullname == 'argusai.gui')
+
+sys.meta_path.insert(0, Finder())
+sys.argv = ['ArgusAI', '--self-check-gui']
+entry.main()
+'''
+    result = subprocess.run([sys.executable, "-c", script, noise, outcome],
+                            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+                            text=True, encoding="utf-8", timeout=20)
+    report = json.loads(result.stdout)
+    assert result.returncode == (0 if outcome == "ok" else 1)
+    assert report["ok"] is (outcome == "ok")
+    if outcome != "ok":
+        assert "real backend failure" in report["error"]
+    assert f"import-{noise}-diagnostic" in result.stderr
+    assert f"backend-{noise}-diagnostic" in result.stderr
+    assert "diagnostic" not in result.stdout
+    if noise == "python":
+        assert "cached-stream" in result.stderr
 
 
 def test_root_chat_passes_concrete_attachment_default(monkeypatch) -> None:

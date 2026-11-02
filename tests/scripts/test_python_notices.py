@@ -102,6 +102,144 @@ def test_pinned_fallback_exact_bytes_and_version_required(environment):
         notices.generate_notices(root / "other")
 
 
+@pytest.fixture
+def reviewed_documents(environment):
+    root, dist, _, lock, fallback = environment
+    dist.files = []
+    raw_files = {
+        "COPYING.txt": b"Dual license summary\r\n",
+        "COPYING-LGPL.txt": b"Complete LGPL original\r\n\xff",
+        "COPYING-MPL.txt": b"Complete MPL original\n",
+    }
+    source = "https://example.test/sample-1.0.tar.gz"
+    archive_sha = "a" * 64
+    record = {
+        "kind": "upstream-license", "version": "1.0", "source": source,
+        "archive_sha256": archive_sha,
+        "documents": [
+            {"file": name, "sha256": hashlib.sha256(raw).hexdigest(),
+             "archive_member": f"sample-1.0/{name}"}
+            for name, raw in raw_files.items()
+        ],
+    }
+    for name, raw in raw_files.items():
+        (root / name).write_bytes(raw)
+    lock.write_text(lock.read_text() + f'sdist = {{ url = "{source}", hash = "sha256:{archive_sha}" }}\n')
+    fallback.write_text(json.dumps({"packages": {"sample": record}}))
+    return environment, record, raw_files
+
+
+@pytest.mark.parametrize("installed_summary", [False, True])
+def test_complete_reviewed_set_is_preserved_even_when_record_has_summary(reviewed_documents, installed_summary):
+    environment, record, raw_files = reviewed_documents
+    root, dist, original, _, _ = environment
+    if installed_summary:
+        dist.files = [original.relative_to(dist.root).as_posix()]
+    output = root / "out"
+    notices.generate_notices(output)
+    for name, raw in raw_files.items():
+        assert (output / "packages/sample/1.0/reviewed-upstream" / name).read_bytes() == raw
+    package = json.loads((output / "manifest.json").read_text())["packages"][0]
+    assert package["reviewed_fallback"] == record
+    assert not package["warnings"]
+    for document in record["documents"]:
+        entry = next(d for d in package["documents"] if d["path"].endswith("reviewed-upstream/" + document["file"]))
+        assert entry["source"] == record["source"] + "#" + document["archive_member"]
+    notices.check_notices(output)
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_each_reviewed_document_checksum_is_required_before_writing(reviewed_documents, index):
+    environment, record, _ = reviewed_documents
+    root, _, _, _, _ = environment
+    target = root / record["documents"][index]["file"]
+    target.write_bytes(target.read_bytes() + b"modified")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        notices.generate_notices(root / "out")
+    assert not (root / "out").exists()
+
+
+@pytest.mark.parametrize("invalid", [[], {}, None])
+def test_reviewed_document_set_cannot_disable_missing_license_guard(reviewed_documents, invalid):
+    environment, record, _ = reviewed_documents
+    root, _, _, _, fallback = environment
+    record["documents"] = invalid
+    fallback.write_text(json.dumps({"packages": {"sample": record}}))
+    with pytest.raises(ValueError, match="nonempty list"):
+        notices.generate_notices(root / "out")
+    assert not (root / "out").exists()
+
+
+@pytest.mark.parametrize("field,value", [("archive_sha256", "b" * 64), ("source", "https://example.test/other.tar.gz")])
+def test_reviewed_archive_must_match_locked_source(reviewed_documents, field, value):
+    environment, record, _ = reviewed_documents
+    root, _, _, _, fallback = environment
+    record[field] = value
+    fallback.write_text(json.dumps({"packages": {"sample": record}}))
+    with pytest.raises(ValueError, match="archive does not match uv.lock"):
+        notices.generate_notices(root / "out")
+    assert not (root / "out").exists()
+
+
+@pytest.mark.parametrize("form", ["single", "documents"])
+@pytest.mark.parametrize("missing", ["archive_hash", "sdist", "sdist_url", "sdist_hash"])
+def test_archive_fallback_requires_complete_locked_provenance(reviewed_documents, form, missing):
+    environment, record, _ = reviewed_documents
+    root, _, _, lock, fallback = environment
+    if form == "single":
+        original = record.pop("documents")[0]
+        record.update(original)
+    if missing == "archive_hash":
+        del record["archive_sha256"]
+    else:
+        lines = [line for line in lock.read_text().splitlines() if not line.startswith("sdist =")]
+        if missing == "sdist_url":
+            lines.append('sdist = { hash = "sha256:' + record["archive_sha256"] + '" }')
+        elif missing == "sdist_hash":
+            lines.append('sdist = { url = "' + record["source"] + '" }')
+        lock.write_text("\n".join(lines) + "\n")
+    fallback.write_text(json.dumps({"packages": {"sample": record}}))
+    with pytest.raises(ValueError, match="requires archive_sha256 and complete uv.lock sdist"):
+        notices.generate_notices(root / "out")
+    assert not (root / "out").exists()
+
+
+def test_installed_summary_cannot_hide_outdated_reviewed_document_set(reviewed_documents):
+    environment, record, _ = reviewed_documents
+    root, dist, original, _, fallback = environment
+    dist.files = [original.relative_to(dist.root).as_posix()]
+    record["version"] = "0.9"
+    fallback.write_text(json.dumps({"packages": {"sample": record}}))
+    with pytest.raises(ValueError, match="no version-matched reviewed fallback"):
+        notices.generate_notices(root / "out")
+    assert not (root / "out").exists()
+
+
+@pytest.mark.parametrize("package,expected_count", [("pycairo", 3), ("pygobject", 1)])
+def test_locked_linux_sdist_fallbacks_cover_wheels_without_license_files(environment, monkeypatch, package, expected_count):
+    root, dist, _, _, _ = environment
+    project = Path(notices.__file__).resolve().parents[1]
+    manifest = project / "scripts/packaging/python-licenses.json"
+    reviewed = json.loads(manifest.read_text(encoding="utf-8"))["packages"][package]
+    dist.metadata.replace_header("Name", package)
+    dist.version = reviewed["version"]
+    dist.files = []
+    monkeypatch.setattr(notices, "FALLBACK_MANIFEST", manifest)
+    monkeypatch.setattr(notices, "LOCK_PATH", project / "uv.lock")
+    output = root / "out"
+    notices.generate_notices(output)
+    originals = reviewed.get("documents", [reviewed])
+    assert len(originals) == expected_count
+    for document in originals:
+        target = output / f"packages/{package}/{dist.version}/reviewed-upstream" / document["file"]
+        assert target.read_bytes() == (manifest.parent / document["file"]).read_bytes()
+        assert hashlib.sha256(target.read_bytes()).hexdigest() == document["sha256"]
+    report = json.loads((output / "manifest.json").read_text())
+    assert not report["packages"][0]["warnings"]
+    assert report["packages"][0]["reviewed_fallback"] == reviewed
+    notices.check_notices(output)
+
+
 @pytest.mark.parametrize("path", ["../LICENSE", "/LICENSE", "C:/LICENSE", "sample/../../NOTICE", "sample\\LICENSE"])
 def test_record_document_path_escape_rejected(environment, path):
     root, dist, *_ = environment
