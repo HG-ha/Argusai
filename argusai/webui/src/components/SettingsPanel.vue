@@ -3,16 +3,17 @@ import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { NInput, NInputNumber, NSelect, NButton, NSwitch, NText, NSpace, NEmpty, NTag, NRadioGroup, NRadio, NAlert, NProgress } from 'naive-ui'
 import { t } from '../i18n.js'
 import { api } from '../api.js'
-import { showToast } from '../state.js'
+import { showToast, state } from '../state.js'
 import { theme, setPreferred } from '../theme.js'
 import { useConfirm } from '../composables/useConfirm.js'
 import { useClientList } from '../composables/useClientList.js'
-import { navigate } from '../router.js'
+import { navigate, route } from '../router.js'
 import StorageDirField from './settings/StorageDirField.vue'
 import AIProviderPicker from './settings/AIProviderPicker.vue'
 import ListToolbar from './list/ListToolbar.vue'
 import ListPager from './list/ListPager.vue'
 import WorkbenchModal from './workbench/WorkbenchModal.vue'
+import UpdatePanel from './UpdatePanel.vue'
 import { formatBytes, joinPath, pathSep } from './settings/settingsUtils.js'
 import {
   TOOLCHAIN_PATH_KEYS,
@@ -2684,11 +2685,12 @@ function formatEndpointLatency(latencyMs) {
 }
 
 const settingsSearch = ref('')
-const activeSettingsSection = ref('ai')
+const activeSettingsSection = ref(route.params.section === 'updates' ? 'updates' : 'ai')
 const settingsContentEl = ref(null)
 
 const SETTINGS_CATEGORY_DEFINITIONS = [
   { id: 'appearance', group: 'workspace', labelKey: 'settings.appearanceTitle', keywords: 'theme appearance light dark auto tray 主题 外观 浅色 深色 自动 托盘' },
+  { id: 'updates', group: 'workspace', labelKey: 'updates.title', keywords: 'update upgrade version release download installation 更新 升级 版本 发布 下载 安装' },
   { id: 'ai', group: 'workspace', labelKey: 'settings.aiTitle', keywords: 'ai model endpoint api key vision asr tokens 模型 端点 密钥 视觉 语音' },
   { id: 'assistant', group: 'workspace', labelKey: 'settings.assistantRuntimeTitle', keywords: 'assistant runtime tools policy archive allow shell rounds thinking effort reasoning 助手 工具 确认 归档 shell 轮次 思考 强度' },
   { id: 'user_habits', group: 'workspace', labelKey: 'settings.control.userHabitsTitle', keywords: 'profile habits preference style output risk 用户 习惯 偏好 风格 输出 风险' },
@@ -2710,6 +2712,9 @@ function configuredHabitCount() {
 function categorySummary(id) {
   if (id === 'appearance') {
     return themePrefOptions.value.find(opt => opt.value === theme.preferred)?.label || t('settings.control.statusUnknown')
+  }
+  if (id === 'updates') {
+    return t('updates.currentVersion', { version: state.version || '—' })
   }
   if (id === 'ai') {
     return t('settings.control.endpointSummary', {
@@ -2838,6 +2843,10 @@ function selectSettingsSection(id) {
     settingsContentEl.value?.scrollTo({ top: 0, behavior: 'smooth' })
   })
 }
+
+watch(() => route.params.section, (section) => {
+  if (section === 'updates') selectSettingsSection('updates')
+})
 </script>
 
 <template>
@@ -2935,6 +2944,14 @@ function selectSettingsSection(id) {
           <div class="hint">{{ t('settings.closeToTrayHint') }}</div>
         </div>
       </div>
+    </section>
+
+    <section
+      v-if="activeSettingsSection === 'updates'"
+      class="settings-section-card settings-domain settings-update-section"
+      :aria-label="t('updates.title')"
+    >
+      <UpdatePanel class="settings-update-panel" />
     </section>
 
     <!-- AI Section -->
@@ -4704,6 +4721,13 @@ function selectSettingsSection(id) {
 .settings-section-card {
   min-height: 100%;
   overflow: visible;
+}
+.settings-update-section > .settings-update-panel {
+  margin: 0;
+  padding: 18px 20px 24px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 .settings-section-header {
   display: flex;

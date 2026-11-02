@@ -335,6 +335,7 @@ async function pickMention(candidate) {
 }
 
 function onComposerKeydown(event) {
+  if (event.isComposing || event.keyCode === 229) return
   if (mentionOpen.value && mentionCandidates.value.length) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -743,6 +744,7 @@ async function loadTeamDetail(teamId, { quiet = false } = {}) {
   if (!teamId) return
   try {
     const res = await api.call('get_team', teamId)
+    if (activeTeamId.value !== teamId) return
     if (res && res.ok) {
       teamDetail.value = res.team
       teamGreenlight.value = Boolean(res.team?.greenlight)
@@ -809,6 +811,7 @@ async function loadTeamChat(teamId, { quiet = false, scrollBottom = false } = {}
   teamChatLoading.value = true
   try {
     const res = await api.call('get_team_chat', teamId)
+    if (activeTeamId.value !== teamId) return
     if (res?.ok) {
       teamChat.value = Array.isArray(res.messages) ? res.messages : []
       if (stick) {
@@ -823,7 +826,7 @@ async function loadTeamChat(teamId, { quiet = false, scrollBottom = false } = {}
   } catch (e) {
     if (!quiet) showToast(t('toast.error', { msg: e.message || e }), 'error')
   } finally {
-    teamChatLoading.value = false
+    if (activeTeamId.value === teamId) teamChatLoading.value = false
   }
 }
 
@@ -850,9 +853,11 @@ function browseMemberSandbox(row) {
 }
 
 async function loadMember(agentId, { quiet = false, scrollBottom = false } = {}) {
-  if (!activeTeamId.value || !agentId) return
+  const teamId = activeTeamId.value
+  if (!teamId || !agentId) return
   try {
-    const res = await api.call('get_team_member', activeTeamId.value, agentId)
+    const res = await api.call('get_team_member', teamId, agentId)
+    if (activeTeamId.value !== teamId || activeMemberId.value !== agentId) return
     if (res && res.ok) {
       const payload = (res.agent && typeof res.agent === 'object') ? res.agent : res
       memberDetail.value = payload
@@ -1108,46 +1113,60 @@ async function removeMember(m) {
 }
 
 async function sendSteer() {
-  const msg = steerDraft.value.trim()
-  if ((!msg && !pendingAttachments.value.length) || !activeTeamId.value || sendingSteer.value) return
+  const draft = steerDraft.value
+  const msg = draft.trim()
+  const teamId = activeTeamId.value
+  const memberId = activeMemberId.value
+  const targetId = chatTargetId.value
+  const attachments = [...pendingAttachments.value]
+  if ((!msg && !attachments.length) || !teamId || sendingSteer.value) return
+  const sameChat = () => activeTeamId.value === teamId && activeMemberId.value === memberId
+  let accepted = false
   sendingSteer.value = true
+  // The room message can be visible before member delivery finishes.
+  // Consume this submission now; a later response must not clear a new draft.
+  steerDraft.value = ''
+  pendingAttachments.value = []
+  mentionOpen.value = false
+  mentionQuery.value = ''
   try {
     const lower = msg.toLowerCase()
     const explicitAll = ["@all", "@everyone", "@全体", "@全员"].some(token => lower.includes(token))
     const mentioned = mentionRecipientIds(msg)
-    const privateMode = Boolean(activeMemberId.value)
+    const privateMode = Boolean(memberId)
     const recipients = privateMode
-      ? [activeMemberId.value]
+      ? [memberId]
       : explicitAll
         ? []
         : mentioned.length
           ? mentioned
-          : chatTargetId.value === 'all'
+          : targetId === 'all'
             ? []
-            : [chatTargetId.value]
+            : [targetId]
     const res = await api.call(
       'send_team_message',
-      activeTeamId.value,
+      teamId,
       msg,
       recipients,
       privateMode ? 'private' : 'group',
-      pendingAttachments.value,
+      attachments,
       {
         allow_web_search: teamWebSearch.value,
       },
     )
-    if (!res || !res.ok) throw new Error(res?.error || t('team.steerFailed'))
-    steerDraft.value = ''
-    pendingAttachments.value = []
-    mentionOpen.value = false
-    await Promise.all([
-      loadTeamDetail(activeTeamId.value, { quiet: true }),
-      loadTeamChat(activeTeamId.value, { quiet: true, scrollBottom: true }),
-    ])
-    if (activeMemberId.value) {
-      await loadMember(activeMemberId.value, { quiet: true })
+    // A persisted room receipt is accepted even if no member could receive it.
+    accepted = Boolean(res?.ok || res?.message?.id)
+    if (!res?.ok) {
+      const errors = Array.isArray(res?.errors) ? res.errors : []
+      const detail = errors.map(item => [item.role || item.agent_id, item.error].filter(Boolean).join(': ')).join('; ')
+      throw new Error(res?.error || detail || t('team.steerFailed'))
     }
   } catch (e) {
+    if (!accepted && sameChat() && chatTargetId.value === targetId
+      && !steerDraft.value && !pendingAttachments.value.length) {
+      steerDraft.value = draft
+      pendingAttachments.value = attachments
+    }
     const message = String(e?.message || e)
     showToast(
       /positional arguments|takes from 2 to 4/i.test(message)
@@ -1157,6 +1176,13 @@ async function sendSteer() {
     )
   } finally {
     sendingSteer.value = false
+    if (accepted && sameChat()) {
+      await Promise.all([
+        loadTeamDetail(teamId, { quiet: true }),
+        loadTeamChat(teamId, { quiet: true, scrollBottom: true }),
+      ])
+      if (memberId && sameChat()) await loadMember(memberId, { quiet: true })
+    }
   }
 }
 
@@ -1754,6 +1780,9 @@ onUnmounted(() => {
               </div>
 
               <template v-for="item in visibleTeamChat" :key="item.id">
+                <div v-if="item.type !== 'activity'" class="team-chat-time">
+                  <time :title="formatFullTime(item.timestamp)">{{ formatTime(item.timestamp) }}</time>
+                </div>
                 <div v-if="item.type === 'activity'" class="group-activity-row">
                   <span class="group-activity-avatar">{{ monogram(item.role_name) }}</span>
                   <span class="group-activity-copy">
@@ -1781,7 +1810,6 @@ onUnmounted(() => {
                           ? t('team.targetEveryone')
                           : (item.target_roles || []).map(role => `@${role}`).join(', ') }}
                       </span>
-                      <time :title="formatFullTime(item.timestamp)">{{ formatTime(item.timestamp) }}</time>
                     </div>
                     <div v-if="String(item.content || '').trim()" class="msg-text">
                       <MarkdownText :text="String(item.content || '')" />
@@ -2950,6 +2978,14 @@ onUnmounted(() => {
   gap: 12px;
   min-height: 100%;
 }
+.team-chat-time {
+  align-self: stretch;
+  text-align: center;
+  color: var(--muted-2);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
 .team-jump-bottom {
   position: absolute;
   left: 50%;
@@ -3047,14 +3083,6 @@ onUnmounted(() => {
   color: var(--muted-2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-}
-.msg-label time {
-  margin-left: auto;
-  color: var(--muted-2);
-  font-size: 9.5px;
-  font-variant-numeric: tabular-nums;
-  text-transform: none;
-  letter-spacing: 0;
 }
 .msg-target {
   color: var(--accent);

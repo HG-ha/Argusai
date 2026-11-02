@@ -229,12 +229,5 @@ function setTheme(value) {
         </button>
       </div>
     </div>
-    <div class="sidebar-attribution">
-      <div>{{ t('app.attributionDeveloper') }}</div>
-      <div>
-        {{ t('app.attributionContact') }}
-        <a href="mailto:wer.yiming@gmail.com">wer.yiming@gmail.com</a>
-      </div>
-    </div>
   </aside>
 </template>

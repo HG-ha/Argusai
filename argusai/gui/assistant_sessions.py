@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import threading
+
+from argusai.core.assistant.run_jobs import _atomic_write_text as _atomic_write_session_text
+
 from .assistant_common import *
 
 _AGENT_COMPLETION_WAKE_PROMPT = (
@@ -16,6 +20,7 @@ _CONTEXT_MAX_MESSAGES = 2_000
 _CONTEXT_MAX_MESSAGE_CHARS = 100_000
 _CONTEXT_MAX_TOTAL_CHARS = 2_000_000
 _CONTEXT_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+_SESSION_PERSIST_LOCK = threading.RLock()
 
 
 class AssistantSessionsMixin:
@@ -108,22 +113,26 @@ class AssistantSessionsMixin:
         toggle) have no name to supply, and writing "" would erase the title the
         user gave the conversation.
         """
-        old_note = ""
-        old_name = ""
-        if path.exists():
-            try:
-                old = json.loads(path.read_text(encoding="utf-8"))
-                old_note = str(old.get("note") or "")[:4000]
-                old_name = str(old.get("name") or "")
-            except Exception:
-                old_note = ""
-                old_name = ""
-        data = session.to_dict()
-        data["name"] = str(name or "") or old_name
-        if old_note:
-            data["note"] = old_note
-        data["updated_at"] = time.time()
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # A scheduled wake and a stream checkpoint can save concurrently.
+        # Serialize the whole read/merge/snapshot/write transaction, including
+        # metadata edits, and let readers observe only complete JSON snapshots.
+        with _SESSION_PERSIST_LOCK:
+            old_note = ""
+            old_name = ""
+            if path.exists():
+                try:
+                    old = json.loads(path.read_text(encoding="utf-8"))
+                    old_note = str(old.get("note") or "")[:4000]
+                    old_name = str(old.get("name") or "")
+                except Exception:
+                    old_note = ""
+                    old_name = ""
+            data = session.to_dict()
+            data["name"] = str(name or "") or old_name
+            if old_note:
+                data["note"] = old_note
+            data["updated_at"] = time.time()
+            _atomic_write_session_text(path, json.dumps(data, ensure_ascii=False, indent=2))
 
 
     def _looks_like_hidden_confirmation(self, message: dict[str, Any]) -> bool:
@@ -719,16 +728,17 @@ class AssistantSessionsMixin:
         if not p.exists():
             return {"ok": False, "error": "session not found"}
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            patch = patch or {}
-            if "name" in patch:
-                name = str(patch.get("name") or "").strip()
-                data["name"] = name[:120]
-            if "note" in patch:
-                note = str(patch.get("note") or "").strip()
-                data["note"] = note[:4000]
-            data["updated_at"] = time.time()
-            p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with _SESSION_PERSIST_LOCK:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                patch = patch or {}
+                if "name" in patch:
+                    name = str(patch.get("name") or "").strip()
+                    data["name"] = name[:120]
+                if "note" in patch:
+                    note = str(patch.get("note") or "").strip()
+                    data["note"] = note[:4000]
+                data["updated_at"] = time.time()
+                _atomic_write_session_text(p, json.dumps(data, ensure_ascii=False, indent=2))
             return {
                 "ok": True,
                 "session": {
@@ -867,6 +877,13 @@ class AssistantSessionsMixin:
                     timestamp=now + (index / 1000),
                 )
                 for index, message in enumerate(normalized)
+            ]
+            # Wake markers refer to positions in the replaced transcript.
+            # Keep other audit events, but never attach an old scheduled wake
+            # to newly authored dialogue that merely has the same length.
+            session.events = [
+                event for event in session.events
+                if event.get("kind") != "cron_wakeup"
             ]
             # Summaries and context-size snapshots were derived from the old
             # transcript and must never survive a manual rewrite.

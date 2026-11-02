@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "Kontakt: ",
-    "attributionDeveloper": "Entwickler: Yiming",
     "product": "ArgusAI",
     "subtitle": "lokal · skriptfähig · standardmäßig sicher",
     "title": "ArgusAI Security Workbench",

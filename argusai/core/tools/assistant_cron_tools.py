@@ -61,7 +61,7 @@ def cron_upsert(
     report_to_origin: bool = True,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Create or update a scheduled assistant job. Requires user confirmation.
+    """Schedule interval/cron/webhook/file-change work in a new, job-owned, or existing chat; read assistant-cron first. Requires confirmation.
 
     Codex-aligned destinations:
     - ``new_session`` (default): each standalone run gets its own cron chat; results
@@ -191,7 +191,7 @@ def cron_upsert(
 
 
 def cron_set_enabled(api: Any, job_id: str = "", enabled: bool = True, **kwargs: Any) -> dict[str, Any]:
-    """Enable or pause a cron job. Requires user confirmation."""
+    """Enable/disable a schedule, including stopping after its agreed objective is complete. Requires confirmation."""
     try:
         job = _store(api).set_enabled(str(job_id or "").strip(), bool(enabled))
     except ValueError as exc:

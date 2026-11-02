@@ -179,11 +179,14 @@ def test_missing_precise_user_rewind_does_not_change_history() -> None:
         ChatMessage(role="assistant", content="keep answer", timestamp=2.0),
     ]
     before = [item.to_dict() for item in session.history]
+    events = [{"kind": "cron_wakeup", "payload": {"history_offset": 2}}, {"kind": "confirmation_decision"}]
+    session.events = list(events)
 
     with pytest.raises(ValueError, match="target user message was not found"):
         session._rewind_for_regenerate("replacement", None, user_before_ts=9.0)
 
     assert [item.to_dict() for item in session.history] == before
+    assert session.events == events
 
 
 def test_legacy_assistant_timestamp_rewind_still_works() -> None:
@@ -197,6 +200,51 @@ def test_legacy_assistant_timestamp_rewind_still_works() -> None:
     session._rewind_for_regenerate("keep", before_ts=2.0)
 
     assert [(item.role, item.content) for item in session.history] == [("user", "keep")]
+
+
+@pytest.mark.parametrize("rewind_args", [{"user_before_ts": 3.0}, {"before_ts": 4.0}, {}])
+def test_rewind_prunes_only_cron_wakeups_from_removed_history(rewind_args) -> None:
+    session = AssistantSession()
+    session.history = [
+        ChatMessage(role="user", content="first", timestamp=1.0),
+        ChatMessage(role="assistant", content="first answer", timestamp=2.0),
+        ChatMessage(role="tool", content="proof", timestamp=2.1),
+        ChatMessage(role="user", content="hidden trigger", ui_hidden=True, source="cron", timestamp=2.2),
+        ChatMessage(role="assistant", content="hidden note", hidden=True, timestamp=2.3),
+        ChatMessage(role="user", content="confirmation", source="confirmation", timestamp=2.4),
+        ChatMessage(role="user", content="next", timestamp=3.0),
+        ChatMessage(role="assistant", content="discarded answer", timestamp=4.0),
+    ]
+    earlier = {"id": "earlier", "kind": "cron_wakeup", "payload": {"history_offset": 0}}
+    before_user = {"id": "before-user", "kind": "cron_wakeup", "payload": {"history_offset": 2}}
+    audit = {"id": "audit", "kind": "confirmation_decision", "payload": {"history_offset": 999}}
+    session.events = [
+        earlier,
+        before_user,
+        audit,
+        {"id": "boundary", "kind": "cron_wakeup", "payload": {"history_offset": 3}},
+        {"id": "later", "kind": "cron_wakeup", "payload": {"history_offset": 4}},
+    ]
+
+    session._rewind_for_regenerate("next", rewind_args.get("before_ts"), rewind_args.get("user_before_ts"))
+
+    assert session.events == [earlier, before_user, audit]
+    assert session.history[-1].content == "next"
+    # A replacement response must not bring the removed boundary marker back.
+    session.history.append(ChatMessage(role="assistant", content="fresh answer", timestamp=5.0))
+    assert session.events == [earlier, before_user, audit]
+
+
+@pytest.mark.parametrize("message", ["existing user", "new user"])
+def test_regenerate_without_history_truncation_keeps_wakeup_events(message) -> None:
+    session = AssistantSession()
+    session.history = [ChatMessage(role="user", content="existing user", timestamp=1.0)]
+    events = [{"kind": "cron_wakeup", "payload": {"history_offset": 1}}, {"kind": "tool_audit"}]
+    session.events = list(events)
+
+    session._rewind_for_regenerate(message, before_ts=None)
+
+    assert session.events == events
 
 
 def test_greenlight_keeps_latest_user_turn_as_recency_anchor() -> None:

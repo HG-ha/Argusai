@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
+
 import argusai.core.assistant.skills as skills_mod
 from argusai.core.assistant.skills import (
     MAX_AUTO_SKILL_CHARS,
@@ -200,6 +202,36 @@ def test_durable_continuation_phrase_routes_to_cron_skill() -> None:
 
     assert "assistant-cron" in matched
     assert {"cron_list", "cron_upsert", "cron_set_enabled"} <= names
+
+
+@pytest.mark.parametrize("message", [
+    "日志目录有新文件时自动分析，没变化不打扰我",
+    "收到外部告警回调后自动执行检查",
+    "Analyze new reports whenever files in this folder change",
+    "Run the review when the signed webhook arrives",
+    "十分钟后提醒我检查结果",
+    "Remind me in ten minutes to review the result",
+])
+def test_future_and_event_automation_routes_to_scheduler(message: str) -> None:
+    _reload_skills()
+    matched = {sd.name for sd in _select_matched_skills(message)}
+    names = set(_select_tool_names("assistant", message))
+
+    assert "assistant-cron" in matched
+    assert {"cron_list", "cron_upsert", "cron_set_enabled"} <= names
+
+
+@pytest.mark.parametrize("message", [
+    "解释这个 webhook 请求是什么意思",
+    "Read this log file and summarize it now",
+    "等页面加载两秒，然后继续刚才的操作",
+    "等待这个扫描结束，然后给出报告",
+])
+def test_immediate_work_does_not_attach_scheduler_tools(message: str) -> None:
+    _reload_skills()
+    names = set(_select_tool_names("assistant", message))
+
+    assert "cron_upsert" not in names
 
 
 def test_external_capability_request_routes_to_provisioning_skill() -> None:

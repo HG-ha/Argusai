@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "Contact : ",
-    "attributionDeveloper": "Développeur : Yiming",
     "product": "ArgusAI",
     "subtitle": "local · scriptable · sûr par défaut",
     "title": "ArgusAI — atelier de sécurité",

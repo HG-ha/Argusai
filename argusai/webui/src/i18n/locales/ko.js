@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "연락처: ",
-    "attributionDeveloper": "개발자: Yiming",
     "product": "ArgusAI",
     "subtitle": "로컬 · 스크립트 가능 · 기본 안전",
     "title": "ArgusAI 보안 작업대",

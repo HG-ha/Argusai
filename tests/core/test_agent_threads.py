@@ -6,12 +6,15 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from argusai.core.assistant.agent_threads import (
     AgentThreadManager,
     _child_registry,
     set_team_room_hooks,
 )
 from argusai.core.assistant.session import AssistantSession
+from argusai.core.assistant.messages import ChatResponse
 from argusai.core.assistant.tools import ToolRegistry
 
 
@@ -156,6 +159,237 @@ def test_deferred_team_member_waits_for_command_and_receives_room_context(
         set_team_room_hooks()
 
 
+@pytest.mark.parametrize(
+    ("response_status", "expected_state"),
+    [
+        ("done", "completed"),
+        ("ok", "completed"),
+        ("ai_error", "failed"),
+        ("error", "failed"),
+        ("stream_repetition", "paused"),
+        ("paused_by_user", "paused"),
+        ("paused_for_interjection", "paused"),
+        ("cancelled", "paused"),
+        ("awaiting_confirmation", "paused"),
+        ("awaiting_user_decision", "paused"),
+        ("unexpected_status", "failed"),
+    ],
+)
+def test_child_response_status_is_not_mistaken_for_success(
+    tmp_path: Path, monkeypatch, response_status: str, expected_state: str,
+) -> None:
+    async def _chat(self, *_args, **_kwargs):  # noqa: ANN001
+        return ChatResponse(text="mock response", status=response_status)
+
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider",
+        lambda _parent, model="": _Provider(),
+    )
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="reviewer", objective="inspect sample")["agent"]["agent_id"]
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert result["status"] == expected_state
+        assert result["stopped_reason"] == response_status
+    finally:
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("provider_error", [False, True])
+def test_real_child_chat_propagates_provider_outcome(
+    tmp_path: Path, monkeypatch, provider_error: bool,
+) -> None:
+    class _ResultProvider(_Provider):
+        async def chat(self, **_kwargs):
+            if provider_error:
+                raise RuntimeError("mock endpoint unavailable")
+            return {"choices": [{"message": {"content": "Sample reviewed.", "tool_calls": []}}]}
+
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider",
+        lambda _parent, model="": _ResultProvider(),
+    )
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="reviewer", objective="inspect provided sample")["agent"]["agent_id"]
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert result["status"] == ("failed" if provider_error else "completed")
+        assert result["stopped_reason"] == ("ai_error" if provider_error else "done")
+    finally:
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_action", [None, "pause", "close"])
+def test_publisher_queued_input_is_drained_unless_parent_stops(
+    tmp_path: Path, monkeypatch, stop_action: str | None,
+) -> None:
+    calls: list[str] = []
+    receipts: list[dict] = []
+
+    async def _chat(self, message="", **_kwargs):  # noqa: ANN001
+        calls.append(message)
+        return ChatResponse(text=f"result-{len(calls)}", status="done")
+
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider",
+        lambda _parent, model="": _Provider(),
+    )
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    parent = _parent(tmp_path)
+    parent.registry.session_id = "team-audit"
+    manager = AgentThreadManager(parent)
+
+    def _publish(_parent_id, aid, _role, _text, *_args):
+        if len(calls) == 1:
+            receipts.append(manager.send_input(aid, "next concrete task", resume=True))
+            if stop_action:
+                assert getattr(manager, stop_action)(aid)["ok"] is True
+
+    set_team_room_hooks(output_publisher=_publish)
+    try:
+        aid = manager.spawn(role="reviewer", objective="inspect sample")["agent"]["agent_id"]
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert receipts and receipts[0]["ok"] is True
+        if stop_action:
+            assert len(calls) == 1
+            assert result["status"] == ("paused" if stop_action == "pause" else "closed")
+        else:
+            assert len(calls) == 2
+            assert calls[1] == "next concrete task"
+            assert result["status"] == "completed"
+            assert result["pending_input_count"] == 0
+    finally:
+        set_team_room_hooks()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("stop_action", [None, "pause", "close", "halt", "cancel_active", "shutdown"])
+def test_continuation_waits_until_retiring_worker_releases_provider(
+    tmp_path: Path, monkeypatch, stop_action: str | None,
+) -> None:
+    closing = threading.Event()
+    release = threading.Event()
+    providers: list[_Provider] = []
+    calls: list[str] = []
+
+    class _ClosingProvider(_Provider):
+        async def close(self):
+            if self is providers[0]:
+                closing.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.01)
+
+    def _provider(_parent, model=""):
+        provider = _ClosingProvider()
+        providers.append(provider)
+        return provider
+
+    async def _chat(self, message="", **_kwargs):  # noqa: ANN001
+        calls.append(message)
+        return ChatResponse(text=f"result-{len(calls)}", status="done")
+
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider", _provider,
+    )
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(role="reviewer", objective="inspect sample")["agent"]["agent_id"]
+        assert closing.wait(timeout=2)
+        retiring = manager._runtimes[aid]
+        receipt = manager.send_input(aid, "continue after cleanup", resume=True)
+        assert receipt["ok"] is True
+        assert manager._runtimes[aid] is retiring
+        assert len(providers) == 1
+        if stop_action == "shutdown":
+            manager.shutdown(wait_timeout=0)
+        elif stop_action == "cancel_active":
+            assert aid in manager.cancel_active()["closed"]
+        elif stop_action:
+            assert getattr(manager, stop_action)(aid)["ok"] is True
+        release.set()
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        if stop_action:
+            assert result["status"] == ("closed" if stop_action in {"close", "cancel_active"} else "paused")
+            assert len(calls) == len(providers) == 1
+            assert aid not in manager._runtimes
+            assert result["pending_input_count"] == (0 if stop_action in {"halt", "cancel_active"} else 1)
+            if stop_action == "shutdown":
+                assert result["stopped_reason"] == "application_shutdown"
+        else:
+            assert result["status"] == "completed"
+            assert result["pending_input_count"] == 0
+            assert len(calls) == 2
+            assert calls[1] == "continue after cleanup"
+            assert len(providers) == 2
+    finally:
+        release.set()
+        manager.shutdown()
+
+
+def test_pending_confirmation_precedes_already_queued_team_input(tmp_path: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    receipts: list[dict] = []
+
+    async def _chat(self, message="", *, confirmation_action=False, **_kwargs):  # noqa: ANN001
+        if confirmation_action:
+            calls.append("confirmation")
+            self._pending = None
+            return ChatResponse(text="approved result", status="done")
+        if not calls:
+            calls.append("initial")
+            receipts.append(manager.send_input(aid, "queued follow-up", resume=True))
+            self._pending = {
+                "confirmations": [{
+                    "name": "write_probe",
+                    "arguments": {"value": "safe"},
+                    "tool_call": {"id": "call-write"},
+                }],
+                "tool_calls": [],
+                "messages": [],
+                "assistant_response": {},
+                "decisions": {},
+                "auto_allow_names": [],
+                "auto_allow_permissions": [],
+            }
+            return ChatResponse(text="approval required", status="awaiting_confirmation")
+        calls.append(message)
+        return ChatResponse(text="follow-up result", status="done")
+
+    monkeypatch.setattr(
+        "argusai.core.assistant.agent_threads._create_isolated_ai_provider",
+        lambda _parent, model="": _Provider(),
+    )
+    monkeypatch.setattr(AssistantSession, "chat", _chat)
+    manager = AgentThreadManager(_parent(tmp_path))
+    try:
+        aid = manager.spawn(
+            role="reviewer", objective="inspect sample", start_immediately=False,
+        )["agent"]["agent_id"]
+        assert manager.send_input(aid, "start", resume=True)["ok"] is True
+        paused = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert receipts[0]["ok"] is True
+        assert calls == ["initial"]
+        assert paused["status"] == "paused"
+        assert paused["pending_input_count"] == 1
+        pending = paused["pending_confirmation"]["pending_tools"][0]
+        resumed = manager.confirm(aid, {
+            "type": "confirmation_decision",
+            "pending_id": pending["pending_id"],
+            "version": pending["version"],
+            "call_id": pending["id"],
+            "verdict": "allow",
+        })
+        assert resumed["ok"] is True
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert result["status"] == "completed"
+        assert result["pending_input_count"] == 0
+        assert calls == ["initial", "confirmation", "queued follow-up"]
+    finally:
+        manager.shutdown()
+
+
 def test_agent_thread_recovers_interrupted_snapshot_as_paused(tmp_path: Path) -> None:
     parent = _parent(tmp_path)
     root = tmp_path / "_agents" / "parent-session"
@@ -210,6 +444,74 @@ def test_external_agent_spawn_persists_explicit_acp_backend(tmp_path: Path, monk
     assert spawned["agent"]["backend"] == "acp"
     assert spawned["agent"]["runtime_id"] == "fake-acp"
     assert spawned["agent"]["status"] == "queued"
+
+
+@pytest.mark.parametrize("stop_action", [None, "pause", "close"])
+def test_external_agent_accepts_input_during_final_handoff(
+    tmp_path: Path, monkeypatch, stop_action: str | None,
+) -> None:
+    calls: list[str] = []
+    receipts: list[dict] = []
+    parent = _parent(tmp_path)
+    settings = parent.registry.api.settings_mgr.get()
+    settings.data_root = str(tmp_path / "data")
+    settings.agent_runtimes = [{
+        "id": "fake-acp", "name": "Fake ACP", "backend": "acp",
+        "enabled": True, "command": "fake-acp",
+    }]
+    parent.registry.api._assistant_tool_broker = SimpleNamespace(
+        register_session=lambda *_args, **_kwargs: "mock-token",
+        mcp_server=lambda *_args: {},
+        permission_handler=lambda *_args: None,
+        unregister=lambda *_args: None,
+    )
+
+    async def _run_acp_turn(_config, _binding, *, message, **_kwargs):
+        calls.append(message)
+        return SimpleNamespace(
+            ok=True, text="mock ACP result", error="", error_code="",
+            stop_reason="end_turn", acp_session_id="mock-acp-session",
+            config_options=[], updates=[],
+        )
+
+    monkeypatch.setattr("argusai.core.agent_runtimes.run_acp_turn", _run_acp_turn)
+    manager = AgentThreadManager(parent)
+    with monkeypatch.context() as staging:
+        staging.setattr(manager, "_start_locked", lambda _agent_id: None)
+        aid = manager.spawn_external(
+            runtime_id="fake-acp", role="reviewer", objective="inspect sample",
+        )["agent"]["agent_id"]
+
+    original_run = asyncio.run
+
+    def _run_at_handoff(coro, **kwargs):
+        is_turn = getattr(getattr(coro, "cr_code", None), "co_name", "") == "_run_worker"
+        result = original_run(coro, **kwargs)
+        # Model the exact cross-thread boundary after the final empty-queue
+        # check and before the worker acquires its terminal-state lock.
+        if is_turn and not receipts:
+            receipts.append(manager.send_input(aid, "late ACP follow-up", resume=True))
+            if stop_action:
+                assert getattr(manager, stop_action)(aid)["ok"] is True
+        return result
+
+    monkeypatch.setattr(asyncio, "run", _run_at_handoff)
+    try:
+        with manager._lock:
+            manager._start_locked(aid)
+        result = manager.wait([aid], timeout_seconds=2)["agents"][0]
+        assert receipts and receipts[0]["ok"] is True
+        if stop_action:
+            assert len(calls) == 1
+            assert result["status"] == ("paused" if stop_action == "pause" else "closed")
+            assert result["pending_input_count"] == 1
+        else:
+            assert result["status"] == "completed"
+            assert result["pending_input_count"] == 0
+            assert len(calls) == 2
+            assert "late ACP follow-up" in calls[1]
+    finally:
+        manager.shutdown()
 
 
 def test_scoped_agent_inherits_exact_parent_allow_policy(tmp_path: Path) -> None:

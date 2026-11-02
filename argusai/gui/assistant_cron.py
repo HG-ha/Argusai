@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
 from typing import Any
+
+
+log = logging.getLogger(__name__)
 
 
 class AssistantCronMixin:
@@ -344,6 +348,47 @@ class AssistantCronMixin:
         name = f"Cron · {str(job.get('name') or job.get('id') or 'job')[:40]}"
         self._save_session(path, target_session, name)
 
+    def _persist_cron_wakeup_event(
+        self,
+        job: dict[str, Any],
+        session_id: str,
+        session: Any,
+        *,
+        timestamp: float,
+        history_offset: int,
+        run_id: str,
+        assistant_run_job_id: str,
+    ) -> None:
+        """Expose one accepted scheduled wake without adding model history."""
+        schedule = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
+        trigger = job.get("_trigger_event") if isinstance(job.get("_trigger_event"), dict) else {}
+        payload = {
+            "job_id": str(job.get("id") or ""),
+            "job_name": str(job.get("name") or job.get("id") or "job")[:120],
+            "trigger_kind": str(schedule.get("kind") or trigger.get("source") or "interval"),
+            "destination": str(job.get("destination") or "new_session"),
+            # Anchor before the reply even when a fast stream completes before
+            # its start receipt returns. Hidden scheduled inputs do not count.
+            "history_offset": history_offset,
+            "run_id": run_id,
+            "assistant_run_job_id": assistant_run_job_id,
+        }
+        if trigger.get("event_id"):
+            payload["trigger_event_id"] = str(trigger["event_id"])
+        session.events.append({
+            "id": f"evt_cron_{uuid.uuid4().hex}",
+            "kind": "cron_wakeup",
+            "source": "cron",
+            "render_policy": "timeline",
+            "context_policy": "exclude",
+            "turn_id": "",
+            "timestamp": timestamp,
+            "payload": payload,
+        })
+        if len(session.events) > 2000:
+            del session.events[:-2000]
+        self._save_session(self._session_path(session_id), session, "")
+
     @staticmethod
     def _cron_pending_high_risk(
         session: Any,
@@ -534,6 +579,17 @@ class AssistantCronMixin:
             if isinstance(job.get("_trigger_event"), dict)
             else {}
         )
+        wake_timestamp = time.time()
+        wake_history_offset = sum(
+            1 for message in session.history
+            if message.role in {"user", "assistant"}
+            and not message.hidden
+            and not message.ui_hidden
+            and not (
+                message.role == "user"
+                and message.source in {"cron", "confirmation"}
+            )
+        )
         try:
             if inherited_action:
                 started = self.start_assistant_action_stream({
@@ -582,6 +638,20 @@ class AssistantCronMixin:
 
         run_id = str(started.get("run_id") or "")
         assistant_job_id = str(started.get("job_id") or run_id)
+        try:
+            self._persist_cron_wakeup_event(
+                job,
+                session_id,
+                session,
+                timestamp=wake_timestamp,
+                history_offset=wake_history_offset,
+                run_id=run_id,
+                assistant_run_job_id=assistant_job_id,
+            )
+        except Exception:
+            # The stream is already running; an audit persistence failure must
+            # not misreport it as a rejected start or launch it a second time.
+            log.warning("Could not persist cron wakeup for %s", job_id, exc_info=True)
         self._notify_assistant_session_updated(
             session_id,
             reason="cron_stream_started",

@@ -7,7 +7,7 @@ function readAutoCheck() {
   try { return localStorage.getItem(AUTO_CHECK_KEY) !== 'false' } catch (_) { return true }
 }
 
-// One shared state and one poller for the About page and the application notice.
+// One shared state and one poller for Settings and the application notice.
 export const updateState = reactive({
   status: 'idle', current_version: '', version: '', notes: '', release_url: '',
   platform: '', downloaded_bytes: 0, total_bytes: 0, error: '', error_code: '',
@@ -54,7 +54,7 @@ async function runAction(action, fallbackKey) {
 export async function refreshUpdateStatus() {
   try { return mergeStatus(await api.updateStatus()) } catch (error) {
     // A background bridge failure should not replace an available update or
-    // interrupt the user's task. The About page still permits a manual retry.
+    // interrupt the user's task. Settings still permits a manual retry.
     if (['checking', 'downloading'].includes(updateState.status)) {
       updateState.error = error?.message || t('updates.statusUnavailable')
       updateState.status = 'error'

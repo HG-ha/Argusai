@@ -870,9 +870,9 @@ const naiveTheme = computed(() => theme.effective === 'dark' ? darkTheme : light
   >
     <Sidebar />
     <main class="main">
-      <div v-if="updateNoticeVisible && route.name !== 'about'" class="app-update-notice" role="status">
+      <div v-if="updateNoticeVisible && route.name !== 'settings'" class="app-update-notice" role="status">
         <span>{{ appUpdate.status === 'downloaded' ? t('updates.readyNotice', { version: appUpdate.version }) : t('updates.availableNotice', { version: appUpdate.version }) }}</span>
-        <button class="ghost tiny" type="button" @click="navigate('about')">{{ t('updates.viewUpdate') }}</button>
+        <button class="ghost tiny" type="button" @click="navigate('settings/updates')">{{ t('updates.viewUpdate') }}</button>
         <button class="app-update-dismiss" type="button" :aria-label="t('updates.dismiss')" @click="dismissUpdateNotice">×</button>
       </div>
       <div class="workbench-card">

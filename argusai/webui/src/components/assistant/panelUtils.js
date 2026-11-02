@@ -2,6 +2,63 @@ export const RENDER_WINDOW_SIZE = 60
 export const RENDER_WINDOW_TRIGGER = 80
 export const RENDER_WINDOW_STEP = 60
 
+// UI-only provenance. Keep scheduler prompts out of the visible chat and use
+// the pre-run history position so even a very fast reply follows its wake-up.
+export function mergeScheduledWakeups(messages, events) {
+  const history = (Array.isArray(messages) ? messages : [])
+    .filter(message => message?.source !== 'cron_wakeup')
+  const seen = new Set()
+  const seenIds = new Set()
+  const wakeups = []
+  for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind !== 'cron_wakeup') continue
+    const payload = event.payload || {}
+    const ts = Number(event.timestamp || 0) * 1000
+    const rawOffset = payload.history_offset
+    let offset = Number(rawOffset)
+    if (rawOffset == null || String(rawOffset).trim() === '' || !Number.isInteger(offset) || offset < 0) {
+      if (!Number.isFinite(ts) || ts <= 0) continue
+      offset = history.findIndex(message => Number(message.ts || 0) >= ts)
+      if (offset < 0) offset = history.length
+    }
+    // A truncated/replaced history must not move an obsolete wake-up to its end.
+    if (offset > history.length) continue
+    const jobId = String(payload.job_id || '')
+    const runId = String(payload.run_id || payload.assistant_run_job_id || '')
+    const eventId = String(event.id || '')
+    const key = runId || eventId || `${jobId}:${ts}:${offset}`
+    if (seen.has(key) || (eventId && seenIds.has(eventId))) continue
+    seen.add(key)
+    if (eventId) seenIds.add(eventId)
+    wakeups.push({
+      offset,
+      message: {
+        _uid: `cron-wakeup:${key}`,
+        role: 'system',
+        source: 'cron_wakeup',
+        text: '',
+        ts: Number.isFinite(ts) ? ts : 0,
+        runtimeNotice: {
+          jobId,
+          jobName: String(payload.job_name || ''),
+          triggerKind: String(payload.trigger_kind || ''),
+          runId,
+        },
+      },
+    })
+  }
+  wakeups.sort((a, b) => a.offset - b.offset || a.message.ts - b.message.ts)
+  const result = []
+  let next = 0
+  for (let index = 0; index <= history.length; index += 1) {
+    while (next < wakeups.length && wakeups[next].offset === index) {
+      result.push(wakeups[next++].message)
+    }
+    if (index < history.length) result.push(history[index])
+  }
+  return result
+}
+
 export const ATTACHMENT_MAX_COUNT = 8
 export const ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
 export const ATTACHMENT_ACCEPT_MIMES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']

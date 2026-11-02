@@ -607,7 +607,7 @@ def get_task_events(api: Any, task_id: str = "", limit: int = 20, **kwargs: Any)
 
 
 def wait_for_task(api: Any, task_id: str = "", timeout_seconds: int = 600, poll_interval: float = 1.5, **kwargs: Any) -> dict[str, Any]:
-    """Wait for a task to finish, then return its final snapshot."""
+    """Wait for a scan's terminal state or timeout and return its snapshot; timing out does not cancel the scan."""
     import time
 
     if not task_id:
@@ -984,7 +984,7 @@ def team_list(api: Any, **kwargs: Any) -> dict[str, Any]:
 
 
 def team_get(api: Any, team_id: str = "", **kwargs: Any) -> dict[str, Any]:
-    """Read one standing Agent Team with its full member roster and statuses."""
+    """Read a standing team's roster/statuses; member completed means its turn ended, not that the team objective is met."""
     return api.get_team(str(team_id or ""))
 
 

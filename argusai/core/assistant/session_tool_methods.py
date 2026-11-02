@@ -67,9 +67,11 @@ class SessionToolMethodsMixin:
         self.registry.register(
             "background_job_status",
             (
-                "Read status/result of a durable background tool job by job_ref. "
+                "Read an immediate status/result snapshot of a background tool job by job_ref. "
                 "Long scanners (sqlmap/nuclei/ffuf) and async run_subagent return a receipt with job_ref; "
-                "poll this sparingly — do not busy-loop."
+                "receipts live in this session's memory and do not survive an application restart. "
+                "The outer ok means the lookup succeeded; inspect terminal result.ok/result.error for the job outcome. "
+                "This call does not wait; poll sparingly with deliberate backoff, never in a tight loop."
             ),
             {
                 "job_ref": {"type": "string", "description": "job://… reference from a background receipt"},
@@ -83,7 +85,7 @@ class SessionToolMethodsMixin:
         )
         self.registry.register(
             "background_job_list",
-            "List recent background jobs for this session (status only).",
+            "List recent background jobs in this session's memory (status only; not retained across application restarts).",
             {
                 "limit": {"type": "integer", "description": "Max jobs to return", "default": 20},
             },
@@ -95,8 +97,9 @@ class SessionToolMethodsMixin:
         self.registry.register(
             "background_job_cancel",
             (
-                "Request cancellation of a cancellable background job by job_ref. "
-                "Async child Agents support cancellation; jobs without a cancellation hook return an explicit error."
+                "Request best-effort cancellation of a background job by job_ref. "
+                "Legacy async run_subagent jobs support cancellation; jobs without a cancellation hook return an explicit "
+                "unsupported-cancellation error. A cancelling receipt is not a terminal result; check background_job_status."
             ),
             {
                 "job_ref": {"type": "string", "description": "job://… reference from a background receipt"},
@@ -112,11 +115,13 @@ class SessionToolMethodsMixin:
             "wait_for_duration",
             (
                 "Pause this Agent turn for a short, deliberate duration, then continue with the next step. "
+                "This is an inline wait, not a saved schedule or a future conversation wake-up. "
                 "This is a cross-domain timing primitive: use it when the next action genuinely depends on "
                 "brief time passage, such as UI/app startup, service warm-up, retry backoff, rate-limit "
-                "cooldown, state propagation, or staged re-observation, and no task-specific poll/wait tool exists. "
-                "Do not use to wait for user input (call stop_for_user_decision), completed scans "
-                "(call wait_for_task/background_job_status), or long schedules (use cron)."
+                "cooldown, state propagation, or staged re-observation, when no task-specific blocking wait fits. "
+                "Status/log-only tools may be observed again after bounded backoff. "
+                "For a running scan use wait_for_task; for user input use stop_for_user_decision. "
+                "Use cron for future wake-ups or recurrence, not merely because a finite task takes over 300 seconds."
             ),
             {
                 "seconds": {
@@ -363,8 +368,10 @@ class SessionToolMethodsMixin:
         self.registry.register(
             "wait_for_agents",
             (
-                "Wait for one or more child Agents to leave queued/running/closing state, up to 300 seconds. "
-                "Use once when their results are needed; do not busy-loop."
+                "Wait for all specified child Agents to leave queued/running/closing state, up to 300 seconds; "
+                "timeout_seconds=0 returns an immediate snapshot. A timeout stops this wait without cancelling children. "
+                "Use when their results are needed after doing independent work; inspect completed/timed_out and "
+                "running_agent_ids before deciding the next step, and do not busy-loop."
             ),
             {
                 "agent_ids": {

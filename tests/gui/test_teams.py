@@ -320,6 +320,27 @@ def test_team_message_delivers_attachments(tmp_path) -> None:
     assert "data_base64" not in leader["attachments"][0]
 
 
+def test_failed_delivery_returns_persisted_room_receipt(tmp_path, monkeypatch) -> None:
+    api = _TeamApi(tmp_path)
+    tid = api.create_team({"name": "Audit", "objective": "obj"})["team"]["team_id"]
+    api.add_team_member(tid, {"role": "analyst", "objective": "verify"})
+    monkeypatch.setattr(
+        api._team_manager(tid),
+        "send_input",
+        lambda *args, **kwargs: {"ok": False, "error": "confirmation required"},
+    )
+
+    result = api.send_team_message(tid, "review this request", ["agent-0"])
+
+    assert result["ok"] is False
+    assert result["delivered_count"] == 0
+    assert result["errors"][0]["error"] == "confirmation required"
+    receipt = result["message"]
+    assert receipt["id"]
+    messages = api.get_team_chat(tid)["messages"]
+    assert [row["id"] for row in messages if row.get("content") == "review this request"] == [receipt["id"]]
+
+
 def test_member_output_persists_for_all_and_mention_wakes_peer(tmp_path) -> None:
     api = _TeamApi(tmp_path)
     tid = api.create_team({"name": "Audit", "objective": "obj"})["team"]["team_id"]

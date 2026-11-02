@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "聯絡信箱：",
-    "attributionDeveloper": "開發者：一銘",
     "product": "ArgusAI",
     "subtitle": "本地 · 可擴展 · 安全預設",
     "title": "ArgusAI 安全工作臺",

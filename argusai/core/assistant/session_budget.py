@@ -1138,6 +1138,27 @@ class SessionBudgetMixin:
             seen_ids.add(tid)
 
 
+    def _prune_rewound_cron_wakeups(self) -> None:
+        """Keep wake markers only when their following visible history survived."""
+        visible_count = sum(
+            1 for item in self.history
+            if item.role in {"user", "assistant"}
+            and not item.hidden
+            and not item.ui_hidden
+            and not (item.role == "user" and item.source in {"cron", "confirmation"})
+        )
+
+        def _keep(event: dict[str, Any]) -> bool:
+            if event.get("kind") != "cron_wakeup":
+                return True
+            payload = event.get("payload")
+            offset = payload.get("history_offset") if isinstance(payload, dict) else None
+            # An anchor at the new tail belongs to the removed response too;
+            # retaining it would reattach it when a fresh reply is appended.
+            return isinstance(offset, int) and not isinstance(offset, bool) and 0 <= offset < visible_count
+
+        self.events = [event for event in self.events if _keep(event)]
+
     def _rewind_for_regenerate(
         self,
         message: str,
@@ -1179,6 +1200,7 @@ class SessionBudgetMixin:
                     timestamp=original.timestamp,
                 ),
             ]
+            self._prune_rewound_cron_wakeups()
             self._pending = None
             return
 
@@ -1186,13 +1208,17 @@ class SessionBudgetMixin:
             for idx, item in enumerate(self.history):
                 if item.timestamp and item.timestamp >= before_ts and item.role == "assistant":
                     self.history = self.history[:idx]
+                    self._prune_rewound_cron_wakeups()
                     self._pending = None
                     return
 
         for idx in range(len(self.history) - 1, -1, -1):
             item = self.history[idx]
             if item.role == "user" and not item.hidden and item.content.strip() == message.strip():
+                truncated = idx + 1 < len(self.history)
                 self.history = self.history[:idx + 1]
+                if truncated:
+                    self._prune_rewound_cron_wakeups()
                 self._pending = None
                 return
 

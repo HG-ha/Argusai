@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "Contato: ",
-    "attributionDeveloper": "Desenvolvedor: Yiming",
     "product": "ArgusAI",
     "subtitle": "local · scriptável · seguro por padrão",
     "title": "ArgusAI Mesa de segurança",

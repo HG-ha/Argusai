@@ -29,6 +29,12 @@ log = logging.getLogger(__name__)
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _TERMINAL_STATES = {"completed", "failed", "closed"}
 _ACTIVE_STATES = {"queued", "running", "closing"}
+_SUCCESS_RESPONSE_STATUSES = {"done", "ok"}
+_PAUSED_RESPONSE_STATUSES = {
+    "pending_confirmation", "pending_user_decision",
+    "awaiting_confirmation", "awaiting_user_decision",
+    "paused_for_interjection", "paused_by_user", "stream_repetition", "cancelled",
+}
 # Outcomes the parent Agent could not already know about. ``closed`` is always
 # parent-initiated, so it is never news worth spending a parent round on.
 _PARENT_NOTICE_STATES = {"completed", "failed"}
@@ -51,6 +57,19 @@ _UI_NOTIFY: Callable[[str, dict[str, Any]], None] | None = None
 # member replies afterward. Defaults are no-ops for CLI/tests/headless hosts.
 _TEAM_ROOM_CONTEXT: Callable[[str, str], str] | None = None
 _TEAM_ROOM_OUTPUT: Callable[..., None] | None = None
+
+
+def _has_ready_continuation(record: dict[str, Any]) -> bool:
+    """Only explicit queued input may start another turn; honor pending decisions."""
+    pending = record.get("pending_inputs") or []
+    if not pending or record.get("pending_confirmation"):
+        return False
+    first = pending[0]
+    if isinstance(first, dict) and first.get("type") == "confirmation":
+        return True
+    return str(record.get("stopped_reason") or "") in (
+        _SUCCESS_RESPONSE_STATUSES | {"paused_for_interjection"}
+    )
 
 
 def set_ui_notify(callback: Callable[[str, dict[str, Any]], None] | None) -> None:
@@ -924,6 +943,37 @@ class AgentThreadManager:
         worker = self._external_worker if record.get("backend") == "acp" else self._worker
         runtime["future"] = _AGENT_EXECUTOR.submit(worker, agent_id, runtime)
 
+    def _retire_runtime_locked(self, agent_id: str, runtime: dict[str, Any]) -> None:
+        """Settle late stop requests before releasing a worker or starting its successor."""
+        if self._runtimes.get(agent_id) is not runtime:
+            return
+        self._runtimes.pop(agent_id, None)
+        record = self._records.get(agent_id)
+        if record is not None:
+            target = ""
+            message = ""
+            if runtime.get("close_requested"):
+                target, message = "closed", "Closed by parent"
+            elif runtime.get("pause_requested"):
+                target, message = "paused", "Paused by parent at a safe boundary"
+            elif self._shutdown:
+                target, message = "paused", "Application stopped; resume explicitly"
+                record["stopped_reason"] = "application_shutdown"
+            elif runtime["cancel_event"].is_set():
+                target, message = "closed", "Closed by parent"
+            if target:
+                record["completed_at"] = _now()
+                if record.get("status") != target:
+                    self._set_status_locked(
+                        record, target, message,
+                        event_type="agent_paused" if target == "paused" else "agent_closed",
+                    )
+                else:
+                    self._save_locked(record)
+            elif record.get("status") == "queued" and record.get("pending_inputs"):
+                self._start_locked(agent_id)
+        self._condition.notify_all()
+
     def _restore_child(
         self,
         record: dict[str, Any],
@@ -1082,7 +1132,8 @@ class AgentThreadManager:
         }
         if not decision["pending_id"] or decision["version"] < 1:
             return False
-        record.setdefault("pending_inputs", []).append(
+        record.setdefault("pending_inputs", []).insert(
+            0,
             {"type": "confirmation", "confirmation": decision}
         )
         record["pending_input_count"] = len(record["pending_inputs"])
@@ -1150,7 +1201,12 @@ class AgentThreadManager:
                         current = self._records[agent_id]
                         pending = current.setdefault("pending_inputs", [])
                         current["pending_input_count"] = len(pending)
-                        if runtime["cancel_event"].is_set() or self._shutdown:
+                        if (
+                            runtime["cancel_event"].is_set()
+                            or self._shutdown
+                            or runtime.get("pause_requested")
+                            or runtime.get("close_requested")
+                        ):
                             return
                         if not pending:
                             return
@@ -1231,7 +1287,6 @@ class AgentThreadManager:
                             on_checkpoint=_checkpoint,
                         )
                     pending_projection = child.pending_confirmation_projection()
-                    should_continue = False
                     published_record: dict[str, Any] | None = None
                     with self._lock:
                         live = self._records[agent_id]
@@ -1255,9 +1310,6 @@ class AgentThreadManager:
                             },
                         )
                         self._save_locked(live)
-                        if live.get("pending_inputs"):
-                            self._set_status_locked(live, "running", "Processing queued input")
-                            should_continue = True
                         published_record = self._projection(live)
                     publisher = _TEAM_ROOM_OUTPUT
                     # A lead "stop everyone" cancel must not still post the
@@ -1290,8 +1342,21 @@ class AgentThreadManager:
                                 log.debug("standing-team output publish failed", exc_info=True)
                         except Exception:
                             log.debug("standing-team output publish failed", exc_info=True)
-                    if runtime.get("pause_requested") or runtime.get("close_requested"):
-                        return
+                    # Publishing can synchronously queue a peer reply or a new
+                    # leader command. Read the queue again after that callback,
+                    # rather than trusting a pre-publication snapshot.
+                    with self._lock:
+                        live = self._records[agent_id]
+                        if (
+                            runtime.get("pause_requested")
+                            or runtime.get("close_requested")
+                            or runtime["cancel_event"].is_set()
+                            or self._shutdown
+                        ):
+                            return
+                        should_continue = _has_ready_continuation(live)
+                        if should_continue:
+                            self._set_status_locked(live, "running", "Processing queued input")
                     if should_continue:
                         continue
                     return
@@ -1325,21 +1390,24 @@ class AgentThreadManager:
                         "Application stopped; resume explicitly" if self._shutdown else "Closed by parent",
                         event_type="agent_paused" if self._shutdown else "agent_closed",
                     )
-                elif str(record.get("stopped_reason") or "") in {
-                    "pending_confirmation",
-                    "pending_user_decision",
-                    "awaiting_confirmation",
-                    "awaiting_user_decision",
-                    "paused_for_interjection",
-                }:
+                elif _has_ready_continuation(record):
+                    # Input may also arrive after the final queue check above.
+                    # Retire this worker first; its finally block starts exactly
+                    # one replacement for the accepted continuation.
+                    record["completed_at"] = None
+                    self._set_status_locked(record, "queued", "Queued for continuation", event_type="agent_resumed")
+                elif record.get("pending_confirmation") or str(record.get("stopped_reason") or "") in _PAUSED_RESPONSE_STATUSES:
                     self._set_status_locked(
                         record,
                         "paused",
                         "Child Agent requires explicit continuation",
                         event_type="agent_paused",
                     )
-                else:
+                elif str(record.get("stopped_reason") or "") in _SUCCESS_RESPONSE_STATUSES:
                     self._set_status_locked(record, "completed", "Child Agent completed", event_type="agent_completed")
+                else:
+                    reason = str(record.get("stopped_reason") or "unknown response status")
+                    self._set_status_locked(record, "failed", f"Child Agent stopped: {reason}", event_type="agent_failed")
         except asyncio.CancelledError:
             with self._lock:
                 record = self._records.get(agent_id)
@@ -1369,16 +1437,7 @@ class AgentThreadManager:
                 except Exception:
                     log.debug("child-Agent provider close failed", exc_info=True)
             with self._lock:
-                self._runtimes.pop(agent_id, None)
-                record = self._records.get(agent_id)
-                if (
-                    not self._shutdown
-                    and record is not None
-                    and record.get("status") == "queued"
-                    and record.get("pending_inputs")
-                ):
-                    self._start_locked(agent_id)
-                self._condition.notify_all()
+                self._retire_runtime_locked(agent_id, runtime)
 
     def _external_worker(self, agent_id: str, runtime: dict[str, Any]) -> None:
         token = ""
@@ -1515,7 +1574,13 @@ class AgentThreadManager:
                     with self._lock:
                         live = self._records[agent_id]
                         pending = live.setdefault("pending_inputs", [])
-                        if runtime["cancel_event"].is_set() or self._shutdown or not pending:
+                        if (
+                            runtime["cancel_event"].is_set()
+                            or self._shutdown
+                            or runtime.get("pause_requested")
+                            or runtime.get("close_requested")
+                            or not pending
+                        ):
                             return
                         prompt = str(pending.pop(0))
                         live["pending_input_count"] = len(pending)
@@ -1623,21 +1688,20 @@ class AgentThreadManager:
             with self._lock:
                 record = self._records[agent_id]
                 record["completed_at"] = _now()
-                if runtime.get("close_requested") or runtime["cancel_event"].is_set():
+                if runtime.get("close_requested"):
                     self._set_status_locked(
-                        record,
-                        "paused" if runtime.get("pause_requested") and not runtime.get("close_requested") else "closed",
-                        (
-                            "Paused by parent"
-                            if runtime.get("pause_requested") and not runtime.get("close_requested")
-                            else "Closed by parent"
-                        ),
-                        event_type=(
-                            "agent_paused"
-                            if runtime.get("pause_requested") and not runtime.get("close_requested")
-                            else "agent_closed"
-                        ),
+                        record, "closed", "Closed by parent", event_type="agent_closed",
                     )
+                elif runtime.get("pause_requested") or self._shutdown:
+                    self._set_status_locked(
+                        record, "paused", "Application stopped; resume explicitly" if self._shutdown else "Paused by parent",
+                        event_type="agent_paused",
+                    )
+                elif runtime["cancel_event"].is_set():
+                    self._set_status_locked(record, "closed", "Closed by parent", event_type="agent_closed")
+                elif record.get("pending_inputs"):
+                    record["completed_at"] = None
+                    self._set_status_locked(record, "queued", "Queued for continuation", event_type="agent_resumed")
                 else:
                     self._set_status_locked(
                         record,
@@ -1665,8 +1729,7 @@ class AgentThreadManager:
                 tool_broker.unregister(token)
             runtime["child"] = None
             with self._lock:
-                self._runtimes.pop(agent_id, None)
-                self._condition.notify_all()
+                self._retire_runtime_locked(agent_id, runtime)
 
     def send_input(
         self,
@@ -1747,7 +1810,10 @@ class AgentThreadManager:
                     return blocked
                 record["completed_at"] = None
                 self._set_status_locked(record, "queued", "Queued for continuation", event_type="agent_resumed")
-                self._start_locked(safe_id)
+                # A finished worker may still be closing its provider. Let its
+                # cleanup start the continuation so two workers cannot overlap.
+                if safe_id not in self._runtimes:
+                    self._start_locked(safe_id)
             else:
                 self._save_locked(record)
             return {"ok": True, "agent": self._projection(record)}
@@ -1855,7 +1921,8 @@ class AgentThreadManager:
                 ]
                 self.parent._auto_approve_permissions.update(permissions)
 
-            record.setdefault("pending_inputs", []).append(
+            record.setdefault("pending_inputs", []).insert(
+                0,
                 {"type": "confirmation", "confirmation": decision}
             )
             record["pending_input_count"] = len(record["pending_inputs"])

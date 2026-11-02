@@ -7,6 +7,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from argusai.core.assistant import AssistantSession, ChatMessage
 from argusai.gui.assistant_sessions import AssistantSessionsMixin
 
@@ -214,6 +216,12 @@ def test_editable_context_roundtrip_rewrites_the_conversation(tmp_path) -> None:
         ChatMessage(role="tool", content="old tool output", timestamp=3.0),
     ])
     session.memory_summary = "summary from old history"
+    audit_event = {"id": "audit", "kind": "confirmation_decision", "payload": {"verdict": "allow"}}
+    session.events = [
+        {"id": "old-wake", "kind": "cron_wakeup", "payload": {"history_offset": 0}},
+        audit_event,
+        {"id": "tail-wake", "kind": "cron_wakeup", "payload": {"history_offset": 2}},
+    ]
     path = api._session_path("sess-context")
     api._save_session(path, session, "context")
     api._assistant_sessions["sess-context"] = session
@@ -239,9 +247,31 @@ def test_editable_context_roundtrip_rewrites_the_conversation(tmp_path) -> None:
         ("assistant", "new answer"),
     ]
     assert "old history" not in session.memory_summary
+    assert session.events == [audit_event]
+    assert json.loads(path.read_text(encoding="utf-8"))["events"] == [audit_event]
     api._assistant_sessions.clear()
     reloaded = api.get_assistant_context("sess-context")
     assert reloaded["messages"] == updated["messages"]
+
+
+def test_rejected_context_edit_preserves_wake_and_audit_events(tmp_path) -> None:
+    api = _Api(tmp_path)
+    session = AssistantSession()
+    session.history.append(ChatMessage(role="user", content="original", timestamp=1.0))
+    events = [
+        {"kind": "cron_wakeup", "payload": {"history_offset": 1}},
+        {"kind": "confirmation_decision", "payload": {"verdict": "allow"}},
+    ]
+    session.events = list(events)
+    api._save_session(api._session_path("pending-context"), session, "context")
+    api._assistant_sessions["pending-context"] = session
+    session._pending = {"tool": "requires confirmation"}
+
+    result = api.save_assistant_context("pending-context", [{"role": "user", "content": "edited"}])
+
+    assert result["ok"] is False
+    assert session.events == events
+    assert session.history[0].content == "original"
 
 
 def test_import_and_export_session_context(tmp_path) -> None:
@@ -312,6 +342,132 @@ def test_save_session_keeps_the_name_when_none_is_supplied(tmp_path) -> None:
     api._save_session(path, session, "")
 
     assert api.get_assistant_session("sess-a")["name"] == "扫 example.com"
+
+
+@pytest.mark.parametrize("second_operation", ["snapshot", "metadata"])
+def test_concurrent_session_saves_serialize_snapshot_and_metadata(
+    tmp_path, monkeypatch, second_operation,
+) -> None:
+    api = _Api(tmp_path)
+    other_api = _Api(tmp_path)
+    session = AssistantSession()
+    session.history.append(ChatMessage(role="user", content="original", timestamp=1.0))
+    path = api._session_path("concurrent")
+    api._save_session(path, session, "original title")
+    assert api.update_assistant_session("concurrent", {"note": "keep note"})["ok"] is True
+    session.history.append(ChatMessage(role="assistant", content="new reply", timestamp=2.0))
+    session.events.append({"kind": "cron_wakeup", "payload": {"history_offset": 1}})
+    first_snapshot = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_read = threading.Event()
+    errors = []
+    updates = []
+    real_snapshot = session.to_dict
+    real_read_text = Path.read_text
+
+    def snapshot():
+        if threading.current_thread().name == "session-save-first":
+            first_snapshot.set()
+            assert release_first.wait(timeout=5)
+        return real_snapshot()
+
+    def read_text(target, *args, **kwargs):
+        if target == path and threading.current_thread().name == "session-save-second":
+            second_read.set()
+        return real_read_text(target, *args, **kwargs)
+
+    def first_save():
+        try:
+            api._save_session(path, session, "renamed title")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def second_save():
+        second_started.set()
+        try:
+            if second_operation == "snapshot":
+                other_api._save_session(path, session, "")
+            else:
+                updates.append(other_api.update_assistant_session(
+                    "concurrent", {"name": "metadata title", "note": "metadata note"},
+                ))
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(session, "to_dict", snapshot)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    first = threading.Thread(target=first_save, name="session-save-first")
+    second = threading.Thread(target=second_save, name="session-save-second")
+    first.start()
+    try:
+        assert first_snapshot.wait(timeout=2)
+        second.start()
+        assert second_started.wait(timeout=2)
+        # Even the second writer's metadata read must wait for the first
+        # snapshot to publish; otherwise a title or transcript can be lost.
+        assert not second_read.wait(timeout=0.05)
+        assert json.loads(path.read_text(encoding="utf-8"))["name"] == "original title"
+    finally:
+        release_first.set()
+        first.join(timeout=2)
+        if second.ident is not None:
+            second.join(timeout=2)
+    assert not first.is_alive() and not second.is_alive()
+    assert not errors
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [message["content"] for message in saved["history"]] == ["original", "new reply"]
+    assert saved["events"] == session.events
+    if second_operation == "snapshot":
+        assert saved["name"] == "renamed title"
+        assert saved["note"] == "keep note"
+    else:
+        assert updates[0]["ok"] is True
+        assert saved["name"] == "metadata title"
+        assert saved["note"] == "metadata note"
+
+
+@pytest.mark.parametrize("operation", ["snapshot", "metadata"])
+def test_failed_session_atomic_replace_preserves_previous_file_and_cleans_temp(
+    tmp_path, monkeypatch, operation,
+) -> None:
+    api = _Api(tmp_path)
+    session = AssistantSession()
+    session.history.append(ChatMessage(role="user", content="original", timestamp=1.0))
+    path = api._session_path("atomic-failure")
+    api._save_session(path, session, "keep title")
+    assert api.update_assistant_session("atomic-failure", {"note": "keep note"})["ok"] is True
+    previous = path.read_bytes()
+    session.history.append(ChatMessage(role="assistant", content="new reply", timestamp=2.0))
+    attempts = []
+
+    def fail_replace(source, destination):
+        source_path = Path(source)
+        assert source_path.parent == path.parent
+        assert Path(destination) == path
+        assert path.read_bytes() == previous
+        assert isinstance(json.loads(source_path.read_text(encoding="utf-8")), dict)
+        attempts.append(source_path)
+        raise PermissionError("mock atomic replace failure")
+
+    with monkeypatch.context() as failing:
+        failing.setattr("argusai.core.assistant.run_jobs.os.replace", fail_replace)
+        if operation == "snapshot":
+            with pytest.raises(PermissionError, match="mock atomic replace failure"):
+                api._save_session(path, session, "")
+        else:
+            result = api.update_assistant_session("atomic-failure", {"name": "discard title", "note": "discard note"})
+            assert result["ok"] is False
+    assert attempts
+    assert path.read_bytes() == previous
+    assert not list(path.parent.glob(f".{path.name}.*.tmp"))
+    # Failure must release the shared lock and leave metadata available to
+    # the next successful checkpoint.
+    api._save_session(path, session, "")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["name"] == "keep title"
+    assert saved["note"] == "keep note"
+    assert saved["history"][-1]["content"] == "new reply"
 
 
 def test_session_detail_exposes_active_external_stream(tmp_path) -> None:

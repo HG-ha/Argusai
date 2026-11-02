@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "Контакт: ",
-    "attributionDeveloper": "Разработчик: Yiming",
     "product": "ArgusAI",
     "subtitle": "локально · скриптуемо · безопасно по умолчанию",
     "title": "ArgusAI — рабочее место безопасности",

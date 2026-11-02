@@ -29,6 +29,7 @@ import {
   stripSelectionReferenceFromContent,
 } from '../assistantProtocol.js'
 import argusIcon from '../../../../assets/brand/argusai-icon-Transparency.png'
+import { mergeScheduledWakeups } from './assistant/panelUtils.js'
 
 const confirmDialog = useConfirm()
 const mediaPreview = useMediaPreview()
@@ -3355,6 +3356,7 @@ function beginAssistantStreamSegment(tab, assistantIndex, roundIndex) {
 
 function messageGroupsWithPrevious(prevMsg, msg) {
   if (!prevMsg || !msg) return false
+  if (prevMsg.runtimeNotice || msg.runtimeNotice) return false
   if (prevMsg.role !== msg.role) return false
   // Agent-loop steps + the turn's final answer form ONE visual block sharing a
   // single avatar column, so a long autonomous run reads like a Cursor/Claude
@@ -3663,6 +3665,7 @@ function visibleBlocks(message, absoluteIndex = -1) {
 
 function hasVisibleMessagePayload(message, absoluteIndex = -1) {
   if (message?.hidden) return false
+  if (message?.runtimeNotice) return true
   return Boolean(
     visibleMessageText(message)
     || messageVoice(message)
@@ -4465,7 +4468,28 @@ function isUiHiddenMessage(m) {
   return source === 'cron' || source === 'confirmation'
 }
 
-function normalizeHistory(items) {
+function scheduledWakeupName(message) {
+  return message?.runtimeNotice?.jobName || message?.runtimeNotice?.jobId || t('assistant.scheduledWakeupUnnamed')
+}
+
+function scheduledWakeupTrigger(message) {
+  const kind = message?.runtimeNotice?.triggerKind || ''
+  const key = {
+    interval: 'assistant.scheduledWakeupInterval',
+    cron: 'assistant.scheduledWakeupCalendar',
+    webhook: 'assistant.scheduledWakeupWebhook',
+    file_change: 'assistant.scheduledWakeupFileChange',
+  }[kind] || 'assistant.scheduledWakeupTrigger'
+  return t(key)
+}
+
+function scheduledWakeupTime(message, full = false) {
+  if (!Number.isFinite(message?.ts) || message.ts <= 0) return ''
+  const date = new Date(message.ts)
+  return full ? date.toLocaleString() : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function normalizeHistory(items, events = []) {
   const normalized = (items || []).map(m => {
     let text = m.content || m.text || ''
     // AI UI Protocol v2 §5.1: SelectionReference is structured metadata.
@@ -4534,7 +4558,7 @@ function normalizeHistory(items) {
     }
     if (filtered.length !== msg.blocks.length) msg.blocks = filtered
   }
-  const merged = mergeToolOnlyAssistantMessages(normalized)
+  const merged = mergeToolOnlyAssistantMessages(mergeScheduledWakeups(normalized, events))
   let lastVisibleRole = null
   for (const msg of merged) {
     if (msg.hidden) continue
@@ -4901,6 +4925,7 @@ async function sendQueuedNow(index) {
 function previousUserMessage(index) {
   for (let i = index - 1; i >= 0; i--) {
     const m = messages.value[i]
+    if (m?.runtimeNotice) return null
     if (m?.role === 'user' && (m.text || '').trim()) return m
   }
   return null
@@ -6067,7 +6092,7 @@ async function loadHistory() {
     const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (!r) throw new Error(t('assistant.historyLoadTimeout'))
     if (r.ok) {
-      tab.messages = normalizeHistory(r.history)
+      tab.messages = normalizeHistory(r.history, r.events)
       hydrateHistoryAttachments(tab.messages, tab.sessionId)
       restorePendingProjection(r, tab)
       applySessionTokenUsage(r, tab)
@@ -6436,7 +6461,7 @@ async function hydrateIfNeeded(tab) {
   try {
     const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (r && r.ok) {
-      tab.messages = normalizeHistory(r.history)
+      tab.messages = normalizeHistory(r.history, r.events)
       hydrateHistoryAttachments(tab.messages, tab.sessionId)
       restorePendingProjection(r, tab)
       applySessionTokenUsage(r, tab)
@@ -6475,7 +6500,7 @@ async function onAssistantSessionUpdatedEvent(ev) {
   try {
     const r = await withTimeout(api.getAssistantSession(sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
     if (!r?.ok) return
-    tab.messages = normalizeHistory(r.history)
+    tab.messages = normalizeHistory(r.history, r.events)
     hydrateHistoryAttachments(tab.messages, tab.sessionId)
     restorePendingProjection(r, tab)
     applySessionTokenUsage(r, tab)
@@ -7049,11 +7074,23 @@ watch(input, (newVal) => {
           v-memo="messageRenderMemo(m, renderWindowStart + i)"
           class="msg"
           :class="[m.role, {
+            'runtime-notice': Boolean(m.runtimeNotice),
             grouped: !messageStartsVisualGroup(m, renderWindowStart + i),
             hidden: !hasVisibleMessagePayload(m, renderWindowStart + i),
           }]"
           @contextmenu="openMessageContextMenu($event, m)"
         >
+          <div v-if="m.runtimeNotice" class="runtime-wakeup" role="note" :aria-label="t('assistant.scheduledWakeup')">
+            <svg class="runtime-wakeup-icon" viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+              <circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M10 6v4l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+            <span class="runtime-wakeup-label">{{ t('assistant.scheduledWakeup') }}</span>
+            <strong class="runtime-wakeup-name" :title="m.runtimeNotice.jobId">{{ scheduledWakeupName(m) }}</strong>
+            <span class="runtime-wakeup-trigger">{{ scheduledWakeupTrigger(m) }}</span>
+            <time v-if="scheduledWakeupTime(m)" :title="scheduledWakeupTime(m, true)">{{ scheduledWakeupTime(m) }}</time>
+          </div>
+          <template v-else>
           <div
             v-if="messageStartsVisualGroup(m, renderWindowStart + i) && m.role === 'assistant'"
             class="msg-avatar"
@@ -7267,7 +7304,7 @@ watch(input, (newVal) => {
               v-if="m.role === 'assistant' && (renderWindowStart + i) > 0 && !isToolOnlyAssistantMessage(m, renderWindowStart + i) && !isAgentTimelineStep(m, renderWindowStart + i)"
               class="message-actions"
             >
-              <button class="ghost tiny" :disabled="sending || confirmingAction" @click="regenerateMessage(renderWindowStart + i)">
+              <button v-if="previousUserMessage(renderWindowStart + i)" class="ghost tiny" :disabled="sending || confirmingAction" @click="regenerateMessage(renderWindowStart + i)">
                 {{ t('assistant.regenerate') }}
               </button>
               <button
@@ -7289,6 +7326,7 @@ watch(input, (newVal) => {
               </button>
             </div>
           </div>
+          </template>
         </div>
 
         <!-- Loading -->
@@ -10664,6 +10702,39 @@ button.composer-control:focus-visible {
 }
 .msg.hidden {
   display: none;
+}
+.msg.runtime-notice {
+  justify-content: center;
+  margin: 8px 0;
+}
+.runtime-wakeup {
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.runtime-wakeup-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.runtime-wakeup-name {
+  min-width: 0;
+  color: var(--fg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.runtime-wakeup-trigger,
+.runtime-wakeup time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .msg.grouped {
   margin-top: -8px;

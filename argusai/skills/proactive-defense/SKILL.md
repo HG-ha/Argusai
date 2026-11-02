@@ -112,7 +112,7 @@ Only after the user wants recurring checks (or accepts that part of the proposal
 3. Thin prompt, e.g.「按 KB「kb-xxxx」执行；对比 cron_runs；无变化安静结束（summary: no change）」.
 4. Freeze assets / `ssh_target` in `context_json`. Frequency matches user expectation (e.g. 3600 / 86400).
 5. Teach ticks via `assistant-cron` skill; do not pack the full SOP into every prompt.
-6. Finite patrols use Cron's native `max_runs`; never ask a scheduled turn to disable itself with `cron_set_enabled`.
+6. Count-bounded patrols use native `max_runs`. For an agreed outcome-based stop (e.g. stop after recovery is verified), write that condition into the playbook; the scheduled Agent calls `cron_set_enabled(enabled=false)` on its own job when it is met. Do not pause an ongoing patrol merely because a tick found no change.
 
 ## Phase 4 — Report
 

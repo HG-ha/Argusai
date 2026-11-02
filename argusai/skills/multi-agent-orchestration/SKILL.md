@@ -127,6 +127,46 @@ ends, and members share a group room.
 
 Members are depth-1. They can talk in the room. They cannot recruit further agents. Only you or the user add members. To give an order, `team_message_send` or `team_member_send_input` — do not `spawn_agent` a duplicate.
 
+### Lead the objective through completion
+
+`completed` means a member's current turn ended; `idle` means no member is
+currently running. Neither proves the team objective or even that member's
+whole assignment is complete. A progress paragraph, a promise to investigate,
+or a request for a baseline is not a finished deliverable.
+
+1. Keep the overall plan in your Todo/checkpoint. Give each assignment a concrete
+   completion condition and expected evidence. For broad audits, track coverage,
+   findings, reproduction, review, and unresolved gaps; a quiet team does not
+   establish that every vulnerability has been found.
+2. Use `team_get` to inspect status, then `team_chat_get` or `team_member_get`
+   when the compact summaries do not establish the outcome. Reconcile each
+   result against the plan and cited artifacts; distinguish finished work,
+   unfinished work, and a real dependency or authorization block.
+3. If actionable work remains, send a specific next assignment with
+   `team_message_send` / `team_member_send_input` to the relevant existing
+   members. Include the missing input or evidence reference and acceptance
+   condition. Do not resume everyone with an empty "continue" instruction.
+4. While members work, advance independent lead tasks. For bounded observation,
+   inspect team status with sensible `wait_for_duration` backoff and a deadline.
+   `wait_for_agents` is for children of this chat, not a different standing
+   team's member IDs. A timeout is not completion; do not busy-poll or loop
+   empty resumes when the only remaining action needs user input.
+5. Standing-team completions appear in the Team room; they do not automatically
+   wake this operator conversation. If the user wants cross-turn supervision,
+   read `assistant-cron` and arrange `destination=session` for this conversation.
+   Persist the exact team ID, next actions, baseline, notification policy, and
+   actual stop condition. Each tick must inspect results and advance unfinished
+   assignments, rather than merely report that everyone stopped.
+6. An arbitrary `max_runs` or wall-clock estimate does not satisfy "until done".
+   Use a count limit only when it matches the agreed scope; if reached with work
+   remaining, report that gap. Disable outcome-based supervision when the
+   agreed acceptance conditions are met. Missing information or a mandatory
+   confirmation remains a block; neither team messages nor schedules bypass it.
+
+Before the final answer, account for every assigned branch with its evidence,
+remaining limitations, and any required user action. Do not declare the whole
+mission complete solely because all member statuses say `completed`.
+
 ## One-off squad (`spawn_team` / `spawn_agent`)
 
 Use these only to parallelize the current task. They are not the Team sidebar.

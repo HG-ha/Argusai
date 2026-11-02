@@ -133,8 +133,6 @@ export default {
     }
   },
   "app": {
-    "attributionContact": "連絡先: ",
-    "attributionDeveloper": "開発者: Yiming",
     "product": "ArgusAI",
     "subtitle": "ローカル · スクリプト可能 · 安全デフォルト",
     "title": "ArgusAI セキュリティワークベンチ",

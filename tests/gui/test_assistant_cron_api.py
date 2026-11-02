@@ -7,10 +7,13 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from argusai.core.assistant.messages import ChatMessage
 from argusai.core.assistant.session import AssistantSession
 from argusai.core.assistant.tools import ToolRegistry
 from argusai.gui.assistant_cron import AssistantCronMixin
+from argusai.gui.assistant_sessions import AssistantSessionsMixin
 
 
 class _SettingsMgr:
@@ -168,6 +171,8 @@ def test_cron_fire_force_allows_waiting_confirmation(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["status"] == "completed"
     assert "done after allow" in result["summary"]
+    session = api._assistant_sessions[result["session_id"]]
+    assert sum(event["kind"] == "cron_wakeup" for event in session.events) == 1
 
 
 def test_cron_fire_injects_explicit_context_snapshot(tmp_path: Path) -> None:
@@ -380,6 +385,7 @@ def test_cron_without_high_risk_grant_fails_fast_not_pending(tmp_path: Path) -> 
     assert result["status"] == "blocked"
     assert "run_python_snippet" in result["error"]
     assert target._pending is None
+    assert not any(event["kind"] == "cron_wakeup" for event in target.events)
 
 
 def test_gui_grant_persists_job_scoped_high_risk_receipt(tmp_path: Path) -> None:
@@ -558,3 +564,181 @@ def test_dedicated_session_is_created_once_and_reused(tmp_path: Path) -> None:
     second = api._fire_assistant_cron_job(refreshed)
     assert second["session_id"] == first["session_id"]
     assert list(api._assistant_sessions) == [first["session_id"]]
+    wakes = [
+        event for event in api._assistant_sessions[first["session_id"]].events
+        if event["kind"] == "cron_wakeup"
+    ]
+    assert len(wakes) == 2
+    assert wakes[0]["id"] != wakes[1]["id"]
+
+
+@pytest.mark.parametrize("trigger_kind", ["interval", "cron", "webhook", "file_change"])
+@pytest.mark.parametrize("destination", ["session", "new_session", "dedicated_session"])
+def test_accepted_cron_wakeup_persists_typed_timeline_metadata(
+    tmp_path: Path,
+    trigger_kind: str,
+    destination: str,
+) -> None:
+    api = _Api(tmp_path)
+    job = {
+        "id": "cron-wake",
+        "name": "Scheduled review",
+        "prompt": "Continue the authorized review",
+        "destination": destination,
+        "session_id": "fixed-chat",
+        "schedule": {"kind": trigger_kind},
+        "notify": {"report_to_origin": False},
+    }
+    if trigger_kind in {"webhook", "file_change"}:
+        job["_trigger_event"] = {
+            "event_id": "trigger-123",
+            "source": trigger_kind,
+            "payload": {"private_input": "not presentation metadata"},
+        }
+
+    result = api._fire_assistant_cron_job(job)
+
+    assert result["status"] == "completed"
+    session = api._assistant_sessions[result["session_id"]]
+    events = [event for event in session.events if event["kind"] == "cron_wakeup"]
+    assert len(events) == 1
+    event = events[0]
+    assert event["source"] == "cron"
+    assert event["render_policy"] == "timeline"
+    assert event["context_policy"] == "exclude"
+    assert event["timestamp"] > 0
+    assert event["payload"] == {
+        "job_id": "cron-wake",
+        "job_name": "Scheduled review",
+        "trigger_kind": trigger_kind,
+        "destination": destination,
+        "history_offset": 0,
+        "run_id": "stream-cron",
+        "assistant_run_job_id": "durable-cron",
+        **({"trigger_event_id": "trigger-123"} if "_trigger_event" in job else {}),
+    }
+    # Presentation metadata adds neither a second scheduled input nor a fake
+    # human turn. The real runtime still owns writing the hidden cron prompt.
+    assert session.history == []
+    assert api.last_stream_params["message"] == job["prompt"]
+    assert api.last_stream_params["message_source"] == "cron"
+    assert api.last_stream_params["message_source_ref"] == "cron-wake"
+    assert api.last_stream_params["hide_user_message"] is True
+    stored = json.loads(api._session_path(result["session_id"]).read_text(encoding="utf-8"))
+    assert event in stored["events"]
+    assert "private_input" not in json.dumps(event)
+
+
+def test_cron_wakeup_survives_reload_and_projects_before_fast_reply(tmp_path: Path) -> None:
+    class _ReadApi(_Api, AssistantSessionsMixin):
+        pass
+
+    api = _ReadApi(tmp_path)
+    session = api._ensure_session("fixed-chat")
+    session.history = [
+        ChatMessage(role="user", content="Review this target", timestamp=1),
+        ChatMessage(role="assistant", content="Starting the review", timestamp=2),
+        ChatMessage(role="tool", content="previous tool evidence", timestamp=3),
+        ChatMessage(role="user", content="old scheduled input", source="cron", ui_hidden=True, timestamp=4),
+    ]
+    session._prompt_system_catalog = "stable cached system catalogue"
+    original_start = api._start_assistant_stream
+
+    def _fast_start(params: dict) -> dict:
+        # Simulate the actual runtime committing both its one hidden input and
+        # a reply before the stream-start call returns to the scheduler.
+        import time
+
+        session.history.extend([
+            ChatMessage(
+                role="user", content=params["message"], ui_hidden=True,
+                source="cron", source_ref="cron-fast", timestamp=time.time(),
+            ),
+            ChatMessage(role="assistant", content="New result", timestamp=time.time()),
+        ])
+        return original_start(params)
+
+    api._start_assistant_stream = _fast_start
+    result = api._fire_assistant_cron_job({
+        "id": "cron-fast", "name": "Fast review", "prompt": "Check now",
+        "destination": "session", "session_id": "fixed-chat",
+        "schedule": {"kind": "interval"},
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "completed"
+    stored = json.loads(api._session_path("fixed-chat").read_text(encoding="utf-8"))
+    restored = AssistantSession.from_dict(stored, registry=session.registry)
+    api._assistant_sessions["fixed-chat"] = restored
+    projection = api.get_assistant_session("fixed-chat")
+
+    assert projection["ok"] is True
+    wake = next(event for event in projection["events"] if event["kind"] == "cron_wakeup")
+    assert wake["payload"]["history_offset"] == 2
+    assert wake["timestamp"] <= projection["history"][-1]["timestamp"]
+    assert [message["content"] for message in projection["history"]] == [
+        "Review this target", "Starting the review", "New result",
+    ]
+    assert sum(message["content"] == "Check now" for message in stored["history"]) == 1
+    assert restored._prompt_system_catalog == "stable cached system catalogue"
+    assert not any(message.get("source") == "cron_wakeup" for message in stored["history"])
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_rejected_stream_start_does_not_create_a_wakeup(tmp_path: Path, raises: bool) -> None:
+    api = _Api(tmp_path)
+
+    def _reject(_params: dict) -> dict:
+        if raises:
+            raise RuntimeError("start failed")
+        return {"ok": False, "error": "assistant session is already running"}
+
+    api._start_assistant_stream = _reject
+    result = api._fire_assistant_cron_job({
+        "id": "cron-rejected", "name": "Rejected", "prompt": "run",
+        "destination": "session", "session_id": "fixed-chat",
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "failed"
+    assert not any(
+        event["kind"] == "cron_wakeup"
+        for event in api._assistant_sessions["fixed-chat"].events
+    )
+
+
+def test_accepted_wakeup_is_retained_when_the_run_fails(tmp_path: Path) -> None:
+    api = _Api(tmp_path)
+    api.next_result = {"ok": False, "status": "failed", "error": "endpoint unavailable"}
+    result = api._fire_assistant_cron_job({
+        "id": "cron-run-failed", "name": "Failed run", "prompt": "run",
+        "destination": "session", "session_id": "fixed-chat",
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "failed"
+    stored = json.loads(api._session_path("fixed-chat").read_text(encoding="utf-8"))
+    assert sum(event["kind"] == "cron_wakeup" for event in stored["events"]) == 1
+
+
+def test_live_refresh_is_sent_after_wakeup_is_persisted(tmp_path: Path) -> None:
+    api = _Api(tmp_path)
+    refreshes: list[str] = []
+
+    class _Window:
+        def evaluate_js(self, script: str) -> None:
+            stored = json.loads(api._session_path("fixed-chat").read_text(encoding="utf-8"))
+            assert any(event["kind"] == "cron_wakeup" for event in stored["events"])
+            refreshes.append(script)
+
+    api._window = _Window()
+    result = api._fire_assistant_cron_job({
+        "id": "cron-live-wake", "name": "Live wake", "prompt": "run",
+        "destination": "session", "session_id": "fixed-chat",
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "completed"
+    assert len(refreshes) == 1
+    assert "argusai:assistant-session-updated" in refreshes[0]
+    assert "cron_stream_started" in refreshes[0]
