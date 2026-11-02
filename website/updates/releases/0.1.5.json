@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.5",
+  "published_at": "2026-11-02T07:13:54Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.5",
+  "notes": "# ArgusAI v0.1.5\n\n- 修复小队消息发送后的输入框残留，调整聊天时间与成员状态显示。\n- 修复成员收尾时新消息未续接、暂停与关闭状态异常及错误误报完成。\n- 完善 Agent 等待、定时任务与小队持续协作的使用指导。\n- 新增会话唤醒来源提示，显示任务名称、触发方式与时间。\n- 移除侧栏开发者与邮箱信息，将软件更新移至设置。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.5/ArgusAI-0.1.5-win-x64-setup.exe",
+      "sha256": "788cef6489f99d2ae8fd5d2352ab6f559c3ce89a6791368eb4e331d1634c6be8",
+      "size": 69972596
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.5/ArgusAI-0.1.5-win-arm64-setup.exe",
+      "sha256": "b4b16fc03d291ab6d52da80e9e7ae971c6b3f28ff4b66426b0556e0fac671422",
+      "size": 58894559
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.5/ArgusAI-0.1.5-linux-x64.tar.gz",
+      "sha256": "09172332d8145f90859c004427a8d2ef8f89469e8acf4164308ab450002cfcfa",
+      "size": 111658001
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.5/ArgusAI-0.1.5-linux-arm64.tar.gz",
+      "sha256": "922862751cec74b767a6ddfa71b42d5e379133652e8e5220898bebcc5ca9d7d1",
+      "size": 103133749
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.5/ArgusAI-0.1.5-macos-arm64.dmg",
+      "sha256": "e5cc4e58250b8b78d8d7ad506d1e6a6d30676598586ce7efd1c13e822d78c6c2",
+      "size": 100428129
+    }
+  }
+}
