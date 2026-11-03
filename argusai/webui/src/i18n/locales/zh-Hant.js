@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "思維導圖",
     "mindmapZoomIn": "放大",
     "mindmapZoomOut": "縮小",
-    "modelHintNative": "按端點分組列出已啟用的模型。選擇後會把該端點提到路由最前，並切到這個模型；該設定全域生效，不只影響目前會話。",
+    "modelHintNative": "模型依已啟用的 AI 端點分組。選擇只儲存於目前會話，不會變更其他會話或全域預設端點。",
     "modelNoneNative": "沒有已啟用的 AI 端點。請先到設定裡新增。",
     "moreItems": "{names} 等 {count} 項",
     "nativeRuntime": "ArgusAI 內建 Agent",

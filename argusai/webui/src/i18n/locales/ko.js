@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "마인드맵",
     "mindmapZoomIn": "확대",
     "mindmapZoomOut": "축소",
-    "modelHintNative": "모델은 사용 중인 AI 엔드포인트별로 그룹화됩니다. 하나를 고르면 해당 엔드포인트가 라우팅 체인의 맨 앞으로 오고 그 모델로 전환됩니다. 이 대화뿐 아니라 전역에 적용됩니다.",
+    "modelHintNative": "모델은 활성화된 AI 엔드포인트별로 표시됩니다. 선택은 현재 대화에만 저장되며 다른 대화나 전역 기본 엔드포인트는 변경되지 않습니다.",
     "modelNoneNative": "사용 중인 AI 엔드포인트가 없습니다. 먼저 설정에서 추가하세요.",
     "moreItems": "{names} 및 {count}개 항목",
     "nativeRuntime": "내장 ArgusAI Agent",

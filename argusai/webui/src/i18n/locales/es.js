@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "Mapa mental",
     "mindmapZoomIn": "Acercar",
     "mindmapZoomOut": "Alejar",
-    "modelHintNative": "Los modelos se agrupan por endpoint de IA activo. Al elegir uno, ese endpoint pasa al frente de la cadena de enrutamiento y cambia a ese modelo. Aplica de forma global, no solo a esta conversación.",
+    "modelHintNative": "Los modelos se agrupan por endpoint de IA habilitado. La selección se guarda solo para esta conversación; las demás conversaciones y el endpoint predeterminado global no cambian.",
     "modelNoneNative": "No hay ningún endpoint de IA activo. Agrega uno primero en Configuración.",
     "moreItems": "{names} y {count} elementos",
     "nativeRuntime": "Agente integrado de ArgusAI",

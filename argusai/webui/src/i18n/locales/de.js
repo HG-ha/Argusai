@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "Mindmap",
     "mindmapZoomIn": "Vergrößern",
     "mindmapZoomOut": "Verkleinern",
-    "modelHintNative": "Modelle sind nach aktiviertem KI-Endpunkt gruppiert. Eine Wahl setzt diesen Endpunkt an den Anfang der Routing-Kette und wechselt auf dieses Modell. Das gilt global, nicht nur für diese Unterhaltung.",
+    "modelHintNative": "Die Modelle sind nach aktivierten KI-Endpunkten gruppiert. Die Auswahl wird nur für diese Unterhaltung gespeichert; andere Unterhaltungen und der globale Standard-Endpunkt bleiben unverändert.",
     "modelNoneNative": "Kein KI-Endpunkt aktiviert. Zuerst einen in den Einstellungen anlegen.",
     "moreItems": "{names} und {count} Einträge",
     "nativeRuntime": "Integrierter ArgusAI-Agent",

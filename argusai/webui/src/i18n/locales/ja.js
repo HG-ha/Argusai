@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "マインドマップ",
     "mindmapZoomIn": "拡大",
     "mindmapZoomOut": "縮小",
-    "modelHintNative": "モデルは有効な AI エンドポイントごとにグループ化されます。選ぶとそのエンドポイントがルーティング先頭に移り、そのモデルに切り替わります。この会話だけでなく全体に適用されます。",
+    "modelHintNative": "モデルは有効な AI エンドポイントごとに表示されます。選択はこの会話にのみ保存され、ほかの会話やグローバルの既定エンドポイントは変更されません。",
     "modelNoneNative": "有効な AI エンドポイントがありません。先に設定で追加してください。",
     "moreItems": "{names} とほか {count} 件",
     "nativeRuntime": "内蔵 ArgusAI Agent",

@@ -340,7 +340,7 @@ export default {
     "mindmapTitle": "Carte mentale",
     "mindmapZoomIn": "Zoom avant",
     "mindmapZoomOut": "Zoom arrière",
-    "modelHintNative": "Les modèles sont groupés par endpoint IA activé. En choisir un place cet endpoint en tête de la chaîne de routage et bascule vers ce modèle. Cela s’applique globalement, pas seulement à cette conversation.",
+    "modelHintNative": "Les modèles sont groupés par point de terminaison IA activé. Le choix est enregistré uniquement pour cette conversation, sans modifier les autres conversations ni le point de terminaison par défaut global.",
     "modelNoneNative": "Aucun endpoint IA n’est activé. Ajoutez-en un d’abord dans Paramètres.",
     "moreItems": "{names} et {count} éléments",
     "nativeRuntime": "Agent ArgusAI intégré",
