@@ -449,6 +449,75 @@ def test_external_agent_spawn_persists_explicit_acp_backend(tmp_path: Path, monk
     assert spawned["agent"]["status"] == "queued"
 
 
+def test_external_child_inherits_host_guidance_and_preserves_bootstrap_on_resume(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    from argusai.core.agent_runtimes.acp_turn import ACPTurnResult
+    from argusai.core.agent_runtimes import normalize_session_runtime_binding
+    from argusai.core.workspace.user_profile import UserHabitsProfile
+
+    parent = _parent(tmp_path)
+    settings = parent.registry.api.settings_mgr.get()
+    settings.data_root = str(tmp_path / "data")
+    settings.user_habits = UserHabitsProfile(speaking_style="Concise Chinese")
+    settings.agent_runtimes = [{
+        "id": "fake-acp", "name": "Fake ACP", "backend": "acp",
+        "enabled": True, "command": "fake-acp",
+    }]
+    parent.runtime_binding = normalize_session_runtime_binding({
+        "runtime_id": "fake-acp", "acp_config": {"model": "chosen-by-parent"},
+    })
+    delegated_tools = []
+    def register(_sid, child, *_args, **_kwargs):
+        delegated_tools.append(set(child.registry._tools))
+        return "mock-token"
+    parent.registry.api._assistant_tool_broker = SimpleNamespace(
+        register_session=register, mcp_server=lambda *_args: {},
+        permission_handler=lambda *_args: None, unregister=lambda *_args: None,
+    )
+    calls = []
+    marker = {}
+    options = [{"id": "model", "name": "Model", "type": "select", "category": "model",
+                "current_value": "chosen-by-parent", "options": [{"value": "chosen-by-parent", "name": "Chosen"}]}]
+    capabilities = {"image": True, "audio": False, "embedded_context": True}
+    async def fake_turn(_runtime, binding, **kwargs):
+        calls.append((binding, kwargs))
+        instruction = kwargs.get("host_instruction", "")
+        profile = kwargs.get("user_habits", "")
+        marker.update({
+            "session_id": "remote-child", "instruction_hash": hashlib.sha256(instruction.encode()).hexdigest(),
+            "profile_hash": hashlib.sha256(profile.encode()).hexdigest(),
+        })
+        return ACPTurnResult(
+            ok=True, runtime_id="fake-acp", acp_session_id="remote-child", text="Reviewed",
+            stop_reason="end_turn", config_options=options, prompt_capabilities=capabilities,
+            host_context=dict(marker),
+        )
+    monkeypatch.setattr("argusai.core.agent_runtimes.run_acp_turn", fake_turn)
+    manager = AgentThreadManager(parent)
+    try:
+        spawned = manager.spawn_external(runtime_id="fake-acp", role="reviewer", objective="inspect one sample")
+        aid = spawned["agent"]["agent_id"]
+        assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+        assert "[ArgusAI host context]" in calls[0][1]["host_instruction"]
+        assert "delegated child Agent" in calls[0][1]["host_instruction"]
+        assert "not the main" in calls[0][1]["host_instruction"]
+        assert "Concise Chinese" in calls[0][1]["user_habits"]
+        assert manager.send_input(aid, "review the next sample", resume=True)["ok"]
+        assert manager.wait([aid], timeout_seconds=2)["agents"][0]["status"] == "completed"
+        previous, _kwargs = calls[1]
+        assert previous.acp_session_id == "remote-child"
+        assert previous.acp_host_context == marker
+        assert previous.acp_prompt_capabilities == capabilities
+        assert previous.acp_config_options == tuple(options)
+        assert previous.acp_config == {"model": "chosen-by-parent"}
+        saved = manager._records[aid]["child_session"]["runtime"]
+        assert saved["acp_host_context"] == marker
+        assert saved["acp_prompt_capabilities"] == capabilities
+        assert all("read_probe" in names and "write_probe" not in names for names in delegated_tools)
+    finally:
+        manager.shutdown()
+
+
 @pytest.mark.parametrize("stop_action", [None, "pause", "close"])
 def test_external_agent_accepts_input_during_final_handoff(
     tmp_path: Path, monkeypatch, stop_action: str | None,

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import concurrent.futures
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -69,6 +70,7 @@ class ACPTurnResult:
     prompt_capabilities: dict[str, bool] = field(default_factory=dict)
     config_options: list[dict[str, Any]] = field(default_factory=list)
     session_restarted: bool = False
+    host_context: dict[str, str] = field(default_factory=dict)
     error_code: str = ""
     error: str = ""
 
@@ -85,6 +87,7 @@ class ACPTurnResult:
             "prompt_capabilities": dict(self.prompt_capabilities),
             "config_options": list(self.config_options),
             "session_restarted": self.session_restarted,
+            "host_context": dict(self.host_context),
             "error_code": self.error_code,
             "error": self.error,
         }
@@ -198,6 +201,51 @@ def _resource_prompt_block(
         size=int(item.get("size") or raw.get("size") or 0) or None,
         description="User-supplied file. Read it in place; write generated artifacts to the session sandbox.",
     )
+
+
+def acp_host_instruction() -> str:
+    """Stable workbench guidance, delivered as host context rather than system policy."""
+    return (
+        "[ArgusAI host context]\n"
+        "You are the selected external Agent working on this conversation inside ArgusAI. "
+        "Keep your actual Agent identity while acting as the user's ArgusAI workbench assistant. "
+        "The host exposes ArgusAI workbench capabilities through its MCP tool bridge. "
+        "For ArgusAI tasks, discover tools with tool_search, then call the returned schema "
+        "through argusai_invoke_tool; read applicable workflows with skill_read. "
+        "Use get_app_snapshot through the bridge to inspect the current ArgusAI page and work state. "
+        "For capture/proxy, browser, scans, reverse analysis, files, memory, teams and scheduling, "
+        "prefer the workbench's domain tools over driving ArgusAI's own GUI with desktop automation. "
+        "Read current state, keep object IDs and evidence references, and continue existing work. "
+        "Your own tools remain available for appropriate tasks in the selected workspace. "
+        "Observe the user's current target, scope and approval decisions. Tool availability or "
+        "historical authorization does not expand them. This host context does not replace "
+        "your runtime's own policies."
+    )
+
+
+def _host_prompt_blocks(
+    binding: SessionRuntimeBinding,
+    session_id: str,
+    instruction: str,
+    user_habits: str,
+    *,
+    new_session: bool = False,
+) -> tuple[list[Any], dict[str, str]]:
+    if not instruction:
+        return [], {}
+    hashes = {
+        "instruction_hash": hashlib.sha256(instruction.encode("utf-8")).hexdigest(),
+        "profile_hash": hashlib.sha256(user_habits.encode("utf-8")).hexdigest(),
+    }
+    previous = binding.acp_host_context
+    same_session = not new_session and previous.get("session_id") == session_id
+    blocks = []
+    if not same_session or previous.get("instruction_hash") != hashes["instruction_hash"]:
+        blocks.append(acp.text_block(instruction))
+    if (same_session and previous.get("profile_hash") != hashes["profile_hash"]) or (not same_session and user_habits):
+        profile = user_habits or "The saved user preferences have been cleared; use the current user's instructions."
+        blocks.append(acp.text_block("[ArgusAI user preferences update]\n" + profile))
+    return blocks, {"session_id": session_id, **hashes}
 
 
 def acp_workspace_instruction(cwd: str, *, project: bool) -> str:
@@ -355,6 +403,8 @@ async def run_acp_turn(
     on_permission: ACP_PERMISSION_HANDLER | None = None,
     mcp_servers: list[Any] | None = None,
     stateless_message: str = "",
+    host_instruction: str = "",
+    user_habits: str = "",
     timeout_seconds: float = 604800,
 ) -> ACPTurnResult:
     """Run initialize → session/new|load → optional set_config_option → prompt."""
@@ -412,6 +462,7 @@ async def run_acp_turn(
         if connection is None:
             raise RuntimeError("ACP connection is unavailable after initialize")
         session_restarted = False
+        session_created = False
         prompt_message = message
         if binding.acp_session_id and capabilities.get("loadSession"):
             replaying = True
@@ -432,6 +483,7 @@ async def run_acp_turn(
                 config_options = refreshed
             session_id = binding.acp_session_id
         else:
+            session_created = True
             session_restarted = bool(binding.acp_session_id)
             created = await connection.new_session(cwd, mcp_servers=list(mcp_servers or []))
             created_payload = _model_dict(created)
@@ -492,6 +544,10 @@ async def run_acp_turn(
                 error_code="acp_prompt_empty",
                 error="No ACP-compatible prompt content remained after validation.",
             )
+        host_blocks, host_context = _host_prompt_blocks(
+            binding, session_id, host_instruction, user_habits, new_session=session_created,
+        )
+        prompt_blocks = [*host_blocks, *prompt_blocks]
         response = await asyncio.wait_for(
             connection.prompt(session_id, prompt_blocks),
             timeout=max(1.0, float(timeout_seconds)),
@@ -513,6 +569,7 @@ async def run_acp_turn(
             prompt_capabilities=prompt_capabilities,
             config_options=config_options,
             session_restarted=session_restarted,
+            host_context=host_context,
         )
     except asyncio.TimeoutError:
         return ACPTurnResult(

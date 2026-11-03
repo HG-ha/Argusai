@@ -59,6 +59,9 @@ const selectedNewRuntime = computed(() => (
 const showModelModal = ref(false)
 const modelsLoading = ref(false)
 const sessionModels = ref([])
+const modelPickerKind = ref('')
+const modelPickerOwner = ref('')
+let modelRequestSeq = 0
 const modelError = ref('')
 const collapsedModelGroups = ref(new Set())
 const modelSearch = ref('')
@@ -362,7 +365,7 @@ const macosDesktopPermMissing = computed(() => {
 })
 
 const engagementActive = computed(() => Boolean(engagement.value?.active))
-const greenlightAvailable = computed(() => !isAcpSession.value)
+const greenlightAvailable = computed(() => !activeTab.value?.runtimePending && !isAcpSession.value)
 const engagementScopeSummary = computed(() => {
   if (!engagementActive.value) return t('assistant.off')
   const raw = String(engagement.value?.scope || '').trim()
@@ -1091,6 +1094,13 @@ function hydrateExternalPendingBlock(block, tab = activeTab.value) {
   const pendingId = String(block.pending_id || '')
   const version = Number(block.pending_version || block.version || 0)
   if (!id || !name || !pendingId || !Number.isInteger(version) || version < 1) return
+  const resolved = (tab._externalConfirmationReceipts || []).find(receipt => (
+    receipt.pending_id === pendingId && receipt.version === version && receipt.call_id === id
+  ))
+  if (resolved) {
+    block.decision = resolved.verdict
+    return
+  }
   const tool = {
     id,
     name,
@@ -4191,6 +4201,9 @@ async function drainPendingAfterAutoApprove(tab = activeTab.value) {
   if (!tab || !tab.autoApproveMode || tab.confirmingAction) return
   if (activeTab.value !== tab) return
   if (tab.pendingTools?.length) {
+    // External permissions are resolved by the broker's current policy. A
+    // remaining ticket may require explicit approval; never race it here.
+    if (tab.pendingTools.some(isExternalPendingTool)) return
     const decisions = { ...tab.pendingDecisions }
     for (const tool of tab.pendingTools) {
       const id = tool.id || tool.name
@@ -4216,6 +4229,7 @@ async function drainPendingAfterAutoApprove(tab = activeTab.value) {
 async function toggleAutoApproveMode() {
   const tab = activeTab.value
   if (!tab || autoApproveBusy.value) return
+  const sid = tab.sessionId
   const enabled = !tab.autoApproveMode
   if (enabled) {
     const ok = await confirmDialog({
@@ -4225,24 +4239,29 @@ async function toggleAutoApproveMode() {
       negativeText: t('common.cancel'),
       type: 'warning',
     })
-    if (!ok) return
+    if (!ok || tab.sessionId !== sid || !tabs.includes(tab)) return
   }
   autoApproveBusy.value = true
   const previous = Boolean(tab.autoApproveMode)
   tab.autoApproveMode = enabled
   try {
-    const r = await api.setAssistantAutoApproveMode(tab.sessionId, enabled, false)
+    const r = await api.setAssistantAutoApproveMode(sid, enabled, false)
+    if (tab.sessionId !== sid || !tabs.includes(tab)) return
     if (!r?.ok) throw new Error(r?.error || t('assistant.autoApproveToggleFailed'))
     applySessionAssistantPolicy(r, tab)
     tab.autoApproveMode = r.auto_approve_mode !== undefined ? Boolean(r.auto_approve_mode) : enabled
-    showToast(
-      tab.autoApproveMode ? t('assistant.autoApproveEnabled') : t('assistant.autoApproveDisabled'),
-      'ok',
-    )
+    applyExternalConfirmationReceipt(tab, r.external_confirmation)
+    if (activeTab.value === tab) {
+      showToast(
+        tab.autoApproveMode ? t('assistant.autoApproveEnabled') : t('assistant.autoApproveDisabled'),
+        'ok',
+      )
+    }
     if (tab.autoApproveMode) {
       await drainPendingAfterAutoApprove(tab)
     }
   } catch (e) {
+    if (tab.sessionId !== sid || !tabs.includes(tab)) return
     tab.autoApproveMode = previous
     showToast(t('toast.error', { msg: e.message || e }), 'error')
   } finally {
@@ -4732,7 +4751,7 @@ async function startTrackedAssistantTurn(tab, params, action = false) {
 
 async function send(msg, options = {}) {
   const tab = options.tab || activeTab.value
-  if (!tab) return false
+  if (!tab || tab.runtimePending) return false
   const sid = tab.sessionId
   const queued = options.queuedInput || null
   const displayText = String(queued?.displayText ?? msg ?? tab.inputDraft ?? '').trim()
@@ -5516,11 +5535,35 @@ function markExternalConfirmationResolved(tab, confirmation) {
     blocks: (message.blocks || []).map(block => {
       const id = String(block?.confirm_id || '')
       const decision = decisions[id]
-      return block?.external_confirmation && decision
+      const sameTicket = String(block?.pending_id || '') === String(confirmation?.pending_id || '')
+        && Number(block?.pending_version || block?.version || 0) === Number(confirmation?.version || 0)
+      return block?.external_confirmation && decision && sameTicket
         ? { ...block, decision }
         : block
     }),
   }))
+}
+
+function applyExternalConfirmationReceipt(tab, receipt) {
+  const pendingId = String(receipt?.pending_id || '')
+  const version = Number(receipt?.version || 0)
+  const callId = String(receipt?.call_id || '')
+  const verdict = String(receipt?.verdict || '')
+  if (!tab || !pendingId || !callId || !Number.isInteger(version) || version < 1
+    || !['allow', 'allow_session', 'deny'].includes(verdict)) return
+  const resolved = { pending_id: pendingId, version, call_id: callId, verdict }
+  const receipts = tab._externalConfirmationReceipts || []
+  tab._externalConfirmationReceipts = [...receipts.filter(item => !(
+    item.pending_id === pendingId && item.version === version && item.call_id === callId
+  )), resolved].slice(-64)
+  markExternalConfirmationResolved(tab, { type: 'confirmation_decision', ...resolved })
+  const tools = tab.pendingTools || []
+  const remaining = tools.filter(tool => !(isExternalPendingTool(tool)
+    && tool.id === callId && tool.pending_id === pendingId && Number(tool.version) === version))
+  if (remaining.length !== tools.length) {
+    setPendingFromResponse({ pending_tools: remaining }, tab)
+    if (!remaining.length) clearActiveTool(tab)
+  }
 }
 
 function cardDecision(block) {
@@ -5609,6 +5652,7 @@ async function submitPendingBatch(intent) {
   if (tab.sending && !resolvesExternal) return
   const sid = tab.sessionId
   let ownSeq = tab.runSeq
+  const submittedTools = tab.pendingTools.map(tool => ({ ...tool }))
   // Loom22 §9: typed confirmation RPC — never encode decisions in chat text.
   const pending = tab.pendingTools[0]
   const binding = {
@@ -5658,8 +5702,14 @@ async function submitPendingBatch(intent) {
       if (!resolved.resolved_external) {
         throw new Error(t('assistant.confirmationExpired'))
       }
-      markExternalConfirmationResolved(tab, confirmation)
-      clearPendingTools(tab)
+      for (const tool of submittedTools) {
+        const verdict = confirmation.type === 'batch_confirmation_decision'
+          ? confirmation.decisions?.[tool.id]
+          : confirmation.verdict
+        applyExternalConfirmationReceipt(tab, {
+          pending_id: tool.pending_id, version: tool.version, call_id: tool.id, verdict,
+        })
+      }
     } catch (error) {
       if (tab.sessionId !== sid || tab.runSeq !== ownSeq) return
       tab.lastError = String(error?.message || error)
@@ -5861,22 +5911,60 @@ async function chooseAgentProjectDirectory() {
   else if (!result?.cancelled) showToast(result?.error || t('assistant.projectDirectoryFailed'), 'error')
 }
 
+function modelPickerKey(tab) {
+  if (!tab) return ''
+  const runtime = tab.runtime || {}
+  return JSON.stringify([
+    tab.sessionId,
+    runtime.runtime_id || 'argusai-native',
+    runtime.workspace_mode || 'sandbox',
+    runtime.project_dir || '',
+  ])
+}
+
+function invalidateModelPicker() {
+  modelRequestSeq += 1
+  sessionModels.value = []
+  modelPickerKind.value = ''
+  modelPickerOwner.value = ''
+  modelsLoading.value = false
+  modelError.value = ''
+  modelSearch.value = ''
+  collapsedModelGroups.value = new Set()
+}
+
+function isModelPickerRequestCurrent(seq, tab, key) {
+  return seq === modelRequestSeq && showModelModal.value
+    && activeTab.value === tab && modelPickerKey(tab) === key
+}
+
+function applySessionRuntimeSnapshot(tab, runtime) {
+  if (!runtime || typeof runtime !== 'object') return
+  const current = tab.runtime || {}
+  // An unsent runtime choice exists only in the tab. A default backend
+  // session snapshot is not authoritative until the first turn binds it.
+  const draft = !current.locked && (tab._explicitDraft
+    || (current.runtime_id && current.runtime_id !== 'argusai-native'))
+  if (!draft || runtime.locked) tab.runtime = { ...runtime }
+  tab.runtimePending = false
+}
+
 function modelGroupKey(model) {
-  if (isAcpSession.value) {
+  if (modelPickerKind.value === 'acp_model') {
     return `acp:${model.config_id || model.host || 'model'}`
   }
   return `ep:${model.index ?? (model.name || 'endpoint')}`
 }
 
 function modelGroupTitle(model) {
-  if (isAcpSession.value) {
+  if (modelPickerKind.value === 'acp_model') {
     return String(model.host || t('assistant.acpModel'))
   }
   return String(model.name || t('assistant.acpModel'))
 }
 
 function modelDisplayName(model) {
-  if (isAcpSession.value) {
+  if (modelPickerKind.value === 'acp_model') {
     return String(model.name || model.value || '')
   }
   return String(model.model || model.name || model.value || '')
@@ -5884,6 +5972,7 @@ function modelDisplayName(model) {
 
 const sessionModelGroups = computed(() => {
   const groups = []
+  if (modelPickerOwner.value !== modelPickerKey(activeTab.value)) return groups
   const byKey = new Map()
   for (const model of sessionModels.value) {
     const key = modelGroupKey(model)
@@ -5994,21 +6083,33 @@ function modelErrorText(code, detail) {
   return detail ? `${text} · ${detail}` : text
 }
 
-async function refreshNativeModel() {
-  const tab = activeTab.value
-  if (!tab || isAcpSession.value) return
+async function refreshNativeModel(tab = activeTab.value) {
+  if (!tab || tab.runtimePending || (tab.runtime?.runtime_id && tab.runtime.runtime_id !== 'argusai-native')) return
+  const key = modelPickerKey(tab)
+  const seq = (tab._nativeModelRequestSeq || 0) + 1
+  tab._nativeModelRequestSeq = seq
+  const current = () => tabs.includes(tab) && modelPickerKey(tab) === key
+    && tab._nativeModelRequestSeq === seq && !tab.runtimePending
   try {
     const result = await api.listSessionModels(tab.sessionId, false, '')
+    if (!current()) return
+    if (result?.kind && result.kind !== 'endpoint') return
     tab.nativeModel = result?.ok ? String(result.active?.model || '') : ''
   } catch {
-    tab.nativeModel = ''
+    if (current()) tab.nativeModel = ''
   }
 }
 
 async function openModelPicker(refresh = false) {
   const tab = activeTab.value
-  if (!tab) return
+  if (!tab || tab.runtimePending) return
   const acp = isAcpSession.value
+  const key = modelPickerKey(tab)
+  invalidateModelPicker()
+  const seq = modelRequestSeq
+  const kind = acp ? 'acp_model' : 'endpoint'
+  modelPickerKind.value = kind
+  modelPickerOwner.value = key
   showModelModal.value = true
   modelsLoading.value = true
   modelError.value = ''
@@ -6018,9 +6119,15 @@ async function openModelPicker(refresh = false) {
       tab.sessionId,
       refresh,
       acp ? (tab.runtime?.runtime_id || '') : '',
-      acp ? (tab.runtime || {}) : {},
+      acp ? plainJson(tab.runtime || {}) : {},
     )
+    if (!isModelPickerRequestCurrent(seq, tab, key)) return
     if (result?.ok) {
+      if ((result.kind || kind) !== kind
+        || (acp && result.runtime?.runtime_id && result.runtime.runtime_id !== tab.runtime?.runtime_id)) {
+        throw new Error(modelErrorText('acp_model_changed', ''))
+      }
+      modelPickerKind.value = result.kind || kind
       sessionModels.value = Array.isArray(result.models) ? result.models : []
       resetModelGroupCollapse()
       if (acp && result.runtime && typeof result.runtime === 'object') {
@@ -6034,23 +6141,37 @@ async function openModelPicker(refresh = false) {
     collapsedModelGroups.value = new Set()
     modelError.value = modelErrorText(result?.code, result?.error)
   } catch (error) {
+    if (!isModelPickerRequestCurrent(seq, tab, key)) return
     sessionModels.value = []
     collapsedModelGroups.value = new Set()
     modelError.value = String(error?.message || error)
   } finally {
-    modelsLoading.value = false
+    if (isModelPickerRequestCurrent(seq, tab, key)) modelsLoading.value = false
   }
 }
 
 async function pickModel(model) {
   const tab = activeTab.value
-  if (!tab || !model || modelsLoading.value) return
+  const key = modelPickerKey(tab)
+  if (!tab || !model || modelsLoading.value || tab.runtimePending
+    || modelPickerOwner.value !== key || !sessionModels.value.includes(model)) return
+  const acp = modelPickerKind.value === 'acp_model'
+  if (acp !== isAcpSession.value) return
+  const seq = ++modelRequestSeq
+  tab._modelSelectionRequest = seq
+  const targetCurrent = () => tabs.includes(tab) && modelPickerKey(tab) === key
+    && tab._modelSelectionRequest === seq
   modelsLoading.value = true
   try {
-    if (!isAcpSession.value) {
+    if (!acp) {
+      tab._nativeModelRequestSeq = (tab._nativeModelRequestSeq || 0) + 1
       const result = await api.switchSessionModel(tab.sessionId, model)
+      if (!targetCurrent()) return
+      if (result?.ok && result.kind && result.kind !== 'endpoint') {
+        throw new Error(modelErrorText('acp_model_changed', ''))
+      }
       if (!result?.ok) {
-        showToast(modelErrorText(result?.code, ''), 'error')
+        if (isModelPickerRequestCurrent(seq, tab, key)) showToast(modelErrorText(result?.code, ''), 'error')
         return
       }
       tab.nativeModel = String(result.model?.model || model.model || model.value || '')
@@ -6060,8 +6181,13 @@ async function pickModel(model) {
       // keeping the choice on the tab is what actually binds it.
       if (tab.runtime?.locked) {
         const result = await api.switchSessionModel(tab.sessionId, model)
+        if (!targetCurrent()) return
+        if (result?.ok && ((result.kind && result.kind !== 'acp_model')
+          || (result.runtime?.runtime_id && result.runtime.runtime_id !== tab.runtime?.runtime_id))) {
+          throw new Error(modelErrorText('acp_model_changed', ''))
+        }
         if (!result?.ok) {
-          showToast(modelErrorText(result?.code, ''), 'error')
+          if (isModelPickerRequestCurrent(seq, tab, key)) showToast(modelErrorText(result?.code, ''), 'error')
           return
         }
         if (result.runtime && typeof result.runtime === 'object') {
@@ -6088,18 +6214,30 @@ async function pickModel(model) {
       tab.runtime = runtime
     }
     persistTabs()
+    if (!isModelPickerRequestCurrent(seq, tab, key)) return
     sessionModels.value = sessionModels.value.map(row => ({
       ...row,
       active: row.index === model.index && row.value === model.value,
     }))
     showToast(t('assistant.acpModelSwitched', {
-      name: isAcpSession.value ? model.name : (model.model || model.name),
+      name: acp ? model.name : (model.model || model.name),
     }), 'ok')
     showModelModal.value = false
+  } catch (error) {
+    if (isModelPickerRequestCurrent(seq, tab, key)) showToast(String(error?.message || error), 'error')
   } finally {
-    modelsLoading.value = false
+    if (isModelPickerRequestCurrent(seq, tab, key)) modelsLoading.value = false
   }
 }
+
+watch(() => modelPickerKey(activeTab.value), () => {
+  showModelModal.value = false
+  invalidateModelPicker()
+}, { flush: 'sync' })
+
+watch(showModelModal, (open) => {
+  if (!open) invalidateModelPicker()
+}, { flush: 'sync' })
 
 async function addTab() {
   if (!canOpenNewTab.value) {
@@ -6185,6 +6323,8 @@ async function newSession() {
   tab.webSearchAllowed = defaultWebSearchAllowed.value
   applyDefaultThinking(tab)
   tab.runtime = { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false }
+  tab.runtimePending = false
+  tab._explicitDraft = true
   tab.messages = []
   tab.renderWindowStart = 0
   tab.showAllMessages = false
@@ -6240,8 +6380,10 @@ async function openSessionInNewTab(id, e) {
 async function loadHistory() {
   const tab = activeTab.value
   if (!tab) return
+  const sid = tab.sessionId
   try {
-    const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
+    const r = await withTimeout(api.getAssistantSession(sid), HISTORY_LOAD_TIMEOUT_MS, null)
+    if (!tabs.includes(tab) || tab.sessionId !== sid) return
     if (!r) throw new Error(t('assistant.historyLoadTimeout'))
     if (r.ok) {
       tab.messages = normalizeHistory(r.history, r.events)
@@ -6251,7 +6393,7 @@ async function loadHistory() {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
-      if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
+      applySessionRuntimeSnapshot(tab, r.runtime)
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
       tab.showAllMessages = false
@@ -6468,6 +6610,8 @@ function resetTabToFreshSession(tab) {
   tab.webSearchAllowed = defaultWebSearchAllowed.value
   applyDefaultThinking(tab)
   tab.runtime = { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false }
+  tab.runtimePending = false
+  tab._explicitDraft = true
   tab.messages = []
   tab.renderWindowStart = 0
   tab.showAllMessages = false
@@ -6655,10 +6799,13 @@ async function hydrateIfNeeded(tab) {
   const seen = sessions.value.some(s => s.id === tab.sessionId)
   if (!seen) {
     tab._historyLoaded = true
+    tab.runtimePending = false
     return
   }
+  const sid = tab.sessionId
   try {
-    const r = await withTimeout(api.getAssistantSession(tab.sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
+    const r = await withTimeout(api.getAssistantSession(sid), HISTORY_LOAD_TIMEOUT_MS, null)
+    if (!tabs.includes(tab) || tab.sessionId !== sid) return
     if (r && r.ok) {
       tab.messages = normalizeHistory(r.history, r.events)
       hydrateHistoryAttachments(tab.messages, tab.sessionId)
@@ -6667,7 +6814,7 @@ async function hydrateIfNeeded(tab) {
       applySessionAssistantPolicy(r, tab)
       tab.webSearchAllowed = Boolean(r.allow_web_search)
       tab.engagement = r.engagement_declaration || null
-      if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
+      applySessionRuntimeSnapshot(tab, r.runtime)
       if (r.name) tab.name = r.name
       tab._historyLoaded = true
       tab.showAllMessages = false
@@ -6698,7 +6845,7 @@ async function onAssistantSessionUpdatedEvent(ev) {
   }
   try {
     const r = await withTimeout(api.getAssistantSession(sessionId), HISTORY_LOAD_TIMEOUT_MS, null)
-    if (!r?.ok) return
+    if (!r?.ok || !tabs.includes(tab) || tab.sessionId !== sessionId) return
     tab.messages = normalizeHistory(r.history, r.events)
     hydrateHistoryAttachments(tab.messages, tab.sessionId)
     restorePendingProjection(r, tab)
@@ -6706,7 +6853,7 @@ async function onAssistantSessionUpdatedEvent(ev) {
     applySessionAssistantPolicy(r, tab)
     tab.webSearchAllowed = Boolean(r.allow_web_search)
     tab.engagement = r.engagement_declaration || null
-    if (r.runtime && typeof r.runtime === 'object') tab.runtime = { ...r.runtime }
+    applySessionRuntimeSnapshot(tab, r.runtime)
     if (r.name) tab.name = r.name
     tab._historyLoaded = true
     tab.showAllMessages = false
@@ -6744,12 +6891,15 @@ onMounted(() => {
   refreshNativeModel()
   nextTick(() => requestAnimationFrame(alignPanelToDefault))
   loadAssistantDefaults()
-  refreshSessions(true).then(() => {
+  refreshSessions(true).then(async () => {
     // Empty/orphan tabs yield to the most recent saved conversation.
     preferLastConversation()
     // After the session list is in, lazily hydrate the visible tab. Other
     // tabs hydrate on first switch.
-    if (activeTab.value) hydrateIfNeeded(activeTab.value)
+    const tab = activeTab.value
+    if (tab) await hydrateIfNeeded(tab)
+    if (activeTab.value !== tab) return
+    refreshNativeModel(tab)
     if (activeTab.value) refreshRunJobs(activeTab.value)
     if (activeTab.value) refreshAgentThreads(activeTab.value)
     if (state.platform === 'darwin') refreshDesktopControl()
@@ -6779,6 +6929,8 @@ onMounted(() => {
   nextTick(bindBodyResizeObserver)
 })
 onUnmounted(() => {
+  invalidateModelPicker()
+  showModelModal.value = false
   bodyResizeObserver?.disconnect()
   bodyResizeObserver = null
   window.removeEventListener('keydown', onGlobalKey)
@@ -6825,6 +6977,7 @@ watch(() => props.visible, (v) => {
       .then(async () => {
         preferLastConversation()
         if (activeTab.value) await hydrateIfNeeded(activeTab.value)
+        refreshNativeModel()
         if (activeTab.value) refreshRunJobs(activeTab.value)
         scrollBottomAfterRender()
       })
@@ -6858,10 +7011,11 @@ watch(activeTabId, async (sid) => {
   const tab = tabs.find(t => t.sessionId === sid)
   if (tab) {
     await hydrateIfNeeded(tab)
+    if (activeTabId.value !== sid || tab.sessionId !== sid) return
     refreshAgentThreads(tab)
     if (props.visible) scrollBottomAfterRender()
   }
-  refreshNativeModel()
+  refreshNativeModel(tab)
   if (props.visible) nextTick(syncInputDraftToDom)
 })
 
@@ -8074,7 +8228,7 @@ watch(input, (newVal) => {
                   aria-haspopup="dialog"
                   aria-controls="assistant-thinking-popover"
                   :aria-expanded="showThinkingMenu"
-                  :disabled="sending"
+                  :disabled="sending || activeTab?.runtimePending"
                   :title="thinkingControlTitle"
                   @click.stop="toggleThinkingMenu"
                 >
@@ -8141,14 +8295,14 @@ watch(input, (newVal) => {
                 <button
                   type="button"
                   class="composer-control"
-                  :disabled="sending"
+                  :disabled="sending || activeTab?.runtimePending"
                   :title="t('assistant.acpModelTitle')"
                   @click.stop="openModelPicker(false)"
                 >
                   <span class="assistant-icon icon-model" aria-hidden="true"></span>
                   <span class="composer-control-label">{{ t('assistant.acpModel') }}</span>
                   <span class="composer-control-value">
-                    {{ activeModelLabel || t('assistant.acpModelUnset') }}
+                    {{ activeTab?.runtimePending ? t('common.loading') : (activeModelLabel || t('assistant.acpModelUnset')) }}
                   </span>
                 </button>
                 <button
@@ -8251,7 +8405,7 @@ watch(input, (newVal) => {
                 <button
                   type="button"
                   :class="assistantRunActive && !hasAwaitingUserDecision ? 'danger' : 'primary'"
-                  :disabled="!(assistantRunActive && !hasAwaitingUserDecision) && !input.trim() && !pendingAttachments.length && !pendingVoice && !inputPathRefEntries.length"
+                  :disabled="!(assistantRunActive && !hasAwaitingUserDecision) && (activeTab?.runtimePending || (!input.trim() && !pendingAttachments.length && !pendingVoice && !inputPathRefEntries.length))"
                   @click="assistantRunActive && !hasAwaitingUserDecision ? cancelRun() : send()"
                 >
                   {{ assistantRunActive && !hasAwaitingUserDecision ? t('common.cancel') : t('assistant.send') }}
@@ -8350,9 +8504,9 @@ watch(input, (newVal) => {
         </button>
       </label>
       <p class="acp-model-hint">
-        {{ isAcpSession ? t('assistant.acpModelHint') : t('assistant.modelHintNative') }}
+        {{ modelPickerKind === 'acp_model' ? t('assistant.acpModelHint') : t('assistant.modelHintNative') }}
       </p>
-      <p v-if="modelsLoading && !sessionModels.length" class="acp-model-hint">
+      <p v-if="modelsLoading" class="acp-model-hint" role="status">
         {{ t('assistant.acpModelLoading') }}
       </p>
       <p v-else-if="modelError" class="acp-model-error">{{ modelError }}</p>
@@ -8404,7 +8558,7 @@ watch(input, (newVal) => {
         {{ t('assistant.acpModelNoMatch') }}
       </p>
       <p v-else class="acp-model-hint">
-        {{ isAcpSession ? t('assistant.acpModelNone') : t('assistant.modelNoneNative') }}
+        {{ modelPickerKind === 'acp_model' ? t('assistant.acpModelNone') : t('assistant.modelNoneNative') }}
       </p>
     </div>
     <template #footer>

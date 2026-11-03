@@ -196,6 +196,11 @@ class AssistantToolsMixin:
                 except Exception:
                     pass
             session.apply_user_auto_approve_mode(enabled)
+            external_confirmation = None
+            if enabled:
+                broker = getattr(self, "_assistant_confirmation_broker", None)
+                if broker is not None:
+                    external_confirmation = broker.resolve_external_if_auto_approved(session_id, session)
             if not enabled:
                 apply_settings_tool_always_allow(session, settings)
             child_sync = self._sync_child_auto_allow(session)
@@ -214,6 +219,7 @@ class AssistantToolsMixin:
                 "auto_approve_mode": bool(session.user_auto_approve_mode),
                 "auto_allow_tools": session.auto_approve_tools(),
                 "child_sync": child_sync,
+                "external_confirmation": external_confirmation,
             }
         except ValueError as e:
             return {"ok": False, "error": str(e)}

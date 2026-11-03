@@ -8,6 +8,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from argusai.core.agent_runtimes import ArgusAIToolBroker
 from argusai.core.assistant.confirmation_broker import ConfirmationBroker
 from argusai.core.assistant.session import AssistantSession
@@ -255,6 +257,53 @@ def _answer(confirmations, session, verdict: str) -> None:
     )
 
 
+@pytest.mark.parametrize("changed", ["pending_id", "version", "call_id", "batch", "missing_pending_id", "missing_version", "missing_call_id"])
+def test_external_confirmation_rejects_old_cards_without_deciding_current_ticket(changed) -> None:
+    session = AssistantSession(registry=ToolRegistry())
+    confirmations = ConfirmationBroker()
+    ticket = confirmations.open_external(
+        "session-perm", session, tool_name="external_agent_tool",
+        arguments={"agent": "test-acp", "kind": "execute"},
+        call_id="current-call", always_confirm=True,
+    )
+    assert ticket is not None
+    action = {
+        "type": "confirmation_decision", "verdict": "allow",
+        "pending_id": ticket.pending_id, "version": 1, "call_id": ticket.call_id,
+    }
+    if changed.startswith("missing_"):
+        action.pop(changed.removeprefix("missing_"))
+    elif changed == "batch":
+        action = {**action, "type": "batch_confirmation_decision", "decisions": {"old-call": "allow"}}
+    else:
+        action[changed] = 2 if changed == "version" else "old-card"
+
+    result = confirmations.resolve_external("session-perm", session, action)
+
+    assert result and result["ok"] is False
+    assert result["error_code"] == "confirmation_changed"
+    assert ticket.decision == ""
+    assert not ticket.event.is_set()
+    assert session._pending["pending_id"] == ticket.pending_id
+
+
+def test_external_deny_can_omit_call_id_when_bound_to_the_current_card() -> None:
+    session = AssistantSession(registry=ToolRegistry())
+    confirmations = ConfirmationBroker()
+    ticket = confirmations.open_external(
+        "session-perm", session, tool_name="external_agent_tool",
+        arguments={"agent": "test-acp", "kind": "execute"},
+        call_id="current-call", always_confirm=True,
+    )
+    assert ticket is not None
+    result = confirmations.resolve_external("session-perm", session, {
+        "type": "confirmation_decision", "verdict": "deny",
+        "pending_id": ticket.pending_id, "version": 1,
+    })
+    assert result and result["ok"] and result["verdict"] == "deny"
+    assert ticket.event.is_set() and ticket.decision == "deny"
+
+
 def test_an_outside_agents_tool_still_raises_a_confirmation_card() -> None:
     """The confirmation policy lists tools we registered, and `Bash` is not one.
 
@@ -479,6 +528,116 @@ def test_tool_broker_invoke_describes_bound_project_dir() -> None:
         invoke = next(tool for tool in listed["tools"] if tool["name"] == INVOKE_TOOL_NAME)
         assert "H:/work/demo" in invoke["description"]
         assert "sandbox_*" in invoke["description"]
+    finally:
+        broker.unregister(token)
+        broker.shutdown()
+
+
+def test_stdio_mcp_search_schema_and_invoke_use_the_advertised_gateway() -> None:
+    """A local ACP Agent can discover and read fixture proxy state end to end."""
+    from argusai.core.agent_runtimes.tool_broker import INVOKE_TOOL_NAME
+    from argusai.core.assistant.tools import INVOKE_CATALOGUE_TOOL, build_tool_registry
+
+    registry = build_tool_registry(None)
+    original = registry.get("get_proxy_status")
+    assert original is not None
+    calls = []
+
+    def fake_proxy_status():
+        calls.append("read")
+        return {
+            "running": False,
+            "fixture": "no real proxy was opened",
+            "next_step": "User data mentioning invoke_catalogue_tool stays unchanged",
+        }
+
+    registry.register(
+        original.name, original.description, original.parameters, fake_proxy_status,
+        required=original.required, search_text=original.search_text,
+    )
+    native_guidance = registry.get("tool_search").fn(query="get_proxy_status")
+    session = AssistantSession(registry=registry)
+    broker = ArgusAIToolBroker()
+    token = broker.register_session("session-mcp-discovery", session, ConfirmationBroker())
+    descriptor = broker.mcp_server(token)
+    env = os.environ.copy()
+    env.update({item.name: item.value for item in descriptor.env})
+    process = subprocess.Popen(
+        [descriptor.command, *descriptor.args],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", env=env,
+    )
+    reader = ThreadPoolExecutor(max_workers=1)
+
+    def request(request_id: int, method: str, params: dict | None = None) -> dict:
+        process.stdin.write(json.dumps({
+            "jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {},
+        }) + "\n")
+        process.stdin.flush()
+        return json.loads(reader.submit(process.stdout.readline).result(timeout=10))
+
+    try:
+        request(1, "initialize")
+        listed = request(2, "tools/list")["result"]["tools"]
+        advertised = {tool["name"] for tool in listed}
+        assert INVOKE_TOOL_NAME in advertised
+        assert INVOKE_CATALOGUE_TOOL not in advertised
+        found = request(3, "tools/call", {
+            "name": "tool_search", "arguments": {"query": "get_proxy_status"},
+        })["result"]["structuredContent"]
+        target = next(tool for tool in found["tools"] if tool["name"] == "get_proxy_status")
+        assert isinstance(target["parameters"], dict)
+        assert target["required"] == []
+        assert INVOKE_TOOL_NAME in found["next_step"]
+        assert INVOKE_CATALOGUE_TOOL not in found["next_step"] + found["note"]
+        called = request(4, "tools/call", {
+            "name": INVOKE_TOOL_NAME,
+            "arguments": {"name": target["name"], "arguments": {}},
+        })["result"]
+        assert called["isError"] is False
+        assert called["structuredContent"]["running"] is False
+        assert called["structuredContent"]["fixture"] == "no real proxy was opened"
+        assert called["structuredContent"]["next_step"] == "User data mentioning invoke_catalogue_tool stays unchanged"
+        assert calls == ["read"]
+        assert registry.get("tool_search").fn(query="get_proxy_status") == native_guidance
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+        reader.shutdown(wait=True)
+        broker.unregister(token)
+        broker.shutdown()
+
+
+def test_mcp_search_guidance_adaptation_leaves_query_and_schema_untouched() -> None:
+    from argusai.core.agent_runtimes.tool_broker import INVOKE_TOOL_NAME
+
+    native_result = {
+        "ok": True,
+        "query": "literal invoke_catalogue_tool in a user query",
+        "tools": [{
+            "name": "fixture_read",
+            "description": "Literal invoke_catalogue_tool in catalogue data",
+            "parameters": {"invoke_catalogue_tool": {"type": "string"}},
+            "required": [],
+        }],
+        "next_step": "Call `invoke_catalogue_tool` with name and arguments.",
+        "note": "Call `invoke_catalogue_tool(name=<tool>, arguments={...})` to run one.",
+    }
+    before = json.loads(json.dumps(native_result))
+    registry = ToolRegistry()
+    registry.register("tool_search", "Fixture search", {}, lambda: native_result)
+    session = AssistantSession(registry=registry)
+    broker = ArgusAIToolBroker()
+    token = broker.register_session("session-search-guidance", session, ConfirmationBroker())
+    try:
+        result = broker._call_tool(broker._binding_for_token(token), {
+            "name": "tool_search", "arguments": {},
+        })["result"]
+        assert INVOKE_TOOL_NAME in result["next_step"]
+        assert INVOKE_TOOL_NAME in result["note"]
+        assert result["query"] == before["query"]
+        assert result["tools"] == before["tools"]
+        assert native_result == before
     finally:
         broker.unregister(token)
         broker.shutdown()

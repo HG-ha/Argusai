@@ -86,6 +86,9 @@ class SessionRuntimeBinding:
     # Last prompt capability snapshot from ACP initialize. This is a UI hint;
     # every real turn still trusts the fresh handshake.
     acp_prompt_capabilities: dict[str, bool] = field(default_factory=dict)
+    # Bootstrap delivery markers belong to one remote conversation. Hashes
+    # avoid persisting another copy of the user's preference text here.
+    acp_host_context: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -102,4 +105,6 @@ class SessionRuntimeBinding:
                 str(key): bool(value)
                 for key, value in self.acp_prompt_capabilities.items()
             }
+        if self.acp_host_context:
+            payload["acp_host_context"] = dict(self.acp_host_context)
         return payload

@@ -60,7 +60,57 @@ function recomputeBadge(tab) {
   }
 }
 
+function sessionMetadata(sessionId) {
+  return sessions.value.find(row => row.id === sessionId) || null
+}
+
+function runtimeFromMetadata(row, previous = {}) {
+  if (!row?.runtime_id) return null
+  return {
+    ...(previous.runtime_id === row.runtime_id ? previous : {}),
+    runtime_id: row.runtime_id,
+    workspace_mode: row.workspace_mode || 'sandbox',
+    project_dir: row.project_dir || '',
+    locked: true,
+  }
+}
+
+function hasConfiguredDraftRuntime(runtime) {
+  if (!runtime || runtime.locked) return false
+  return Boolean(
+    (runtime.runtime_id && runtime.runtime_id !== 'argusai-native')
+    || runtime.workspace_mode === 'project'
+    || runtime.project_dir,
+  )
+}
+
+function isProtectedDraft(tab) {
+  return Boolean(tab?._explicitDraft || hasConfiguredDraftRuntime(tab?.runtime))
+}
+
+function applySessionMetadata(tab, row) {
+  const previous = tab.runtime || {}
+  const runtime = runtimeFromMetadata(row, previous)
+  if (runtime && !previous.locked && isProtectedDraft(tab)) {
+    // A model probe or a late list response may still describe a native
+    // placeholder. Only the matching binding can commit the user's draft.
+    if (runtime.runtime_id !== previous.runtime_id
+      || runtime.workspace_mode !== (previous.workspace_mode || 'sandbox')
+      || runtime.project_dir !== (previous.project_dir || '')) return
+  }
+  if (row.name) tab.name = row.name
+  if (runtime) {
+    tab.runtime = runtime
+    tab.runtimePending = false
+    tab._explicitDraft = false
+  }
+}
+
 function makeTab(sessionId, opts = {}) {
+  const savedRuntime = runtimeFromMetadata(sessionMetadata(sessionId), opts.runtime || {})
+  const runtime = savedRuntime || (opts.runtime && typeof opts.runtime === 'object'
+    ? { ...opts.runtime }
+    : { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false })
   const tab = reactive({
     sessionId: sessionId || newSessionId(),
     name: opts.name || '新会话',
@@ -98,9 +148,10 @@ function makeTab(sessionId, opts = {}) {
     thinkingEnabled: false,
     thinkingEffort: 'high',
     engagement: null,
-    runtime: opts.runtime && typeof opts.runtime === 'object'
-      ? { ...opts.runtime }
-      : { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false },
+    runtime,
+    // Existing conversations need metadata before model routing can assume
+    // native. Fresh drafts already have their user-selected binding.
+    runtimePending: Boolean(sessionId && !savedRuntime && !opts.explicitDraft && !hasConfiguredDraftRuntime(runtime)),
     autoAllowTools: [],
     autoApproveMode: Boolean(opts.autoApproveMode),
     nativeModel: '',
@@ -121,6 +172,7 @@ function makeTab(sessionId, opts = {}) {
     _pollerRunning: false,
     _historyLoaded: false,
     _everReceivedDelta: false,
+    _explicitDraft: Boolean(opts.explicitDraft),
   })
   return tab
 }
@@ -150,6 +202,7 @@ function persistTabs() {
         if (t.runtime && typeof t.runtime === 'object') acc[t.sessionId] = { ...t.runtime }
         return acc
       }, {}),
+      explicitDraftIds: tabs.filter(tab => tab._explicitDraft).map(tab => tab.sessionId),
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
   } catch (_) {
@@ -197,6 +250,8 @@ function openTab(opts = {}) {
   if (requestedId) {
     const existing = findTab(requestedId)
     if (existing) {
+      const row = sessionMetadata(requestedId)
+      if (row) applySessionMetadata(existing, row)
       setActiveTab(requestedId)
       return existing
     }
@@ -204,7 +259,10 @@ function openTab(opts = {}) {
   if (tabs.length >= MAX_TABS) {
     return null
   }
-  const tab = makeTab(requestedId || newSessionId(), opts)
+  const tab = makeTab(requestedId, {
+    ...opts,
+    explicitDraft: Boolean(opts.explicitDraft || (!requestedId && (opts.name || opts.runtime))),
+  })
   tabs.push(tab)
   activeTabId.value = tab.sessionId
   persistTabs()
@@ -264,7 +322,10 @@ function replaceActiveTabSession(sessionId) {
   target.webSearchAllowed = true
   target.thinkingEnabled = false
   target.thinkingEffort = 'high'
-  target.runtime = { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false }
+  target.runtime = runtimeFromMetadata(sessionMetadata(sessionId))
+    || { runtime_id: 'argusai-native', workspace_mode: 'sandbox', project_dir: '', locked: false }
+  target.runtimePending = !target.runtime.locked
+  target._explicitDraft = false
   target.autoAllowTools = []
   target.autoApproveMode = false
   target.nativeModel = ''
@@ -310,6 +371,7 @@ function isDefaultTabName(name) {
 /** Empty draft tab that never got real chat content — safe to swap for last conversation. */
 function isEmptyUnsavedTab(tab) {
   if (!tab) return false
+  if (isProtectedDraft(tab)) return false
   if (tab.sending || tab.confirmingAction) return false
   if (tab.pendingTool || (tab.pendingTools?.length > 0)) return false
   if (tab.queuedInputs?.length > 0) return false
@@ -406,19 +468,7 @@ async function refreshSessions(force = false) {
       // Backfill tab names from disk so freshly-restored tabs get a real name.
       for (const s of sessions.value) {
         const tab = findTab(s.id)
-        if (tab && s.name && tab.name !== s.name) {
-          tab.name = s.name || tab.name
-        }
-        if (tab && s.runtime_id) {
-          const prev = tab.runtime && typeof tab.runtime === 'object' ? tab.runtime : {}
-          tab.runtime = {
-            ...prev,
-            runtime_id: s.runtime_id,
-            workspace_mode: s.workspace_mode || prev.workspace_mode || 'sandbox',
-            project_dir: s.project_dir || prev.project_dir || '',
-            locked: true,
-          }
-        }
+        if (tab) applySessionMetadata(tab, s)
       }
     } catch (_) {
       /* ignore — list is best-effort */
@@ -446,6 +496,7 @@ function ensureRestored() {
       const tab = makeTab(sid, {
         name,
         runtime: saved.runtimes?.[sid],
+        explicitDraft: Array.isArray(saved.explicitDraftIds) && saved.explicitDraftIds.includes(sid),
       })
       const draft = saved.inputDrafts && saved.inputDrafts[sid]
       if (draft) tab.inputDraft = String(draft)

@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -1577,6 +1578,8 @@ class AgentThreadManager:
                 runtime_configs,
             )
             from argusai.core.assistant.confirmation_broker import ConfirmationBroker
+            from argusai.core.agent_runtimes.acp_turn import acp_host_instruction
+            from argusai.core.workspace.user_profile import profile_prompt_summary
             from argusai.core.paths import PathManager
 
             with self._lock:
@@ -1690,14 +1693,19 @@ class AgentThreadManager:
             mcp_server = tool_broker.mcp_server(token)
 
             async def _run_turns() -> None:
-                binding = SessionRuntimeBinding(
+                previous_binding = child.runtime_binding
+                if previous_binding.runtime_id != runtime_id:
+                    previous_binding = SessionRuntimeBinding(runtime_id=runtime_id)
+                binding = replace(
+                    previous_binding,
                     runtime_id=runtime_id,
                     workspace_mode="project" if parent_is_project else "sandbox",
                     project_dir=cwd if parent_is_project else "",
-                    acp_session_id=str(record.get("acp_session_id") or ""),
+                    acp_session_id=str(record.get("acp_session_id") or previous_binding.acp_session_id or ""),
                     locked=True,
                     acp_config=dict(inherited_config),
                 )
+                child.runtime_binding = binding
                 while True:
                     with self._lock:
                         live = self._records[agent_id]
@@ -1772,6 +1780,14 @@ class AgentThreadManager:
                         on_active=_on_active,
                         on_permission=permission_handler,
                         mcp_servers=[mcp_server],
+                        host_instruction=(
+                            acp_host_instruction()
+                            + "\n[ArgusAI delegated role]\n"
+                            "You are a delegated child Agent or team member, not the main conversation Agent. "
+                            "Follow the assigned specialist role, objective and capability projection. "
+                            "Report findings and evidence to the parent or team; do not broaden the task or delegate further."
+                        ),
+                        user_habits=profile_prompt_summary(settings_mgr.get()),
                         timeout_seconds=_SUBAGENT_TIMEOUT_SECONDS,
                     )
                     runtime["acp_turn"] = None
@@ -1781,18 +1797,24 @@ class AgentThreadManager:
                             for item in list(result.config_options or [])
                             if isinstance(item, dict)
                         )
-                        binding = SessionRuntimeBinding(
-                            runtime_id=runtime_id,
-                            workspace_mode="project" if parent_is_project else "sandbox",
-                            project_dir=cwd if parent_is_project else "",
+                        binding = replace(
+                            binding,
                             acp_session_id=result.acp_session_id,
                             locked=True,
                             acp_config=dict(binding.acp_config or {}),
                             acp_config_options=options or binding.acp_config_options,
+                            acp_prompt_capabilities=dict(
+                                getattr(result, "prompt_capabilities", binding.acp_prompt_capabilities) or {}
+                            ),
+                            acp_host_context=dict(
+                                getattr(result, "host_context", binding.acp_host_context) or {}
+                            ),
                         )
+                    child.runtime_binding = binding
                     with self._lock:
                         current = self._records[agent_id]
                         current["acp_session_id"] = binding.acp_session_id
+                        current["child_session"] = child.to_dict()
                         current["summary"] = _summary(result.text or result.error)
                         current["stopped_reason"] = result.stop_reason or result.error_code
                         current["tool_calls"] = sum(

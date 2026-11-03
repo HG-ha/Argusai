@@ -129,6 +129,29 @@ def _unwrap_invoke_payload(name: str, arguments: dict[str, Any]) -> tuple[str, d
     return inner, inner_args
 
 
+def _mcp_tool_result(name: str, result: Any) -> Any:
+    """Point catalogue guidance at this transport's advertised gateway.
+
+    Native sessions advertise invoke_catalogue_tool; the ACP MCP surface uses
+    argusai_invoke_tool. Only tool_search's generated guidance belongs to this
+    adapter. Queries, returned tool schemas and tool output remain verbatim.
+    """
+    if name != "tool_search" or not isinstance(result, dict) or not result.get("ok"):
+        return result
+    from argusai.core.assistant.tools import INVOKE_CATALOGUE_TOOL
+
+    adapted = dict(result)
+    for field in ("next_step", "note"):
+        text = result.get(field)
+        if isinstance(text, str):
+            adapted[field] = text.replace(
+                f"`{INVOKE_CATALOGUE_TOOL}`", f"`{INVOKE_TOOL_NAME}`",
+            ).replace(
+                f"`{INVOKE_CATALOGUE_TOOL}(", f"`{INVOKE_TOOL_NAME}(",
+            )
+    return adapted
+
+
 def _normalized(text: str) -> str:
     """Fold a label down to its letters and digits.
 
@@ -509,6 +532,7 @@ class ArgusAIToolBroker:
         )
         if hasattr(binding.session, "_auto_archive_tool_result"):
             result = binding.session._auto_archive_tool_result(name, arguments, result)
+        result = _mcp_tool_result(name, result)
         trace = (
             binding.session._trace(name, arguments, result)
             if hasattr(binding.session, "_trace")

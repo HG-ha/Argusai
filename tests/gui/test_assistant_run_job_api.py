@@ -425,6 +425,35 @@ def test_acp_normal_continue_reuses_the_current_remote_session(tmp_path, monkeyp
     assert original.history[-2].content == "Continue"
 
 
+def test_acp_workbench_context_inherits_preferences_without_rewriting_user_history(tmp_path, monkeypatch) -> None:
+    from argusai.core.workspace.user_profile import UserHabitsProfile
+    api, original = _acp_edit_api(tmp_path)
+    api.settings_mgr.get().user_habits = UserHabitsProfile(speaking_style="Short Chinese replies")
+    marker = {"session_id": "remote-new", "instruction_hash": "a" * 64, "profile_hash": "b" * 64}
+    calls = []
+    async def _run(_runtime, _binding, **kwargs):
+        calls.append(kwargs)
+        return _acp_result(host_context=marker)
+    monkeypatch.setattr("argusai.core.agent_runtimes.run_acp_turn", _run)
+
+    result = api._run_acp_assistant_turn({
+        "session_id": "sess-a", "message": "Capture the authorized demo traffic",
+        "page": "proxy", "context": {"task_id": "task-demo"},
+    })
+
+    assert result["ok"], result
+    assert "inside ArgusAI" in calls[0]["host_instruction"]
+    assert "actual Agent identity" in calls[0]["host_instruction"]
+    assert "tool_search" in calls[0]["host_instruction"]
+    assert "argusai_invoke_tool" in calls[0]["host_instruction"]
+    assert "get_app_snapshot" in calls[0]["host_instruction"]
+    assert "Short Chinese replies" in calls[0]["user_habits"]
+    assert '"page": "proxy"' in calls[0]["message"]
+    assert '"task_id": "task-demo"' in calls[0]["message"]
+    assert original.history[-2].content == "Capture the authorized demo traffic"
+    assert original.runtime_binding.acp_host_context == marker
+
+
 @pytest.mark.parametrize("failure", ["result", "exception", "metadata_then_result"])
 def test_acp_edit_startup_failure_preserves_original_history_and_binding(tmp_path, monkeypatch, failure) -> None:
     api, original = _acp_edit_api(tmp_path)

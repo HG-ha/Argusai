@@ -106,6 +106,16 @@ const starts = () => calls.filter(call => call[0] === 'start');
 """
 
 CASES = [
+    ("pending_runtime_metadata_does_not_send_with_a_native_placeholder", r"""
+first.runtimePending = true;
+first.inputDraft = 'Continue with the chosen external Agent';
+first.pendingAttachments = [{ type: 'text', name: 'keep.txt', text: 'A' }];
+assert.equal(await ui.send(), false);
+assert.equal(starts().length, 0);
+assert.equal(first.inputDraft, 'Continue with the chosen external Agent');
+assert.equal(first.pendingAttachments[0].name, 'keep.txt');
+assert.equal(first.messages.length, 0);
+"""),
     ("late_rejected_start_after_cancel_restores_unaccepted_payload", r"""
 first.inputDraft = 'Never accepted';
 first.pendingAttachments = [{ type: 'text', name: 'keep.txt', text: 'A' }];

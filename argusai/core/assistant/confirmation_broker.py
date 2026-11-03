@@ -119,42 +119,42 @@ class ConfirmationBroker:
                 "arguments": json.dumps(arguments, ensure_ascii=False),
             },
         }
-        requirements = session._confirmation_requirements([tool_call])
-        permission_key = ""
-        if not requirements and always_confirm:
-            # The confirmation policy is a positive list of tools ArgusAI
-            # registered, so a name it has never seen produces no requirement
-            # and would run unasked. Callers relaying someone else's tool set
-            # ask for this: unknown means confirmable, not approved.
-            permission_key = str(session._mcp_permission_key(tool_name, arguments) or "")
-            if not (permission_key and session._tool_auto_approved(tool_name, arguments)):
-                requirements = [{
-                    "name": tool_name,
-                    "arguments": dict(arguments),
-                    "tool_call": tool_call,
-                }]
-        if not requirements:
-            return None
-        pending_id = f"external-{uuid.uuid4().hex}"
-        ticket = ExternalConfirmationTicket(
-            session_id=session_id,
-            pending_id=pending_id,
-            call_id=call_id,
-            tool_name=tool_name,
-            arguments=dict(arguments),
-            permission_key=permission_key,
-        )
-        pending = {
-            "external": True,
-            "pending_id": pending_id,
-            "version": 1,
-            "confirmations": requirements,
-            "tool_calls": [tool_call],
-        }
+        # Opening a waiter and rechecking the live approval policy share the
+        # resolver lock. A GUI toggle can therefore either release this ticket
+        # or take effect before it is opened, without leaving a stale waiter.
         with self._lock:
+            requirements = session._confirmation_requirements([tool_call])
+            permission_key = ""
+            if not requirements and always_confirm:
+                # Unknown outside-agent tools still require an explicit grant.
+                permission_key = str(session._mcp_permission_key(tool_name, arguments) or "")
+                if not (permission_key and session._tool_auto_approved(tool_name, arguments)):
+                    requirements = [{
+                        "name": tool_name,
+                        "arguments": dict(arguments),
+                        "tool_call": tool_call,
+                    }]
+            if not requirements:
+                return None
+            pending_id = f"external-{uuid.uuid4().hex}"
+            ticket = ExternalConfirmationTicket(
+                session_id=session_id,
+                pending_id=pending_id,
+                call_id=call_id,
+                tool_name=tool_name,
+                arguments=dict(arguments),
+                permission_key=permission_key,
+            )
+            pending = {
+                "external": True,
+                "pending_id": pending_id,
+                "version": 1,
+                "confirmations": requirements,
+                "tool_calls": [tool_call],
+            }
             self._external[(session_id, pending_id)] = ticket
             session._pending = pending
-        return ticket
+            return ticket
 
     def resolve_external(
         self,
@@ -164,35 +164,75 @@ class ConfirmationBroker:
         *,
         source: str = "gui",
     ) -> dict[str, Any] | None:
-        pending = getattr(session, "_pending", None)
-        if not isinstance(pending, dict) or not pending.get("external"):
-            return None
-        prepared = self.prepare(session, action, source=source)
-        if not prepared.get("ok"):
-            return prepared
-        pending_id = str(prepared.get("pending_id") or "")
         with self._lock:
+            pending = getattr(session, "_pending", None)
+            if not isinstance(pending, dict) or not pending.get("external"):
+                return None
+            # External waiters must bind to the card the client actually saw.
+            # prepare() retains native legacy defaults, so validate before it
+            # can supply the identity of a newer ticket to an unbound action.
+            decision = normalize_confirmation_decision(action)
+            if decision is None:
+                return {"ok": False, "error_code": "invalid_confirmation", "error": "invalid confirmation action"}
+            error = session._validate_confirmation_binding(
+                decision, pending, allow_legacy_unbound=False,
+            )
+            if error:
+                return {"ok": False, "error_code": "confirmation_changed", "error": error}
+            prepared = self.prepare(session, decision, source=source)
+            if not prepared.get("ok"):
+                return prepared
+            decision = prepared["decision"]
+            pending_id = str(prepared.get("pending_id") or "")
             ticket = self._external.get((session_id, pending_id))
-            if ticket is None:
+            if ticket is None or ticket.event.is_set():
                 return {
                     "ok": False,
                     "error_code": "confirmation_expired",
                     "error": "external confirmation is no longer pending",
                 }
-            decision = prepared["decision"]
             if decision.get("type") == "batch_confirmation_decision":
-                verdict = str(dict(decision.get("decisions") or {}).get(ticket.call_id) or "deny")
+                verdict = str(dict(decision.get("decisions") or {}).get(ticket.call_id) or "")
+                if not verdict:
+                    return {
+                        "ok": False, "error_code": "confirmation_changed",
+                        "error": "the current external call is absent from this confirmation",
+                    }
             else:
                 verdict = str(decision.get("verdict") or "deny")
+            session._record_confirmation_decision(decision, pending, timestamp=time.time())
             ticket.decision = verdict
-            ticket.event.set()
             session._pending = None
-        return {
-            "ok": True,
-            "resolved_external": True,
-            "pending_id": pending_id,
-            "verdict": ticket.decision,
-        }
+            ticket.event.set()
+            return {
+                "ok": True,
+                "resolved_external": True,
+                "pending_id": pending_id,
+                "verdict": ticket.decision,
+            }
+
+    def resolve_external_if_auto_approved(self, session_id: str, session: Any) -> dict[str, Any] | None:
+        """Release a live waiter only under this session's current tool policy."""
+        with self._lock:
+            pending = getattr(session, "_pending", None)
+            if not isinstance(pending, dict) or not pending.get("external"):
+                return None
+            pending_id = str(pending.get("pending_id") or "")
+            ticket = self._external.get((session_id, pending_id))
+            if ticket is None or ticket.event.is_set():
+                return None
+            if not session._tool_auto_approved(ticket.tool_name, ticket.arguments):
+                return None
+            receipt = {
+                "pending_id": pending_id,
+                "version": int(pending.get("version") or 1),
+                "call_id": ticket.call_id,
+                "verdict": "allow",
+            }
+            resolved = self.resolve_external(session_id, session, {
+                "type": "confirmation_decision", **receipt,
+            })
+            return receipt if resolved and resolved.get("ok") else None
 
     def wait_external(
         self,

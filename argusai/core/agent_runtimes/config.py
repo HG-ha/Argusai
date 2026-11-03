@@ -198,6 +198,16 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
         for key in ("image", "audio", "embedded_context"):
             if key in raw_prompt_capabilities:
                 acp_prompt_capabilities[key] = bool(raw_prompt_capabilities.get(key))
+    raw_host_context = raw.get("acp_host_context")
+    acp_host_context: dict[str, str] = {}
+    if isinstance(raw_host_context, Mapping):
+        remote_id = str(raw_host_context.get("session_id") or "").strip()[:512]
+        hashes = {
+            key: str(raw_host_context.get(key) or "").strip().lower()
+            for key in ("instruction_hash", "profile_hash")
+        }
+        if remote_id and all(re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes.values()):
+            acp_host_context = {"session_id": remote_id, **hashes}
     return SessionRuntimeBinding(
         runtime_id=runtime_id,
         workspace_mode=workspace_mode,  # type: ignore[arg-type]
@@ -207,6 +217,7 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
         acp_config=acp_config,
         acp_config_options=acp_config_options,
         acp_prompt_capabilities=acp_prompt_capabilities,
+        acp_host_context=acp_host_context,
     )
 
 

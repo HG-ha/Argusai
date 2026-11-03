@@ -715,6 +715,75 @@ def test_acp_receives_the_users_message_without_client_instructions(
     assert result.text == "analyze the authorized staging target"
 
 
+def test_acp_host_bootstrap_tracks_the_remote_session_and_preference_changes(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace
+    import argusai.core.agent_runtimes.acp_turn as turns
+
+    prompts = []
+    can_load = True
+    fail_load = False
+    class Connection:
+        async def load_session(self, *_args, **_kwargs):
+            if fail_load:
+                raise RuntimeError("the remote session could not be loaded")
+            return {}
+        async def new_session(self, *_args, **_kwargs):
+            return {"sessionId": "remote-new"}
+        async def prompt(self, _session_id, blocks):
+            prompts.append([block.model_dump(mode="json", by_alias=True) for block in blocks])
+            return {"stopReason": "end_turn"}
+    class Process:
+        def __init__(self, *_args, **_kwargs):
+            self.connection = Connection()
+        async def initialize(self, **_kwargs):
+            return {"agentCapabilities": {"loadSession": can_load}}
+        async def close(self):
+            pass
+    monkeypatch.setattr(turns, "ACPAgentProcess", Process)
+    runtime = AgentRuntimeConfig(id="test-acp", name="Test ACP", backend="acp")
+    binding = SessionRuntimeBinding(runtime_id="test-acp", acp_session_id="remote-old", locked=True)
+    def run(current, habits="concise", **kwargs):
+        result = asyncio.run(turns.run_acp_turn(
+            runtime, current, message="current goal", cwd=str(tmp_path),
+            host_instruction="[ArgusAI host context] Use the workbench bridge.",
+            user_habits=habits, **kwargs,
+        ))
+        assert result.ok, result.to_dict()
+        return result
+    text = lambda: "\n".join(str(block.get("text") or "") for block in prompts[-1])
+
+    first = run(binding)
+    assert "[ArgusAI host context]" in text() and "concise" in text()
+    assert text().count("current goal") == 1
+    binding = replace(binding, acp_host_context=first.host_context)
+    roundtrip = normalize_session_runtime_binding(binding.to_dict())
+    assert roundtrip.acp_host_context == binding.acp_host_context
+    second = run(roundtrip)
+    assert "[ArgusAI host context]" not in text() and "concise" not in text()
+    updated = run(replace(binding, acp_host_context=second.host_context), habits="detailed")
+    assert "[ArgusAI host context]" not in text() and "detailed" in text()
+    cleared = run(replace(binding, acp_host_context=updated.host_context), habits="")
+    assert "preferences have been cleared" in text()
+
+    can_load = False
+    restarted = run(replace(binding, acp_host_context=cleared.host_context), habits="concise",
+                    stateless_message="TRANSCRIPT CURRENT GOAL")
+    assert restarted.acp_session_id == "remote-new"
+    assert restarted.host_context["session_id"] == "remote-new"
+    assert "[ArgusAI host context]" in text() and "concise" in text()
+    assert "TRANSCRIPT CURRENT GOAL" in text()
+    can_load = True
+    fail_load = True
+    before = len(prompts)
+    failed = asyncio.run(turns.run_acp_turn(
+        runtime, replace(binding, acp_session_id="remote-new", acp_host_context=restarted.host_context),
+        message="next goal", cwd=str(tmp_path), host_instruction="[ArgusAI host context] Use the workbench bridge.",
+    ))
+    assert not failed.ok
+    assert failed.host_context == {}
+    assert len(prompts) == before  # loading errors do not silently create a fresh conversation
+
+
 def test_acp_turn_replays_transcript_when_load_session_is_unsupported(
     tmp_path: Path,
 ) -> None:

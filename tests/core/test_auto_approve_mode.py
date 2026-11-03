@@ -193,12 +193,24 @@ def test_global_default_only_seeds_a_conversation_once() -> None:
 def test_composer_toggle_never_changes_other_sessions_or_global_default(tmp_path) -> None:
     from types import SimpleNamespace
     from argusai.gui.assistant_tools import AssistantToolsMixin
+    from argusai.core.assistant.confirmation_broker import ConfirmationBroker
 
     selected = AssistantSession()
     other = AssistantSession()
     settings = SimpleNamespace(assistant_auto_approve=False, assistant_tool_always_allow=[])
+    broker = ConfirmationBroker()
+    ticket = broker.open_external(
+        "selected", selected, tool_name="external_agent_tool",
+        arguments={"agent": "test-acp", "kind": "execute"}, call_id="selected-call", always_confirm=True,
+    )
+    other_ticket = broker.open_external(
+        "other", other, tool_name="external_agent_tool",
+        arguments={"agent": "test-acp", "kind": "execute"}, call_id="other-call", always_confirm=True,
+    )
+    assert ticket is not None and other_ticket is not None
     saved = []
     class Host(AssistantToolsMixin):
+        _assistant_confirmation_broker = broker
         settings_mgr = SimpleNamespace(get=lambda: settings, update=lambda fn: pytest.fail("global setting changed"))
         _assistant_sessions = {"selected": selected, "other": other}
         def _validate_session_id(self, value):
@@ -217,6 +229,18 @@ def test_composer_toggle_never_changes_other_sessions_or_global_default(tmp_path
     assert not other.user_auto_approve_mode
     assert not settings.assistant_auto_approve
     assert saved[-1]["auto_approve_mode"] is True
+    assert result["external_confirmation"] == {
+        "pending_id": ticket.pending_id, "version": 1,
+        "call_id": "selected-call", "verdict": "allow",
+    }
+    assert ticket.event.is_set() and ticket.decision == "allow"
+    assert selected._pending is None
+    assert not other_ticket.event.is_set()
+    assert other._pending["pending_id"] == other_ticket.pending_id
+    assert broker.open_external(
+        "selected", selected, tool_name="external_agent_tool",
+        arguments={"agent": "test-acp", "kind": "execute"}, call_id="next-call", always_confirm=True,
+    ) is None
 
 
 def test_seeding_false_default_preserves_legacy_per_tool_grants() -> None:
