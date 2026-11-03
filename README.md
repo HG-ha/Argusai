@@ -51,7 +51,7 @@ flowchart TB
     ACP --> Main
 
     Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>原生或 ACP 子 Agent"]
-    Main -->|组织协作 / 检查进展| Team["持久 Agent Team<br/>角色、模型、群聊与记录"]
+    Main -->|组织 / 复核| Team["持久 Agent Team<br/>角色、模型、群聊与记录"]
     Main -->|按需读取| Skills["Skills<br/>任务方法与工作流"]
     Main --> Tools["内置工具目录与调用桥接<br/>按需发现、工具授权与确认"]
     Sub --> Tools
@@ -69,10 +69,13 @@ flowchart TB
     Knowledge --> Review
     Extensions -.-> Review
     Review --> Delivery["报告 / PoC / 工作区产物<br/>对话 / 配对渠道<br/>消息与文件"]
-    Review --> Continue["更新计划与分工<br/>继续调查 / 整改复测<br/>等待下次唤醒"]
+    Review -->|更新计划，继续 / 复测| Main
+    Sub -.->|完成通知 / 条件唤醒| Main
+    Team -->|公开消息入队，成员处理或跳过| Team
+    Team -.->|查询群聊与产物| Review
 ```
 
-内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。详见[架构与开发](wiki/Architecture-and-Development.md)。
+内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。单轮循环与跨轮唤醒见[持续执行与主动发现](#持续执行与主动发现)，模块入口见[架构与开发](wiki/Architecture-and-Development.md)。
 
 **模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
 
@@ -178,6 +181,43 @@ ArgusAI 支持数十小时级的单轮自主执行。这里的“单轮”指一
 
 这是运行时配置与控制流提供的能力，实际时长受任务、模型额度、工具、资源和授权限制。长调查、样本批分析和多阶段验证可以在同一轮内持续推进；需要跨轮或在下一次事件发生时继续的工作，由持久任务与调度器接续。
 
+原生运行时保留稳定的核心控制工具，领域工具通过目录渐进发现和调用；每次模型请求前按上下文预算整理历史，大结果可保留摘要和产物引用。下面展示当前轮继续、子任务完成唤醒和后台状态查询如何接回执行循环。ACP 会话的推理循环由所选外部 Agent 执行。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户 / 会话入口
+    participant A as 主 Agent 运行时
+    participant M as 模型
+    participant T as 工具 / 子 Agent
+    participant S as 状态与产物
+    U->>A: 目标、材料或续跑请求
+    loop 尚有可推进工作，且运行条件允许
+        A->>M: 稳定控制工具 / 预算内上下文
+        M-->>A: 下一步调用、委派或等待
+        alt 调用领域能力
+            A->>T: 工具发现、技能读取、确认与执行
+            T-->>A: 结果 / 证据引用 / 后台回执
+        else 当前轮短等待
+            A->>A: wait_for_duration，到时返回，可取消
+        else 等待子 Agent
+            A->>T: wait_for_agents
+            T-->>A: 完成、超时或用户插话后返回状态
+        else 查询后台作业
+            A->>T: background_job_status(job_ref)
+            T-->>A: 运行状态或已有结果，按需再等再查
+        end
+        A->>S: 更新 Todo / 检查点，保存所需产物
+        S-->>A: 摘要、引用与下一步依据
+    end
+    opt 子任务结束，父会话空闲且满足继续条件
+        T-->>A: agent_completion 批次通知，唤醒父会话
+        A->>M: 读取结果，继续复核与汇报
+    end
+    A-->>U: 交付结果 / 等待人工 / 报告本轮停止原因
+```
+
+`wait_for_agents` 可因用户插话结束等待，子任务仍可继续；`wait_for_duration` 是可取消的短等待。普通后台作业通过 `job_ref` 查询，持久小队通过群聊和成员队列协作；监督这些工作也可交给下面的持续任务。
+
 ### 跨轮续跑与事件驱动
 
 Agent 将进度保存为待办、检查点、知识和产物，调度器在后续触发时接上工作。
@@ -186,23 +226,31 @@ Agent 将进度保存为待办、检查点、知识和产物，调度器在后�
 
 ```mermaid
 flowchart TB
-    T[间隔 / Cron / Webhook / 文件变化] --> work
-    subgraph work[每轮执行]
-        direction LR
-        A[唤醒 Agent<br/>读取计划与检查点] --> W[检查、分析与验证]
-        W --> E[归档证据<br/>更新基线与进度]
-    end
-    work --> D{任务状态}
-    D -->|待继续| T
-    D -->|有变化或需人工处理| N[报告与通知]
-    D -->|已完成| F[收束与停用续跑]
-    classDef accent fill:#102b40,stroke:#1687c9,color:#e8f3fa
-    classDef result fill:#332014,stroke:#f05123,color:#fff0e7
-    class A,W,E accent
-    class N,F result
+    Register["已配置的持续任务"] --> T
+    T["间隔 / Cron<br/>签名 Webhook / 文件变化"] --> Scheduler["调度器<br/>宿主租约 / 执行锁"]
+    Scheduler --> Ready{"会话可执行？"}
+    Ready -->|正忙| Busy["延期检查<br/>超窗可跳过本次"]
+    Busy --> Waiting["等待后续检查、时间或事件"]
+    Ready -->|可执行| Destination["执行对话"]
+    Destination --> Existing["session<br/>唤醒指定已有会话"]
+    Destination --> Dedicated["dedicated_session<br/>首次创建，后续复用"]
+    Destination --> New["new_session<br/>每次独立新会话"]
+    Existing --> Context["读取对应任务上下文、Todo<br/>检查点、知识与产物引用"]
+    Dedicated --> Context
+    New --> Context
+    Context --> Run["执行下一阶段<br/>巡检 / 分析 / 验证<br/>小队或作业状态检查"]
+    Run --> Save["保存进度与产物<br/>对比基线 / 更新检查点"]
+    Save --> Notify["按策略通知<br/>可选回报来源对话"]
+    Notify --> Enabled{"仍启用且可运行？"}
+    Enabled -->|继续| Waiting
+    Waiting --> T
+    Enabled -->|停用 / 次数耗尽| Stop["停止后续触发<br/>保留记录与产物"]
+    Scheduler -->|已停用 / 次数耗尽| Stop
 ```
 
 </div>
+
+新会话通过任务上下文、知识和产物接续工作；指定会话与任务专属会话可以继续各自历史。一次运行结束后，计划仍可等待下一次触发；目标完成时由 Agent 按约定停用，或由用户停用、达到次数上限后停止。调度宿主需要保持运行，每次调度执行有独立截止。
 
 | 何时触发 | 适合做什么 |
 | --- | --- |

@@ -51,7 +51,7 @@ flowchart TB
     ACP --> Main
 
     Main -->|Delegate / collect results| Sub["Temporary subagents<br/>Native or ACP workers"]
-    Main -->|Coordinate / check progress| Team["Persistent Agent Team<br/>Roles, models, chat and records"]
+    Main -->|Coordinate / review| Team["Persistent Agent Team<br/>Roles, models, chat and records"]
     Main -->|Read as needed| Skills["Skills<br/>Task methods and workflows"]
     Main --> Tools["Built-in tool catalog and bridge<br/>Discovery, permissions and confirmations"]
     Sub --> Tools
@@ -69,10 +69,13 @@ flowchart TB
     Knowledge --> Review
     Extensions -.-> Review
     Review --> Delivery["Reports / PoCs / artifacts<br/>Conversation / paired chat<br/>Messages and files"]
-    Review --> Continue["Update the plan and assignments<br/>Continue / retest<br/>Wait for the next trigger"]
+    Review -->|Update plan, continue / retest| Main
+    Sub -.->|Completion notice / eligible parent wake| Main
+    Team -->|Queue public messages / respond or pass| Team
+    Team -.->|Read chat and artifacts| Review
 ```
 
-Domain tools and Skills are discovered and used as needed. The session sandbox provides files and a script environment; browser, proxy and scan services, and external Agents, use their own execution environments. See [architecture and development](wiki/Architecture-and-Development.md).
+Domain tools and Skills are discovered and used as needed. The session sandbox provides files and a script environment; browser, proxy and scan services, and external Agents, use their own execution environments. See [execution loops and wakeups](#continuing-execution-and-proactive-discovery) for control flow, and [architecture and development](wiki/Architecture-and-Development.md) for module entry points.
 
 **Use model endpoints or a local Agent.** Configure AI endpoints directly, or connect locally installed and signed-in Agents such as Codex, Cursor and Claude Code through ACP. They can work inside ArgusAI and call workbench capabilities through its tool bridge. An ACP main conversation does not require a separate native ArgusAI model endpoint; native subagents, team members and other AI analysis tasks use their own runtime and model configuration.
 
@@ -180,6 +183,43 @@ ArgusAI supports autonomous execution on the scale of tens of hours within a sin
 
 This is a runtime configuration and control-flow capability. Actual duration depends on the task, model quota, tools, resources and authorization. Long investigations, sample batches and multi-stage validation can progress within one turn; durable tasks and the scheduler carry work across turns or resume it on a later event.
 
+The native runtime keeps a stable core control surface and discovers domain tools through the catalog. Before model requests it manages history against the context budget; large results can use summaries and artifact references. The sequence below distinguishes continuing the current turn, waking a parent after subtask completion, and querying background work. ACP conversations use the selected external Agent's reasoning loop.
+
+```mermaid
+sequenceDiagram
+    participant U as User / session entry
+    participant A as Main Agent runtime
+    participant M as Model
+    participant T as Tools / subagents
+    participant S as State and artifacts
+    U->>A: Goal, materials or continuation request
+    loop Work remains actionable and runtime conditions allow
+        A->>M: Stable core tools / budgeted context
+        M-->>A: Next call, delegation or wait
+        alt Invoke workbench capabilities
+            A->>T: Discover tools, read Skills, confirm and execute
+            T-->>A: Results / evidence references / job receipt
+        else Short wait in the current turn
+            A->>A: wait_for_duration, returns when due, cancellable
+        else Wait for subagents
+            A->>T: wait_for_agents
+            T-->>A: Status after completion, timeout or user interjection
+        else Query a background job
+            A->>T: background_job_status(job_ref)
+            T-->>A: Current status or results, wait and query as needed
+        end
+        A->>S: Update Todo / checkpoints, save needed artifacts
+        S-->>A: Summaries, references and next-step context
+    end
+    opt Subtasks end, parent is idle and eligible to continue
+        T-->>A: Batched agent_completion notice wakes the parent
+        A->>M: Read results, continue review and reporting
+    end
+    A-->>U: Deliver / wait for input / explain why the turn stopped
+```
+
+A user interjection can end `wait_for_agents` while workers continue; `wait_for_duration` is a cancellable short wait. Ordinary background jobs are queried by `job_ref`, while persistent teams coordinate through chat and member queues. The scheduled tasks below can also supervise that work.
+
 ### Cross-turn continuation and events
 
 The Agent stores progress in todos, checkpoints, knowledge and artifacts. The scheduler reconnects that work on the next trigger.
@@ -188,23 +228,31 @@ The Agent stores progress in todos, checkpoints, knowledge and artifacts. The sc
 
 ```mermaid
 flowchart TB
-    T[Interval / Cron / Webhook / File changes] --> work
-    subgraph work[Each run]
-        direction LR
-        A[Wake the Agent<br/>Read plan and checkpoint] --> W[Check, analyze and validate]
-        W --> E[Archive evidence<br/>Update baseline and progress]
-    end
-    work --> D{Task state}
-    D -->|Continue later| T
-    D -->|Changes or human action| N[Report and notify]
-    D -->|Complete| F[Finish and disable continuation]
-    classDef accent fill:#102b40,stroke:#1687c9,color:#e8f3fa
-    classDef result fill:#332014,stroke:#f05123,color:#fff0e7
-    class A,W,E accent
-    class N,F result
+    Register["Configured persistent task"] --> T
+    T["Interval / Cron<br/>Signed Webhook / file changes"] --> Scheduler["Scheduler<br/>Host lease / execution lock"]
+    Scheduler --> Ready{"Session available?"}
+    Ready -->|Busy| Busy["Defer and check again<br/>May skip after the deferral window"]
+    Busy --> Waiting["Wait for a later check, time or event"]
+    Ready -->|Available| Destination["Execution destination"]
+    Destination --> Existing["session<br/>Wake a specified conversation"]
+    Destination --> Dedicated["dedicated_session<br/>Create once, then reuse"]
+    Destination --> New["new_session<br/>A separate conversation each run"]
+    Existing --> Context["Read the task context, Todo,<br/>checkpoints, knowledge and artifact references"]
+    Dedicated --> Context
+    New --> Context
+    Context --> Run["Execute the next stage<br/>Patrol / analyze / validate<br/>Check team or background work"]
+    Run --> Save["Save progress and artifacts<br/>Compare baselines / update checkpoints"]
+    Save --> Notify["Notify by policy<br/>Optionally report to the origin conversation"]
+    Notify --> Enabled{"Enabled and eligible?"}
+    Enabled -->|Continue| Waiting
+    Waiting --> T
+    Enabled -->|Disabled / run limit reached| Stop["Stop future triggers<br/>Keep records and artifacts"]
+    Scheduler -->|Disabled / run limit reached| Stop
 ```
 
 </div>
+
+New conversations carry work through explicit task context, knowledge and artifacts; existing and job-owned conversations retain their own history. Finishing one run can leave the schedule waiting for its next trigger. The Agent disables it as agreed when the objective is met, or it stops through user action or its run limit. The scheduling host must remain running, and each scheduled execution has its own deadline.
 
 | Trigger | Useful work |
 | --- | --- |
