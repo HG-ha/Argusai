@@ -19,6 +19,7 @@
 <p align="center">
   <a href="wiki/Home.md"><strong>Documentation (中文)</strong></a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="#workbench-architecture">Architecture</a> ·
   <a href="#in-action">In action</a> ·
   <a href="#continuing-execution-and-proactive-discovery">Automation</a> ·
   <a href="https://github.com/HG-ha/Argusai/releases">Releases</a> ·
@@ -35,6 +36,47 @@ Give the Agent the goal, materials and authorized scope. It organizes scanning, 
 The full conversation entry in the sidebar and the movable floating button both open the same Agent workspace. The Agent understands the current application page, the task or reverse job being viewed, and related work state. Reference specific materials so it can continue the work in front of you. Feature pages and conversations share the same tasks, samples and evidence.
 
 The project is intended for internal security teams, application security engineers, researchers and explicitly authorized testers. Its general Agent runtime also supports file processing, routine information work and desktop collaboration; the built-in tools and workflows currently focus on security analysis and reverse engineering.
+
+## Workbench architecture
+
+The main Agent plans around the goal, reads Skills, discovers tools and delegates to subagents or a persistent team as needed. Workbench capabilities return results with references to materials and evidence. The Agent reviews them, updates the plan and delivers a report or continues the next stage.
+
+```mermaid
+flowchart TB
+    Input["Desktop / floating entry / CLI<br/>Paired chat on a phone or other device"] --> Session["Session runtime"]
+    Events["Interval / Cron<br/>Webhook / file changes"] --> Session
+    Session --> Native["Configured AI endpoints<br/>ArgusAI native runtime"]
+    Session --> ACP["Local Agent via ACP<br/>Codex / Cursor<br/>Claude Code"]
+    Native --> Main["Main Agent<br/>Understand, plan and coordinate<br/>Execute, review and deliver"]
+    ACP --> Main
+
+    Main -->|Delegate / collect results| Sub["Temporary subagents<br/>Native or ACP workers"]
+    Main -->|Coordinate / check progress| Team["Persistent Agent Team<br/>Roles, models, chat and records"]
+    Main -->|Read as needed| Skills["Skills<br/>Task methods and workflows"]
+    Main --> Tools["Built-in tool catalog and bridge<br/>Discovery, permissions and confirmations"]
+    Sub --> Tools
+    Team --> Tools
+    Skills -.->|Methods| Tools
+
+    Tools --> Web["Browser / MITM proxy<br/>Page actions, capture,<br/>breakpoints and replay"]
+    Tools --> Analysis["Scans / reverse engineering<br/>Checks, JS / WASM,<br/>mobile and binary analysis"]
+    Tools --> Execution["Sandbox / hosts / desktop<br/>Files, scripts, SSH and devices"]
+    Tools --> Knowledge["Knowledge / evidence / reports<br/>Cases, artifacts and evidence"]
+    Tools -.-> Extensions["Optional tools and integrations<br/>MCP / external scanners<br/>Ghidra / Frida / JADX"]
+    Web --> Review["Main Agent reviews results and evidence"]
+    Analysis --> Review
+    Execution --> Review
+    Knowledge --> Review
+    Extensions -.-> Review
+    Review --> Delivery["Reports / PoCs / artifacts<br/>Conversation / paired chat<br/>Messages and files"]
+    Review --> Continue["Update the plan and assignments<br/>Continue / retest<br/>Wait for the next trigger"]
+```
+
+Domain tools and Skills are discovered and used as needed. The session sandbox provides files and a script environment; browser, proxy and scan services, and external Agents, use their own execution environments. See [architecture and development](wiki/Architecture-and-Development.md).
+
+**Use model endpoints or a local Agent.** Configure AI endpoints directly, or connect locally installed and signed-in Agents such as Codex, Cursor and Claude Code through ACP. They can work inside ArgusAI and call workbench capabilities through its tool bridge. An ACP main conversation does not require a separate native ArgusAI model endpoint; native subagents, team members and other AI analysis tasks use their own runtime and model configuration.
+
+**Continue work on PCs and servers from your phone.** Pair QQ, Feishu, Telegram or another supported channel to send tasks, check progress and receive reports and files from a phone, tablet or another computer. The Agent uses SSH, MCP or other connections configured on its work host to operate reachable computers and servers. Desktop control acts on the desktop hosting the tool, and results can return to the paired channel. See [integrations and messaging](wiki/Integrations.md).
 
 ## In action
 

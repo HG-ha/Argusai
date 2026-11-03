@@ -19,6 +19,7 @@
 <p align="center">
   <a href="wiki/Home.md"><strong>使用文档</strong></a> ·
   <a href="wiki/Quick-Start.md">快速开始</a> ·
+  <a href="#工作架构">工作架构</a> ·
   <a href="#运行界面">运行界面</a> ·
   <a href="#持续执行与主动发现">持续执行</a> ·
   <a href="https://github.com/HG-ha/Argusai/releases">下载发行包</a> ·
@@ -35,6 +36,47 @@ ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全
 侧栏的完整对话与可拖动悬浮球都是任务入口，进入的是同一个 Agent 工作区。Agent 能理解当前应用页面、正在查看的任务或逆向作业，以及相关工作状态；引用具体材料后，它可以接着你正在做的工作继续执行。功能页与对话之间共享任务、样本和证据。
 
 项目面向企业安全团队、应用安全工程师、安全研究人员和明确授权的测试人员。底层 Agent 运行时也支持文件处理、日常信息整理和桌面协作，当前内置工具与工作流重点覆盖安全分析和逆向研究。
+
+## 工作架构
+
+主 Agent 围绕目标建立计划，按需读取 Skills、发现工具，委派子 Agent 或组织持久小队，联动工作台各项能力。执行结果带着材料与证据引用返回，由主 Agent 复核、调整计划，并交付报告或继续下一阶段。
+
+```mermaid
+flowchart TB
+    Input["桌面 / 悬浮球 / CLI<br/>手机等设备的配对通讯渠道"] --> Session["会话运行方式"]
+    Events["间隔 / Cron<br/>Webhook / 文件变化"] --> Session
+    Session --> Native["已配置的 AI 端点<br/>ArgusAI 原生运行时"]
+    Session --> ACP["本地 Agent（ACP）<br/>Codex / Cursor<br/>Claude Code"]
+    Native --> Main["主 Agent<br/>理解目标、规划与调度<br/>执行、复核与交付"]
+    ACP --> Main
+
+    Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>原生或 ACP 子 Agent"]
+    Main -->|组织协作 / 检查进展| Team["持久 Agent Team<br/>角色、模型、群聊与记录"]
+    Main -->|按需读取| Skills["Skills<br/>任务方法与工作流"]
+    Main --> Tools["内置工具目录与调用桥接<br/>按需发现、工具授权与确认"]
+    Sub --> Tools
+    Team --> Tools
+    Skills -.->|方法指导| Tools
+
+    Tools --> Web["浏览器 / MITM 代理<br/>网页操作 / 抓包<br/>断点 / 重放 / HAR"]
+    Tools --> Analysis["扫描 / 全域逆向<br/>Checks、JS / WASM<br/>移动端与二进制分析"]
+    Tools --> Execution["沙盒 / 主机 / 桌面<br/>文件、脚本、SSH 与设备"]
+    Tools --> Knowledge["知识 / 证据 / 报告<br/>Case、Artifact、Evidence"]
+    Tools -.-> Extensions["可选扩展与工具链<br/>MCP / 外部扫描器<br/>Ghidra / Frida / JADX"]
+    Web --> Review["主 Agent 复核结果与证据"]
+    Analysis --> Review
+    Execution --> Review
+    Knowledge --> Review
+    Extensions -.-> Review
+    Review --> Delivery["报告 / PoC / 工作区产物<br/>对话 / 配对渠道<br/>消息与文件"]
+    Review --> Continue["更新计划与分工<br/>继续调查 / 整改复测<br/>等待下次唤醒"]
+```
+
+内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。详见[架构与开发](wiki/Architecture-and-Development.md)。
+
+**模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
+
+**一部手机，也能接续电脑与服务器上的工作。** 在 QQ、飞书、Telegram 等渠道完成配对后，手机、平板或另一台电脑都能成为任务入口，用于下达任务、查看进度、接收报告和文件。Agent 通过工作宿主上已配置的 SSH、MCP 或其他连接处理可达电脑与服务器上的任务，桌面控制操作运行工具的宿主桌面，结果可回传到当前配对渠道。接入方式见[扩展与通讯渠道](wiki/Integrations.md)。
 
 ## 运行界面
 
