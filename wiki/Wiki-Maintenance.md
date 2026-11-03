@@ -43,7 +43,7 @@ python scripts/wiki_docs.py export --output-dir build/wiki-v0.1.7 --ref v0.1.7
 
 先检查导出结果，尤其是导航、源码链接和图片路径。导出操作不创建远端页面、不执行 Git 提交，也不推送。
 
-## 经确认后同步到远端
+## 同步到 GitHub Wiki
 
 准备发布 Wiki 时，先在 GitHub 仓库启用 Wiki 并创建初始页面，再按 [GitHub 官方说明](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages) 克隆：
 
@@ -53,7 +53,9 @@ git clone https://github.com/HG-ha/Argusai.wiki.git
 
 把已核对的导出 Markdown 复制到这个独立 Wiki 工作区，检查差异，再在该目录中提交和推送。不要把应用仓库的 `.git` 或运行时数据复制进去。
 
-本轮文档工作只准备源稿和本地导出，不执行上述远端同步。以后更新命令、行为或页面目录时，先修改主仓库源稿、运行检查，再重新导出，避免在两个位置维护出不同版本。
+发布文档时，需要分别推送主仓库和独立 Wiki 仓库。先更新主仓库源稿及图片、运行检查并推送，再重新导出到独立 Wiki 工作区，检查差异后提交、推送 Wiki。只推送主仓库不会更新 Wiki 页签。
+
+同步后打开 Wiki 首页、侧栏和修改过的页面，确认图文教程中的图片实际加载成功。图片地址使用主仓库的内容，因此应先推送主仓库，再发布引用它们的 Wiki 页面。
 
 ## 页面组织
 
