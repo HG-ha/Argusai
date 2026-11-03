@@ -120,11 +120,14 @@ def python_step(job, name):
     return compile(step["run"], f"workflow:{name}", "exec")
 
 
-def test_only_version_tag_pushes_publish_after_all_platforms_succeed():
+def test_main_builds_artifacts_but_only_version_tag_pushes_publish():
     config = workflow()
     assert set(config["on"]) == {"push", "workflow_dispatch"}
-    assert config["on"]["push"] == {"tags": ["v*"]}
+    assert config["on"]["push"] == {"branches": ["main"], "tags": ["v*"]}
     assert config["permissions"] == {"contents": "read"}
+    assert config["concurrency"]["cancel-in-progress"] == (
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
+    )
     publish = config["jobs"]["publish"]
     assert publish["needs"] == ["validate", "build", "source"]
     assert set(config["on"]["workflow_dispatch"]["inputs"]) == {"ref"}
@@ -132,6 +135,9 @@ def test_only_version_tag_pushes_publish_after_all_platforms_succeed():
     assert publish["permissions"] == {"contents": "write"}
     validate = config["jobs"]["validate"]
     assert validate["steps"][0]["with"]["ref"] == "${{ github.event_name == 'push' && github.sha || inputs.ref || github.sha }}"
+    assert validate["outputs"]["artifact_suffix"] == "${{ steps.metadata.outputs.artifact_suffix }}"
+    metadata_step = next(step for step in validate["steps"] if step.get("id") == "metadata")
+    assert metadata_step["env"]["RELEASE_TAG"] == "${{ " + publish["if"] + " && github.ref_name || '' }}"
     tag_validation = next(step for step in validate["steps"] if step.get("name") == "Validate release tag target")
     assert tag_validation["if"] == publish["if"]
     assert tag_validation["env"]["EVENT_SHA"] == "${{ github.sha }}"
@@ -142,6 +148,8 @@ def test_only_version_tag_pushes_publish_after_all_platforms_succeed():
     assert '["git", "push", "origin", "HEAD:main"]' in website_step["run"]
     assert "--tags" not in website_step["run"]
     build = config["jobs"]["build"]
+    assert "if" not in build  # Main pushes and manual runs exercise all native builds.
+    assert build["steps"][0]["with"]["ref"] == "${{ needs.validate.outputs.commit }}"
     assert build["strategy"]["fail-fast"] == "false"
     assert {(row["runtime"], row["os"], row["architecture"]) for row in build["strategy"]["matrix"]["include"]} == {
         ("win-x64", "windows-2022", "x64"), ("win-arm64", "windows-11-arm", "arm64"),
@@ -157,15 +165,70 @@ def test_only_version_tag_pushes_publish_after_all_platforms_succeed():
     assert names.index("Verify source, all five packages and checksums") < names.index("Publish verified release assets")
     source = config["jobs"]["source"]
     assert source["needs"] == "validate"
+    assert source["env"]["RELEASE_TAG"] == "${{ needs.validate.outputs.release_tag }}"
     assert source["steps"][0]["with"]["ref"] == "${{ needs.validate.outputs.commit }}"
-    assert "if" not in source  # Manual runs get a downloadable source artifact too.
+    assert "if" not in source  # Main pushes and manual runs get source artifacts too.
     upload = next(step for step in source["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
-    assert upload["with"]["name"] == "ArgusAI-${{ needs.validate.outputs.version }}-source"
+    assert upload["with"]["name"] == (
+        "ArgusAI-${{ needs.validate.outputs.version }}-source${{ needs.validate.outputs.artifact_suffix }}"
+    )
     assert upload["with"]["if-no-files-found"] == "error"
+    native_upload = next(step for step in build["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert native_upload["with"]["name"] == (
+        "ArgusAI-${{ needs.validate.outputs.version }}-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}"
+    )
+    assert native_upload["with"]["if-no-files-found"] == "error"
     for job in config["jobs"].values():
         for step in job["steps"]:
             if step.get("shell") == "python":
                 compile(step["run"], "workflow-inline-python", "exec")
+
+
+@pytest.mark.parametrize("event, ref, release_tag", [
+    ("push", "refs/heads/main", ""),
+    ("workflow_dispatch", "refs/heads/main", ""),
+    ("workflow_dispatch", "refs/tags/v0.1.0", ""),
+    ("push", "refs/tags/v0.1.0", "v0.1.0"),
+])
+def test_metadata_distinguishes_branch_manual_and_tag_artifacts(monkeypatch, tmp_path, event, ref, release_tag):
+    commit = "12345678" + "a" * 32
+    output = tmp_path / "github-output"
+    summary = tmp_path / "github-summary"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    monkeypatch.setenv("GITHUB_REF", ref)
+    monkeypatch.setenv("RELEASE_TAG", release_tag)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        expected = [sys.executable, "scripts/bump_version.py", "--check"]
+        if release_tag:
+            expected += ["--tag", release_tag]
+        assert command == expected
+        assert kwargs["check"] is True
+        return SimpleNamespace(returncode=0)
+
+    def check_output(command, **kwargs):
+        commands.append(command)
+        assert kwargs["text"] is True
+        if command == [sys.executable, "scripts/bump_version.py"]:
+            return "0.1.0\n"
+        assert command == ["git", "rev-parse", "HEAD"]
+        return commit + "\n"
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "check_output", check_output)
+    exec(python_step("validate", "Check version consistency and release tag"), {})
+    values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+    assert values["version"] == "0.1.0"
+    assert values["commit"] == commit
+    assert values["artifact_suffix"] == ("" if release_tag else "-12345678")
+    assert values["release_tag"] == release_tag
+    if not release_tag:
+        assert all("--tag" not in command for command in commands)
+    assert commit in summary.read_text(encoding="utf-8")
 
 
 def write_checksum(package):
@@ -240,6 +303,7 @@ def source_repository(monkeypatch, tmp_path):
     commit = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
     monkeypatch.chdir(repository)
     monkeypatch.setenv("RELEASE_VERSION", "0.1.0")
+    monkeypatch.setenv("RELEASE_TAG", "v0.1.0")
     monkeypatch.setenv("SOURCE_COMMIT", commit)
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "source-summary.md"))
     return repository, commit
@@ -285,6 +349,31 @@ def test_source_job_rejects_missing_tracked_notices(source_repository, monkeypat
     with pytest.raises(SystemExit, match="Missing or empty tracked source file: THIRD_PARTY_NOTICES.md"):
         exec(python_step("source", "Archive matching source and create SHA-256 checksum"), {})
     assert not (repository / "dist/ArgusAI-0.1.0-source.tar.gz.sha256").exists()
+
+
+@pytest.mark.parametrize("release_tag", ["", "v0.1.0"], ids=["build-only", "release"])
+def test_only_tag_source_archive_requires_prepared_release_notes(source_repository, monkeypatch, release_tag):
+    repository, _ = source_repository
+    notes = "scripts/packaging/release-notes-0.1.0.md"
+    subprocess.run(["git", "rm", notes], check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=Release fixture", "-c", "user.email=fixture@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "-m", "fixture pending release notes"],
+                   check=True, capture_output=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    monkeypatch.setenv("SOURCE_COMMIT", commit)
+    monkeypatch.setenv("RELEASE_TAG", release_tag)
+    package = repository / "dist/ArgusAI-0.1.0-source.tar.gz"
+    code = python_step("source", "Archive matching source and create SHA-256 checksum")
+    if release_tag:
+        with pytest.raises(SystemExit, match="Missing or empty tracked source file: " + notes):
+            exec(code, {})
+        assert not Path(str(package) + ".sha256").exists()
+    else:
+        exec(code, {})
+        with tarfile.open(package, "r:gz") as archive:
+            assert archive.pax_headers["comment"] == commit
+            assert f"ArgusAI-0.1.0/{notes}" not in archive.getnames()
+        assert Path(str(package) + ".sha256").is_file()
 
 
 def test_source_job_blocks_accidentally_tracked_runtime_settings(source_repository, monkeypatch):
@@ -709,11 +798,17 @@ def test_tag_push_preflight_requires_existing_tag_and_validated_target(source_re
             exec(code, {})
 
 
-@pytest.mark.parametrize("event, ref", [("workflow_dispatch", "refs/tags/v0.1.0"), ("release", "refs/tags/v0.1.0"), ("push", "refs/heads/main")])
+@pytest.mark.parametrize("event, ref", [
+    ("workflow_dispatch", "refs/heads/main"),
+    ("workflow_dispatch", "refs/tags/v0.1.0"),
+    ("release", "refs/tags/v0.1.0"),
+    ("push", "refs/heads/main"),
+])
 def test_manual_release_and_branch_events_cannot_execute_release_mutation(monkeypatch, event, ref):
     monkeypatch.setenv("EVENT_NAME", event)
     monkeypatch.setenv("EVENT_REF", ref)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("No command should run"))
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: pytest.fail("No command should run"))
     with pytest.raises(SystemExit, match="Only version tag pushes"):
         exec(python_step("publish", "Publish verified release assets"), {})
 
