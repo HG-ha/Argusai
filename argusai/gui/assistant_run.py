@@ -909,6 +909,7 @@ class AssistantRunMixin:
                 host_instruction=acp_host_instruction(),
                 user_habits=profile_prompt_summary(self.settings_mgr.get()),
                 timeout_seconds=turn_timeout_seconds,
+                continuation_session=session,
             )
             return result.to_dict()
 

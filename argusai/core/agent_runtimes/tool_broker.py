@@ -550,6 +550,8 @@ class ArgusAIToolBroker:
                 # Rendering telemetry must never turn a successful tool call
                 # into an MCP failure seen by the external Agent.
                 pass
+        if binding.session._is_terminal_channel_reply_trace(trace):
+            binding.session._acp_terminal_reply = True
         if binding.on_checkpoint is not None:
             binding.on_checkpoint()
         return {"ok": True, "result": result}

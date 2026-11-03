@@ -742,3 +742,25 @@ def test_live_refresh_is_sent_after_wakeup_is_persisted(tmp_path: Path) -> None:
     assert len(refreshes) == 1
     assert "argusai:assistant-session-updated" in refreshes[0]
     assert "cron_stream_started" in refreshes[0]
+
+
+def test_fresh_cron_inherits_acp_runtime_without_remote_history(tmp_path):
+    from argusai.core.agent_runtimes.models import SessionRuntimeBinding
+
+    api = _Api(tmp_path)
+    origin = api._ensure_session("origin")
+    origin.runtime_binding = SessionRuntimeBinding(
+        runtime_id="codex-acp", acp_session_id="private-origin-thread", locked=True,
+        acp_host_context={"session_id": "private-origin-thread"}, acp_config={"model": "fixture"},
+    )
+    target = api._ensure_session("scheduled")
+    api._inherit_cron_runtime({"origin_session_id": "origin"}, "scheduled", target)
+    assert target.runtime_binding.runtime_id == "codex-acp"
+    assert target.runtime_binding.acp_config == {"model": "fixture"}
+    assert target.runtime_binding.acp_session_id == ""
+    assert target.runtime_binding.acp_host_context == {}
+    assert not target.runtime_binding.locked
+    # A bound/existing target must never be rebound to a different runtime.
+    target.runtime_binding = SessionRuntimeBinding(runtime_id="claude-code-acp", locked=True)
+    api._inherit_cron_runtime({"origin_session_id": "origin"}, "scheduled", target)
+    assert target.runtime_binding.runtime_id == "claude-code-acp"

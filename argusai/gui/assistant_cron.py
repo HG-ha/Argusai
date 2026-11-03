@@ -505,6 +505,26 @@ class AssistantCronMixin:
             pass
         return ""
 
+    def _inherit_cron_runtime(self, job: dict[str, Any], session_id: str, session: Any) -> None:
+        """Seed a fresh scheduled conversation without sharing remote history."""
+        from dataclasses import replace
+
+        binding = getattr(session, "runtime_binding", None)
+        if binding is None or binding.locked or binding.runtime_id != "argusai-native" or session.history:
+            return
+        origin_id = str(job.get("origin_session_id") or "").strip()
+        if not origin_id or origin_id == session_id:
+            return
+        origin = self._ensure_session(origin_id)
+        source = getattr(origin, "runtime_binding", None)
+        if source is not None and source.runtime_id != "argusai-native":
+            session.runtime_binding = replace(
+                source, acp_session_id="", acp_host_context={}, locked=False,
+                acp_config=dict(source.acp_config),
+                acp_config_options=tuple(dict(item) for item in source.acp_config_options),
+                acp_prompt_capabilities=dict(source.acp_prompt_capabilities),
+            )
+
     def _fire_assistant_cron_job(self, job: dict[str, Any]) -> dict[str, Any]:
         """Start a chat turn for the job and wait until the stream finishes.
 
@@ -533,6 +553,8 @@ class AssistantCronMixin:
             session_id = "default"
         try:
             session = self._ensure_session(session_id)
+            if destination in {"new_session", "dedicated_session"}:
+                self._inherit_cron_runtime(job, session_id, session)
             self._sync_cron_session_permissions(job, session_id, session)
             path = self._session_path(session_id)
             name = f"Cron · {str(job.get('name') or job_id)[:40]}"

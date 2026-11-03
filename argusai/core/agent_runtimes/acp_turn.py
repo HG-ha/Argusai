@@ -7,6 +7,7 @@ import base64
 import binascii
 import concurrent.futures
 import hashlib
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -204,23 +205,10 @@ def _resource_prompt_block(
 
 
 def acp_host_instruction() -> str:
-    """Stable workbench guidance for an appended instruction or fallback context."""
-    return (
-        "[ArgusAI host context]\n"
-        "You are the selected external Agent working on this conversation inside ArgusAI. "
-        "Keep your actual Agent identity while acting as the user's ArgusAI workbench assistant. "
-        "The host exposes ArgusAI workbench capabilities through its MCP tool bridge. "
-        "For ArgusAI tasks, discover tools with tool_search, then call the returned schema "
-        "through argusai_invoke_tool; read applicable workflows with skill_read. "
-        "Use get_app_snapshot through the bridge to inspect the current ArgusAI page and work state. "
-        "For capture/proxy, browser, scans, reverse analysis, files, memory, teams and scheduling, "
-        "prefer the workbench's domain tools over driving ArgusAI's own GUI with desktop automation. "
-        "Read current state, keep object IDs and evidence references, and continue existing work. "
-        "Your own tools remain available for appropriate tasks in the selected workspace. "
-        "Observe the user's current target, scope and approval decisions. Tool availability or "
-        "historical authorization does not expand them. This host context does not replace "
-        "your runtime's own policies."
-    )
+    """Use native workbench policy with external-runtime transport contracts."""
+    from argusai.core.assistant.skills import _build_system_prompt
+
+    return _build_system_prompt("", "", external_agent=True)
 
 
 def _supports_system_prompt(capabilities: dict[str, Any]) -> bool:
@@ -432,6 +420,7 @@ async def run_acp_turn(
     host_instruction: str = "",
     user_habits: str = "",
     timeout_seconds: float = 604800,
+    continuation_session: Any = None,
 ) -> ACPTurnResult:
     """Run initialize → session/new|load → optional set_config_option → prompt."""
     updates: list[dict[str, Any]] = []
@@ -478,6 +467,15 @@ async def run_acp_turn(
         cwd=cwd,
     )
     active = ActiveACPTurn(asyncio.get_running_loop(), process)
+    if continuation_session is not None:
+        continuation_session._cancel_requested = False
+        continuation_session._pause_after_current_response = False
+        continuation_session._user_decision_requested = False
+        continuation_session._acp_terminal_reply = False
+        continuation_session._todos_touched_this_turn = False
+        continuation_session._auto_continue_progress_sig = None
+        continuation_session._auto_continue_stalled = False
+        continuation_session._arm_turn_deadline()
     if on_active is not None:
         on_active(active)
     try:
@@ -598,17 +596,30 @@ async def run_acp_turn(
                 binding, session_id, host_instruction, user_habits, new_session=session_created,
             )
         prompt_blocks = [*host_blocks, *prompt_blocks]
-        response = await asyncio.wait_for(
-            connection.prompt(session_id, prompt_blocks),
-            timeout=max(1.0, float(timeout_seconds)),
-        )
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        while True:
+            offset = len(text_parts)
+            response = await asyncio.wait_for(
+                connection.prompt(session_id, prompt_blocks),
+                timeout=max(0.001, deadline - time.monotonic()),
+            )
+            await asyncio.sleep(0.05)
+            if active.cancel_requested or time.monotonic() >= deadline:
+                break
+            if str(_model_dict(response).get("stopReason") or "") != "end_turn":
+                break
+            followup = acp_native_continuation(continuation_session, "".join(text_parts[offset:]))
+            if not followup:
+                break
+            prompt_blocks = [acp.text_block(followup)]
         # ACP notifications and the prompt response share one byte stream, but
         # the SDK dispatches them on separate tasks. Yield briefly so updates
         # that preceded the response are committed before we snapshot/close.
         await asyncio.sleep(0.05)
         response_payload = _model_dict(response)
+        stalled = bool(getattr(continuation_session, "_auto_continue_stalled", False))
         return ACPTurnResult(
-            ok=True,
+            ok=not stalled,
             runtime_id=runtime.id,
             acp_session_id=session_id,
             text=strip_synthetic_agent_text("".join(text_parts)),
@@ -620,6 +631,8 @@ async def run_acp_turn(
             config_options=config_options,
             session_restarted=session_restarted,
             host_context=host_context,
+            error_code="acp_progress_stalled" if stalled else "",
+            error="ACP 任务仍有未完成 Todo，但没有新的进展；已停止自动续跑，请检查任务状态。" if stalled else "",
         )
     except asyncio.TimeoutError:
         return ACPTurnResult(
@@ -656,3 +669,17 @@ async def run_acp_turn(
         )
     finally:
         await process.close()
+
+
+def acp_native_continuation(session: Any, reply: str) -> str:
+    """Use the native Todo/progress guard, never a model-answer retry loop."""
+    if session is None:
+        return ""
+    if (getattr(session, "_cancel_requested", False)
+            or getattr(session, "_acp_terminal_reply", False)
+            or getattr(session, "_pause_after_current_response", False)
+            or getattr(session, "_pending", None)):
+        return ""
+    if not session._should_auto_continue(reply) or not session._auto_continue_allowed(0):
+        return ""
+    return session._build_auto_continue_prompt().replace("invoke_catalogue_tool", "argusai_invoke_tool")

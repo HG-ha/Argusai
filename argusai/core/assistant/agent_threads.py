@@ -1789,6 +1789,7 @@ class AgentThreadManager:
                         ),
                         user_habits=profile_prompt_summary(settings_mgr.get()),
                         timeout_seconds=_SUBAGENT_TIMEOUT_SECONDS,
+                        continuation_session=child,
                     )
                     runtime["acp_turn"] = None
                     if result.acp_session_id:

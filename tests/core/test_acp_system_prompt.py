@@ -25,6 +25,39 @@ CWD = str(Path(__file__).resolve().parents[2] / "build/acp-system-prompt-fixture
 MCP_SERVERS = [{"name": "fixture-tools", "command": "fixture-stdio", "args": [], "env": []}]
 
 
+def test_acp_reuses_native_workbench_policy():
+    from argusai.core.assistant.skills import _build_system_prompt
+
+    native = _build_system_prompt("", "")
+    external = turns.acp_host_instruction()
+    for shared in (
+        "proactive-defense", "assistant-cron", "multi-agent-orchestration",
+        "channel_delivery_status", "search_all_memory", "read_assistant_session",
+        "artifact_read", "wait_for_duration", "wait_for_agents", "background_job_status",
+        "## Agent Loop", "## Context and Files", "## Knowledge and Profile",
+        "Difficulty, workload, unfamiliar code", "Reply language (always)",
+    ):
+        assert shared in native and shared in external
+    assert "invoke_catalogue_tool" in native
+    assert "invoke_catalogue_tool" not in external
+    assert "argusai_invoke_tool" in external
+    assert "Keep your actual Agent identity" in external
+    assert "You are the ArgusAI AI assistant" not in external
+    assert "runtime ends the turn without another model pass" not in external
+    assert "always loaded" not in external
+    assert "AUTO-APPROVE is on" not in external
+    assert "permission requests remain separate" in external
+
+
+def test_native_prompt_default_is_unchanged_by_external_projection():
+    from argusai.core.assistant.skills import _build_system_prompt
+
+    before = _build_system_prompt("fixture schema", "", "fixture preferences")
+    turns.acp_host_instruction()
+    assert before == _build_system_prompt("fixture schema", "", "fixture preferences", external_agent=False)
+    assert before.endswith("fixture preferences")
+
+
 class ACPHarness:
     def __init__(self, monkeypatch, system_capability=MISSING):
         self.system_capability = system_capability
@@ -68,6 +101,8 @@ class ACPHarness:
                     "session_id": session_id,
                     "blocks": [block.model_dump(mode="json", by_alias=True, exclude_none=True) for block in blocks],
                 })
+                if hasattr(owner, "on_prompt"):
+                    owner.on_prompt()
                 return {"stopReason": "end_turn"}
 
         class Process:
@@ -129,7 +164,7 @@ def _prompt_text(prompt):
     return "\n".join(block.get("text", "") for block in prompt["blocks"] if block.get("type") == "text")
 
 
-@pytest.mark.parametrize("capability", [{}, {"append": True}])
+@pytest.mark.parametrize("capability", [{}, {"append": True}, {"mode": {"override": {}}}])
 def test_native_append_on_session_new_keeps_host_out_of_user_message(monkeypatch, capability):
     harness = ACPHarness(monkeypatch, capability)
     result = harness.run()
@@ -397,3 +432,40 @@ def test_native_append_does_not_rewrite_stateless_history_replay(monkeypatch):
     assert [call["method"] for call in harness.calls] == ["session/new"]
     assert HOST in _system_text(harness.calls[0])
     assert harness.prompts[0]["blocks"] == [{"type": "text", "text": history}]
+
+
+@pytest.mark.parametrize("stop", ["completed", "stalled", "decision", "cancelled", "terminal", "pending"])
+def test_acp_native_todo_continuation_obeys_host_state(monkeypatch, stop):
+    from argusai.core.assistant.session import AssistantSession
+    from argusai.core.assistant.tools import ToolRegistry
+
+    session = AssistantSession(registry=ToolRegistry())
+    session._user_auto_approve_mode = True
+    harness = ACPHarness(monkeypatch, {})
+    calls = []
+
+    def respond():
+        calls.append(1)
+        if len(calls) == 1:
+            session.set_todos([{"id": "work", "title": "fixture work"}])
+            session._todos_plan_approved = True
+            if stop == "decision":
+                session._user_decision_requested = True
+            elif stop == "cancelled":
+                session._cancel_requested = True
+            elif stop == "terminal":
+                session._acp_terminal_reply = True
+            elif stop == "pending":
+                session._pending = {"name": "fixture"}
+        elif stop == "completed":
+            session.todos[0]["status"] = "completed"
+
+    harness.on_prompt = respond
+    result = harness.run(continuation_session=session)
+    assert result.ok is (stop != "stalled")
+    if stop == "stalled":
+        assert result.error_code == "acp_progress_stalled"
+    assert len(calls) == (2 if stop in {"completed", "stalled"} else 1)
+    if len(calls) == 2:
+        assert "invoke_catalogue_tool" not in _prompt_text(harness.prompts[1])
+        assert len(harness.calls) == 1  # same ACP session, no history replay/restart

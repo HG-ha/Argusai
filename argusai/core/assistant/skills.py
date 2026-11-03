@@ -3348,6 +3348,7 @@ def _build_system_prompt(
     allow_web_search: bool = False,
     greenlight_active: bool = False,
     agent_self_decide: bool = False,
+    external_agent: bool = False,
 ) -> str:
     """Build the small always-on prompt; domain workflows live in skills."""
     web_search_contract = (
@@ -3503,7 +3504,10 @@ def _build_system_prompt(
         "proceed when it does not materially change the requested outcome.",
         "- Write the full final summary only when the task is actually finished, blocked, or requires user input. Short progress updates are allowed during long or risky workflows; they must be concise and followed by the next action.",
         "- `duplicate_tool_call_skipped` is not a tool failure. Re-read the earlier result; vary a freshness argument only when a genuinely fresh result is needed.",
-        "- Use `search_memory`, `list_session_messages`, or `read_session_message` when the user refers to previous context instead of guessing from the visible prompt window.",
+        "- When the user refers to earlier work, use `search_memory` for this conversation or `search_all_memory` "
+        "for related conversations, then page `list_session_messages` / `read_session_message` / "
+        "`read_assistant_session` to verify the original record. The visible context window is not the full memory. "
+        "Read only task-relevant sessions; preserve source and artifact references instead of guessing.",
         "- If an important old result was archived, use `artifact_read` via its artifact reference rather than rerunning the probe.",
         "",
         "## Long-running work",
@@ -3576,9 +3580,86 @@ def _build_system_prompt(
         "Only a task-relevant SUBSET is attached below. Use `skill_search` for methodology and `tool_search(query=..., group=\"<domain>\")` for any other capability.",
         tool_lines or "- `tool_search(query, group, risk, limit)`: Search the full assistant tool catalogue when a needed tool is not listed here.",
     ]
+    if external_agent:
+        parts = _external_workbench_prompt(parts)
     if profile_text:
         parts += ["", profile_text.strip()]
     return "\n".join(parts)
+
+
+def _external_workbench_prompt(parts: list[str]) -> list[str]:
+    """Project the shared workbench policy onto an external ACP runtime.
+
+    Domain routes and working principles come from the native builder above;
+    only identity, transport and host-loop-specific contracts differ.
+    """
+    result = [
+        "[ArgusAI host context]",
+        "You are the selected external Agent working on this conversation inside ArgusAI. "
+        "Keep your actual Agent identity while acting as the user's ArgusAI workbench assistant. "
+        "This appended guidance does not replace your runtime's own policies.",
+        "ArgusAI exposes workbench tools through its MCP bridge. Prefer domain tools over driving "
+        "ArgusAI's own GUI with desktop automation. Use get_app_snapshot through the bridge to inspect "
+        "the current page and work state. Preserve object IDs, state, steps and evidence references. "
+        "Use your own filesystem/shell tools in the selected workspace when appropriate; ArgusAI "
+        "sandbox tools address a separate session sandbox.",
+        "Discover tools with tool_search, then call the returned schema through argusai_invoke_tool. "
+        "Names below describe workbench capabilities, not additional top-level functions. Discover "
+        "their schemas before invoking them through the gateway. The current bridge and tool results "
+        "are authoritative about availability, delegated scope and permissions.",
+    ]
+    section = ""
+    for part in parts[2:]:
+        if part.startswith("## "):
+            section = part.split("\n", 1)[0]
+        if section == "## User decisions":
+            if part == section:
+                result.extend([
+                    part,
+                    "For a necessary human choice, discover stop_for_user_decision or "
+                    "stop_for_user_decision_batch and use the host decision card when available. "
+                    "Otherwise ask a concise question and wait. Do not ask whether to continue "
+                    "already-authorized work. Neither tool availability nor historical authorization "
+                    "expands the current user's scope. Host mandatory confirmations and your own "
+                    "runtime's permission requests remain separate; never infer approval or bypass either.",
+                ])
+            continue
+        if part.startswith("## Todos and progress"):
+            result.extend([
+                "## Todos and progress (use for multi-step work)",
+                "For multi-phase work or 3+ tool steps, discover set_todos/list_todos and record "
+                "observable phases before execution. On resumption read existing todos and update "
+                "them with update_todo/complete_todo_with_refs instead of replacing approved plans. "
+                "Respect pending plan decisions returned by the host; do not assume your external "
+                "runtime automatically pauses or ends a turn. Finish, block or cancel outstanding "
+                "items accurately. Pair durable security evidence with a case and artifact references. "
+                "Read the agent-todo skill for the full workflow.",
+            ])
+            continue
+        if "system-injected continuation prompts" in part:
+            continue
+        part = part.replace(
+            "It is a terminal tool: call it only after all work is complete; once accepted, the runtime ends the turn without another model pass.",
+            "Use it only after all work is complete. After successful delivery, end your turn without a duplicate final reply or a delivery-announcement tail.",
+        )
+        part = part.replace(
+            "For a paired-channel turn, `channel_reply` is resident.",
+            "For a paired-channel turn, discover `channel_reply` when exposed by this bridge; it is not for ordinary GUI turns.",
+        )
+        part = part.replace(
+            "Run code in the per-session sandbox by default.",
+            "Run project code in the selected workspace; use the per-session sandbox for generated workbench artifacts.",
+        )
+        part = part.replace(
+            "Per-turn playbook pointers attach to the latest user message when keywords match.",
+            "Read any supplied playbook pointers.",
+        )
+        part = part.replace(
+            "Only a task-relevant SUBSET is attached below.",
+            "The MCP bridge exposes a stable control surface and a discoverable workbench catalogue.",
+        )
+        result.append(part.replace("invoke_catalogue_tool", "argusai_invoke_tool"))
+    return result
 
 
 def _todos_section(skill_docs_text: str) -> str:

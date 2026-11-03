@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.7-0967a6?style=flat-square" alt="版本 0.1.7">
+  <img src="https://img.shields.io/badge/version-0.1.8-0967a6?style=flat-square" alt="版本 0.1.8">
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows、macOS 与 Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="许可证 GPL-3.0-only"></a>
@@ -332,7 +332,7 @@ flowchart TB
 
 ## 快速开始
 
-当前版本为 `0.1.7`。从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载对应平台的预编译包和 `.sha256`，按[安装与环境](wiki/Installation.md)校验、安装后即可启动桌面。终端示例使用 `argusai` 命令入口；未设置入口时，Windows 在安装目录中使用 `.\ArgusAI.exe`、Linux 在解压目录中使用 `./ArgusAI`，macOS 入口见[CLI 命令参考](wiki/CLI-Reference.md)。
+当前版本为 `0.1.8`。从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载对应平台的预编译包和 `.sha256`，按[安装与环境](wiki/Installation.md)校验、安装后即可启动桌面。终端示例使用 `argusai` 命令入口；未设置入口时，Windows 在安装目录中使用 `.\ArgusAI.exe`、Linux 在解压目录中使用 `./ArgusAI`，macOS 入口见[CLI 命令参考](wiki/CLI-Reference.md)。
 
 ```sh
 argusai version --json
