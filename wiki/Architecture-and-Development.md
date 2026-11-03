@@ -126,6 +126,29 @@ flowchart TB
 
 归档只覆盖选定工具和合适的结果形态，归档异常按尽力保存处理。工具自己已有的领域产物也应保留引用。开发者不能假设任意工具输出都会自动保存，更不能用一段压缩摘要代替漏洞证据原文。
 
+### 长期记忆与原文回读
+
+持久历史、检索索引和模型窗口有不同职责。[session.py](../argusai/core/assistant/session.py) 的 `to_dict()` 保存 `history`、`memory_summary` 与 `memory_index`；`rebuild_memory()` 从历史派生摘要和关键词索引，用历史指纹避免无变化时重复扫描。当前窗口外的工作可由 Agent 主动检索、回读，再以相关内容和引用接回当前任务。
+
+索引保留全部用户消息的有限长度摘录，并为近期各角色消息建立更详细的摘录；当前实现对应用户摘录上限 500 字符、近期细节上限 1200 字符。它不等于对所有旧助手、工具正文建立无限全文索引。已知时间位置时可直接浏览历史；工具原文则按归档引用读取。
+
+| 接口 | 范围与实现 |
+| --- | --- |
+| `search_memory` | 当前会话关键词检索，返回命中摘录、摘要及可提取的材料引用；由会话工具直接调用 `search_memory_tool()` |
+| `search_all_memory` | 经 [kb_tasks.py](../argusai/core/tools/kb_tasks.py) 调用 `search_all_assistant_memory()`，检索已加载及当前会话目录中保存的助手会话，返回来源 `session_id`、`session_name` |
+| `list_session_messages` | 浏览当前会话历史，支持 `role`、`order`、`offset`、`limit`，返回 `message_id` 与预览 |
+| `read_session_message` | 按当前会话历史索引读取单条内容，受 `max_chars` 限制；不是跨会话读取，也没有字符偏移分页参数 |
+| `read_assistant_session` | 按确切会话 ID 分页读取可见 `user` / `assistant` 消息，返回 `next_offset`、`has_more` 和截断信息 |
+| `artifact_read` | 按 `case_id`、`artifact_id` 回读已保存材料，支持字符 `offset` 和 `max_chars`，可恢复已归档工具结果的原文 |
+
+[assistant_tools.py](../argusai/gui/assistant_tools.py) 的 `search_all_assistant_memory()` 优先查询已加载会话，再读取未加载的会话文件；每个会话先做关键词匹配，合并结果后按时间降序限制总条数。这里的“全部”是当前数据目录和调用权限内的会话，不能解释为任意用户、文件系统或外部 Agent 的全部历史。普通渠道入站消息轮次通过 `channel_turn_session_allowlist()` 限制配对身份可检索、回读的会话。
+
+`read_assistant_session()` 的 `offset` 按角色过滤、排序后的可见消息计数，`max_chars` 是整页正文预算；一行被截断后也会计入 `next_offset`。要补读该行，应从同一页起点减少条数或增大预算，不能用下一页冒充该行尾部。它返回工具名称与附件数量等线索，不返回所有工具响应原文。相关参数定义见 [session_tool_methods.py](../argusai/core/assistant/session_tool_methods.py) 和 [skills.py](../argusai/core/assistant/skills.py)。
+
+`memory_prompt()` 自动提供有界的本会话摘要、相关命中和知识库提示；跨会话检索由 Agent 按需调用。[memory-recall](../argusai/skills/memory-recall/SKILL.md) 技能指导它先判断范围、用任务 ID、URL、文件名等生成查询，命中较弱时改写查询，并回到任务或发现接口核验现状。历史检索不是每轮把所有旧会话重新注入系统提示。
+
+知识库通过 `kb_search` / `kb_read` 提供经过整理的跨任务经验，历史保存讨论过程，Case 和领域产物保留证据。承接时应先找来源会话，再回读目标和结论，最后读取任务及材料引用；例如用 `case_id` 与 `artifact_ref` 调用 `artifact_read(case_id=..., artifact_id=...)`。归档缺失或历史被改写时应报告缺口；新的探测按当前任务和授权单独执行。面向用户的提示示例见[跨会话长期记忆与材料承接](Agent-and-Sessions.md#跨会话长期记忆与材料承接)。
+
 ## 原生运行时与 ACP
 
 原生运行时由 `AssistantSession.chat()` 组织提供者请求、工具循环和历史。ACP 路径通过 [acp_runtime.py](../argusai/core/agent_runtimes/acp_runtime.py) 的 `ACPAgentProcess` 管理子进程与标准输入输出（stdio）连接，再由 [acp_turn.py](../argusai/core/agent_runtimes/acp_turn.py) 的 `run_acp_turn()` 执行会话生命周期。

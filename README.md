@@ -62,11 +62,13 @@ flowchart TB
     Tools --> Analysis["扫描 / 全域逆向<br/>Checks、JS / WASM<br/>移动端与二进制分析"]
     Tools --> Execution["沙盒 / 主机 / 桌面<br/>文件、脚本、SSH 与设备"]
     Tools --> Knowledge["知识 / 证据 / 报告<br/>Case、Artifact、Evidence"]
+    Tools --> Recall["长期与跨会话记忆<br/>检索 → 会话 / 消息定位<br/>按页回读原文与归档引用"]
     Tools -.-> Extensions["可选扩展与工具链<br/>MCP / 外部扫描器<br/>Ghidra / Frida / JADX"]
     Web --> Review["主 Agent 复核结果与证据"]
     Analysis --> Review
     Execution --> Review
     Knowledge --> Review
+    Recall -->|查证旧工作与关联任务| Review
     Extensions -.-> Review
     Review --> Delivery["交付报告 / PoC<br/>摘要与会话沙盒产物"]
     Delivery -.->|按任务约定远程交付| Outbox["配对身份 / 持久 Outbox<br/>Adapter 发送<br/>投递状态核验"]
@@ -87,6 +89,7 @@ flowchart TB
 | [运行身份与执行所有权](argusai/core/assistant/run_jobs.py) | `session_id` 标识会话，持久 `job_id` 标识任务运行，临时 `run_id` 标识增量事件流。恢复运行可以创建新流；真正的 worker 退出后才释放会话运行锁。运行状态以原子快照和单调 JSONL 事件保存。 |
 | [稳定控制面与能力目录](argusai/core/assistant/session_chat_loop.py) | 原生会话核心 `tools[]` 和 system 工具目录冻结；`tool_search` 返回领域 schema，`invoke_catalogue_tool` 执行真实工具，发现新能力不反复扩展常驻数组。Skills 先给短名单，再按需读取正文。 |
 | [上下文预算与协议修复](argusai/core/assistant/session_budget.py) | 原生模型请求前压缩旧工具结果、提炼早期对话，并修复 tool-call/result 邻接关系。选定高值输出保留完整 Artifact，模型使用摘要与 `artifact_ref` 续接，按需重新读取原文。 |
+| [长期与跨会话记忆召回](argusai/core/assistant/session_memory.py) | 摘要、关键词索引与会话历史分开：索引保留全部可见用户消息摘要及最近 600 条消息中的细节。`search_memory` / `search_all_memory` 定位旧会话和消息，再由 `list_session_messages` / `read_session_message` 或 `read_assistant_session` 分页、按条回读；有归档引用时，沿 `case_id` / `artifact_ref` 读取原始产物。 |
 | [按资源分批执行](argusai/core/assistant/session_loop_control.py) | 原生工具循环将连续只读调用按允许的并行度和 resource keys 组成无冲突波次；修改、控制和待确认调用保留各自执行边界。并行完成后仍按原调用顺序写入历史。 |
 | [调用授权与能力投影](argusai/core/assistant/confirmation_broker.py) | 先展开真实工具名，再进入策略、确认与执行。Todo 计划批准、具体工具确认、子 Agent 的 readonly/scoped 工具范围分别处理，委派能力与确认模式一起决定子任务权限。 |
 | [ACP 会话与工具桥](argusai/core/agent_runtimes/tool_broker.py) | ACP 按 `initialize → session/new 或 load → prompt` 协商与运行。工作台工具经随机会话 token 绑定的回环 MCP broker 接入，每个绑定以执行锁串行确认和调用；外部 Agent 自有工具仍由其运行时管理。 |
@@ -97,6 +100,8 @@ flowchart TB
 | [渠道出站与投递回执](argusai/core/channels/store.py) | 文件由执行会话沙盒按配对 identity 路由进入持久 Outbox；发送 worker 领取租约，由 Adapter 投递，记录分段进度并有限重试。`channel_delivery_status` 区分 `pending`、`processing`、`sent`、`failed`，保留平台错误原因。 |
 
 执行线程、事件流和存储之间的关系、关键函数及设计边界，见 [Agent 运行时与数据流](wiki/Architecture-and-Development.md#agent-运行时与数据流)。
+
+**旧工作可以主动找回。** Agent 根据目标生成检索词，必要时换词重查，从命中记录定位旧会话、消息与任务线索，回读原文和证据，再核验关联任务的当前状态继续工作。可检索的长期记录能够远超单次模型请求的上下文窗口，本轮只取需要的材料。检索覆盖本机当前数据环境中保存的会话；普通渠道入站消息发起的查询还受配对身份可访问会话的范围限制。用法与承接旧任务的示例见[跨会话长期记忆](wiki/Agent-and-Sessions.md#跨会话长期记忆与材料承接)。
 
 **模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
 
@@ -178,7 +183,8 @@ flowchart TB
 <tr>
 <td width="50%" valign="top">
 <h3>证据、记忆与知识</h3>
-<p>Case、Artifact、Evidence 与发现相互关联；会话记忆、知识库和大结果归档支持复查与跨轮延续。</p>
+<p>Agent 能主动检索长期与跨会话记忆，找回当前模型窗口之外的旧讨论、任务线索与分析结论，按需回读原文和证据，接续工作。</p>
+<p>Case、Artifact、Evidence 与发现相互关联；知识库和大结果归档为复查提供可追溯材料。</p>
 <p>扫描报告可导出为 HTML、Markdown 和 JSON，便于整理交付。</p>
 <a href="wiki/Enterprise-Workflows.md">企业工作流与交付 →</a>
 </td>
@@ -204,7 +210,7 @@ ArgusAI 支持数十小时级的单轮自主执行。这里的“单轮”指一
 
 这是运行时配置与控制流提供的能力，实际时长受任务、模型额度、工具、资源和授权限制。长调查、样本批分析和多阶段验证可以在同一轮内持续推进；需要跨轮或在下一次事件发生时继续的工作，由持久任务与调度器接续。
 
-原生运行时保留稳定的核心控制工具，领域工具通过目录渐进发现和调用；每次模型请求前按上下文预算整理历史，大结果可保留摘要和产物引用。下面展示当前轮继续、子任务完成唤醒和后台状态查询如何接回执行循环。ACP 会话的推理循环由所选外部 Agent 执行。
+原生运行时保留稳定的核心控制工具，领域工具通过目录渐进发现和调用；每次模型请求前按上下文预算整理历史，大结果可保留摘要和产物引用。需要旧工作时，Agent 主动检索记忆并回读相关会话、任务与产物，再接回当前循环。下面展示记忆召回、当前轮继续、子任务完成唤醒和后台状态查询的关系。ACP 会话的推理循环由所选外部 Agent 执行。
 
 ```mermaid
 sequenceDiagram
@@ -220,6 +226,11 @@ sequenceDiagram
         alt 调用领域能力
             A->>T: 工具发现、技能读取、确认与执行
             T-->>A: 结果 / 证据引用 / 后台回执
+        else 主动召回旧工作
+            A->>T: search_memory / search_all_memory
+            T-->>A: 会话与消息定位、任务与产物线索
+            A->>T: 分页回读历史，按 ID 核验任务与归档
+            T-->>A: 相关原文与证据引用
         else 当前轮短等待
             A->>A: wait_for_duration，到时返回，可取消
         else 等待子 Agent

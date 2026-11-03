@@ -62,11 +62,13 @@ flowchart TB
     Tools --> Analysis["Scans / reverse engineering<br/>Checks, JS / WASM,<br/>mobile and binary analysis"]
     Tools --> Execution["Sandbox / hosts / desktop<br/>Files, scripts, SSH and devices"]
     Tools --> Knowledge["Knowledge / evidence / reports<br/>Cases, artifacts and evidence"]
+    Tools --> Recall["Long-term and cross-session memory<br/>Search → session / message locators<br/>Paged history and archived references"]
     Tools -.-> Extensions["Optional tools and integrations<br/>MCP / external scanners<br/>Ghidra / Frida / JADX"]
     Web --> Review["Main Agent reviews results and evidence"]
     Analysis --> Review
     Execution --> Review
     Knowledge --> Review
+    Recall -->|Verify earlier work and related tasks| Review
     Extensions -.-> Review
     Review --> Delivery["Reports / PoCs<br/>Summaries and session sandbox files"]
     Delivery -.->|Remote delivery as agreed in the task| Outbox["Paired identity → Outbox<br/>Adapter sends<br/>Delivery status checks"]
@@ -87,6 +89,7 @@ Conversation history, execution state, streaming events and domain artifacts are
 | [Run identity and execution ownership](argusai/core/assistant/run_jobs.py) | `session_id` identifies the conversation, durable `job_id` the run, and temporary `run_id` the incremental event stream. A resumed run can open a new stream. The session lock is released after the worker actually exits; atomic snapshots and ordered JSONL events preserve run state. |
 | [Stable control surface and capability catalog](argusai/core/assistant/session_chat_loop.py) | The native session's core `tools[]` and system tool catalog are frozen. `tool_search` returns domain schemas and `invoke_catalogue_tool` executes them without growing the permanent tool array. Skills use a shortlist followed by reading selected content. |
 | [Context budgets and protocol repair](argusai/core/assistant/session_budget.py) | Before native model calls, old tool results and early conversation chunks are compacted, and tool-call/result adjacency is repaired. Selected high-value results retain complete Artifacts while the model continues with summaries and `artifact_ref`, reading originals when needed. |
+| [Long-term and cross-session recall](argusai/core/assistant/session_memory.py) | Summaries, keyword indexes and session history are separate. The index retains excerpts of all visible user messages and detail from the latest 600 messages. `search_memory` / `search_all_memory` locate earlier sessions and messages; `list_session_messages` / `read_session_message` or `read_assistant_session` read pages or individual entries. Where archive references exist, `case_id` / `artifact_ref` lead to original artifacts. |
 | [Resource-aware tool batches](argusai/core/assistant/session_loop_control.py) | The native tool loop batches consecutive read-only calls according to permitted concurrency and non-conflicting resource keys. Mutating, control and pending-confirmation calls retain their execution boundaries. Results are committed in the original call order. |
 | [Permissions and capability projection](argusai/core/assistant/confirmation_broker.py) | Catalog calls resolve the real tool before policy, confirmation and execution. Todo plan approval, individual tool decisions and readonly/scoped child tool sets have separate roles; delegated capabilities and confirmation mode determine child permissions. |
 | [ACP sessions and the tool bridge](argusai/core/agent_runtimes/tool_broker.py) | ACP negotiates `initialize → session/new or load → prompt`. Workbench tools use a loopback MCP broker with a random session token and a per-binding lock for ordered confirmation and execution. External Agents manage their own tools through their runtime. |
@@ -97,6 +100,8 @@ Conversation history, execution state, streaming events and domain artifacts are
 | [Channel outbox and delivery receipts](argusai/core/channels/store.py) | Files from the executing session's sandbox are routed by paired identity into a durable Outbox. A sender worker claims a lease, calls the Adapter, records part-level progress and retries within a limit. `channel_delivery_status` distinguishes `pending`, `processing`, `sent` and `failed`, preserving provider errors. |
 
 See [Agent runtime and data flow](wiki/Architecture-and-Development.md#agent-运行时与数据流) for threads, event streams, storage, key functions and design boundaries.
+
+**Retrieve earlier work when it matters.** The Agent forms search queries, refines them when needed, locates previous sessions, messages and task references, then reads original text and evidence and checks the related task's current state before continuing. Searchable long-term records can extend far beyond a single model request's context window; only relevant material is brought into the current turn. Search covers saved sessions in the current local data environment; queries from ordinary incoming channel messages are also limited by the paired identity's accessible sessions. See [cross-session memory and task handoffs](wiki/Agent-and-Sessions.md#跨会话长期记忆与材料承接) for usage examples.
 
 **Use model endpoints or a local Agent.** Configure AI endpoints directly, or connect locally installed and signed-in Agents such as Codex, Cursor and Claude Code through ACP. They can work inside ArgusAI and call workbench capabilities through its tool bridge. An ACP main conversation does not require a separate native ArgusAI model endpoint; native subagents, team members and other AI analysis tasks use their own runtime and model configuration.
 
@@ -180,7 +185,8 @@ For delivery after completion, include “Send the summary and report files back
 <tr>
 <td width="50%" valign="top">
 <h3>Evidence, memory and knowledge</h3>
-<p>Link Cases, Artifacts, Evidence and findings. Session memory, knowledge and large-output archives support review and continued work.</p>
+<p>The Agent actively searches long-term and cross-session memory to recover earlier discussions, task references and conclusions outside the current model window, reading original text and evidence as needed to continue the work.</p>
+<p>Cases, Artifacts, Evidence and findings remain linked; knowledge and large-output archives provide traceable material for review.</p>
 <p>Export scan reports as HTML, Markdown and JSON for your deliverables.</p>
 <a href="wiki/Enterprise-Workflows.md">Enterprise workflows and outputs →</a>
 </td>
@@ -206,7 +212,7 @@ ArgusAI supports autonomous execution on the scale of tens of hours within a sin
 
 This is a runtime configuration and control-flow capability. Actual duration depends on the task, model quota, tools, resources and authorization. Long investigations, sample batches and multi-stage validation can progress within one turn; durable tasks and the scheduler carry work across turns or resume it on a later event.
 
-The native runtime keeps a stable core control surface and discovers domain tools through the catalog. Before model requests it manages history against the context budget; large results can use summaries and artifact references. The sequence below distinguishes continuing the current turn, waking a parent after subtask completion, and querying background work. ACP conversations use the selected external Agent's reasoning loop.
+The native runtime keeps a stable core control surface and discovers domain tools through the catalog. Before model requests it manages history against the context budget; large results can use summaries and artifact references. When earlier work is needed, the Agent searches memory and reads relevant sessions, tasks and artifacts before returning to the current loop. The sequence below connects recall, turn continuation, parent wakeups and background status queries. ACP conversations use the selected external Agent's reasoning loop.
 
 ```mermaid
 sequenceDiagram
@@ -222,6 +228,11 @@ sequenceDiagram
         alt Invoke workbench capabilities
             A->>T: Discover tools, read Skills, confirm and execute
             T-->>A: Results / evidence references / job receipt
+        else Recall earlier work
+            A->>T: search_memory / search_all_memory
+            T-->>A: Session and message locators, task and artifact references
+            A->>T: Read history pages, verify tasks and archives by ID
+            T-->>A: Relevant original text and evidence references
         else Short wait in the current turn
             A->>A: wait_for_duration, returns when due, cancellable
         else Wait for subagents

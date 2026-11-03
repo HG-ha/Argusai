@@ -175,6 +175,64 @@ uv run argusai chat --session audit-review --once --timeout 172800 "按该会话
 
 需要按时间或事件自动唤醒这份工作时，使用固定会话的计划，见[持续续跑](Automation.md#长任务持续续跑)。
 
+## 跨会话长期记忆与材料承接
+
+换一个对话也可以继续已有分析。Agent 能检索 ArgusAI 保存的会话记录，找回先前目标、决策、任务 ID 和材料引用，再读取相关内容。长对话中已经移出当前模型窗口的记录，也可以通过检索和回读重新参与工作；无需手动把旧聊天整段复制到新对话。
+
+### 按问题选择检索范围
+
+| 需要找什么 | Agent 使用的工具 | 返回后怎样继续 |
+| --- | --- | --- |
+| 本对话之前提过的目标、URL、错误或文件 | `search_memory` | 根据命中摘要定位消息和材料引用 |
+| 另一个对话的工作，或不确定在哪个会话 | `search_all_memory` | 用结果中的 `session_id`、`session_name` 确认来源，再回读 |
+| 本对话第一条消息、某阶段前后的对话 | `list_session_messages` → `read_session_message` | 先按时间浏览，再按 `message_id` 读取该条内容 |
+| 已知会话 ID，想看其原始目标或最近结论 | `read_assistant_session` | 按角色和时间顺序分页读取可见的用户、助手消息 |
+| 摘要中提到的已归档工具结果 | `artifact_read` | 使用 `case_id` 和 `artifact_ref` 对应的 `artifact_id` 回读归档材料 |
+| 已经整理为长期经验的结论 | `kb_search` → `kb_read` | 查找知识条目，再读取正文、来源和适用条件 |
+
+这些是 Agent 工具，不是需要在终端执行的 CLI 子命令。直接告诉 Agent 要找的旧工作即可；域名、任务 ID、文件名、错误片段和中英文关键词都能帮助缩小范围。
+
+同一会话的记忆索引覆盖用户目标和近期助手、工具细节，命中内容可能只是摘录。很早的助手结论或工具输出不保证逐字进入关键词索引；搜索较弱时应换用相关关键词，或按时间回读。没有命中不能直接认定“以前没有做过”。
+
+### 找回本对话最初的约定
+
+```text
+先找回本对话最初的目标和授权范围，不重复执行探测。
+按时间浏览最早的用户消息，再读取相关消息原文。
+结合后续决策和当前待办，说明哪些要求仍适用、哪些已经调整，然后继续。
+```
+
+顺序问题适合 `list_session_messages(role="user", order="asc", offset=0, limit=5)`，再用本次返回的 `message_id` 回读。`offset` 跳过的是排序后匹配的消息条数。编辑、导入上下文或重新生成后，历史位置可能变化，应重新列出消息，不能把旧索引当作永久全局 ID。
+
+### 在新会话承接旧任务
+
+```text
+继续之前对 demo.example 的鉴权复核。
+先跨会话检索 demo.example、demo.har 和 report.md，确认相关会话与任务。
+回读原始目标、最近结论和待办，列出来源会话 ID、任务 ID 及证据引用。
+读取现有扫描结果和相关逆向材料，核对当前状态，不重复已完成步骤。
+需要工具原始结果时，按 Case 和 artifact 引用读取；缺少材料就指出具体缺口。
+把这次的新增证据与旧结论区分开，生成当前会话的交接摘要和下一步计划。
+```
+
+找回会话只是承接的开始。命中扫描任务 ID 后，应读取任务详情和发现；命中逆向任务或产物引用后，应读取对应材料。旧结论的时间、样本和目标范围可能已经变化，历史中的授权也不自动成为当前新操作的授权。
+
+跨会话回读可用 `role="user"` 找原始要求，用 `role="assistant"` 找结论，或用 `role="all"` 查看可见对话。`order="asc"` 从最早开始，`order="desc"` 从最近开始；后续页使用返回的 `next_offset`，并检查 `has_more`。
+
+`read_assistant_session` 的 `max_chars` 是一页正文预算。若某条消息标记 `truncated`，应减少每页条数、提高预算并从原来的 `offset` 重读；翻到下一页不会补齐该条消息被截掉的尾部。历史中的工具文本也可能已经摘录，已归档的原始工具结果应使用 `artifact_read` 读取。
+
+### 将可复用经验保存为知识
+
+会话历史保留讨论过程，知识库保存经过整理、能反复使用的经验；Case、证据和文件保留用于复查的材料。可以让 Agent 在阶段结束时整理知识条目，写清来源、适用范围、验证状态和材料引用，下次再按关键词检索。
+
+```text
+把本次已验证的认证流程和复核方法整理到知识库，保留会话、任务和证据来源。
+明确区分已验证结论、适用条件和待验证假设。
+下一次处理相同项目时，先检索并回读这份知识，再核对最新材料。
+```
+
+检索范围受当前数据目录和访问权限约束。普通渠道入站消息发起的跨会话检索还受配对身份可访问的会话范围限制。已删除或在上下文编辑中改写的历史、未归档的原始工具输出，不能靠记忆检索凭空恢复；重要交付物应同时保存为文件或证据。
+
 ## 使用 AGENT 小队
 
 侧栏 **AGENT 小队** 用于持久保存团队、成员和工作房间。每个成员可配置角色、目标、模型、工具范围与授权方式。
@@ -209,6 +267,10 @@ uv run argusai chat --session audit-review --once --timeout 172800 "按该会话
 - [后台工具任务](../argusai/core/assistant/background_jobs.py)
 - [CLI 对话与超时](../argusai/cli/commands/chat.py)
 - [会话持久化与会话模型选择](../argusai/core/assistant/session.py)
+- [会话记忆、消息浏览与原文回读](../argusai/core/assistant/session_memory.py)
+- [会话检索工具注册](../argusai/core/assistant/session_tool_methods.py)
+- [跨会话检索与分页回读](../argusai/core/tools/kb_tasks.py)
+- [记忆检索技能](../argusai/skills/memory-recall/SKILL.md)
 - [对话审批桥接](../argusai/gui/assistant_tools.py)
 - [会话初始化与全局默认值](../argusai/gui/assistant_sessions.py)
 - [会话沙盒技能](../argusai/skills/session-sandbox-workflow/SKILL.md)
