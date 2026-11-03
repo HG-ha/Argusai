@@ -4,6 +4,11 @@ from threading import Lock
 from unittest.mock import Mock
 import hashlib
 import httpx
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -190,3 +195,78 @@ def test_real_manager_handoff_failure_restores_ready_state(tmp_path, monkeypatch
         assert host.install_update()["error_code"] == "install_failed"
         assert manager.status()["status"] == "downloaded"
         host.quit_application.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires Windows PowerShell")
+def test_native_windows_helper_starts_and_waits_before_gui_quits(tmp_path, monkeypatch):
+    """Exercise the real GUI spawn and outer helper, without UAC or installation."""
+    from argusai.core.updater import UpdateManager, validate_manifest
+
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    if not powershell.is_file():
+        pytest.skip("Windows PowerShell is unavailable")
+    root = tmp_path / "更新测试 [fixture] '路径"
+    target = root / "installed"
+    (target / "licenses").mkdir(parents=True)
+    for name in ("ArgusAI.exe", "Uninstall.exe", "launch-gui.vbs", "licenses/LICENSE"):
+        (target / name).write_bytes(b"inert application fixture")
+    cache = root / "cache"
+    cache.mkdir()
+    package = cache / "ArgusAI-0.1.4-win-x64-setup.exe"
+    package.write_bytes(b"inert installer fixture; never execute")
+    manager = UpdateManager(cache, "0.1.3", platform_key="win-x64", packaged=True,
+                            executable=target / "ArgusAI.exe")
+    manager._manifest = validate_manifest({
+        "schema_version": 1, "version": "0.1.4", "notes": "Native bootstrap fixture",
+        "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.4",
+        "assets": {"win-x64": {
+            "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.4/" + package.name,
+            "size": package.stat().st_size, "sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
+        }},
+    })
+    manager._package = package
+    manager._state["status"] = "downloaded"
+    prepare = manager.prepare_install
+
+    def safe_prepare():
+        ready = prepare()
+        assert ready["ok"], ready
+        helper = Path(ready["helper_path"])
+        # Even if the test owner exits unexpectedly, this script cannot raise
+        # UAC, invoke an installer, or launch any real application.
+        guard = "function Start-Process { throw 'Native bootstrap fixture blocks process launch' }\n"
+        helper.write_text(guard + helper.read_text(encoding="utf-8-sig"), encoding="utf-8-sig")
+        return ready
+
+    manager.prepare_install = safe_prepare
+    host = Host()
+    host.manager = manager
+    processes = []
+    launch = subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = launch(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr("argusai.gui.updates.subprocess.Popen", spawn)
+    try:
+        assert host.install_update()["status"] == "installing"
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if (cache / "install.log").is_file() and host.quit_application.called:
+                break
+            if host._update_handoff_error:
+                break
+            time.sleep(0.05)
+        assert not host._update_handoff_error, host._update_handoff_error
+        host.quit_application.assert_called_once()
+        assert (cache / "install.log").is_file(), "PowerShell never entered the generated helper"
+        assert len(processes) == 1 and processes[0].poll() is None
+        assert not (cache / "install-result.json").exists()
+        assert (target / "ArgusAI.exe").read_bytes() == b"inert application fixture"
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=10)

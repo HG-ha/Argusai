@@ -126,7 +126,10 @@ class UpdatesMixin:
 
             options: dict[str, Any] = {"cwd": prepared.get("cwd"), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "env": self_relaunch_env()}
             if sys.platform == "win32":
-                options["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+                # Windows PowerShell can exit successfully before executing
+                # its script under DETACHED_PROCESS. A hidden console process
+                # stays independent of this app and can wait for real exit.
+                options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             else:
                 options["start_new_session"] = True
             helper = subprocess.Popen(prepared["command"], **options)

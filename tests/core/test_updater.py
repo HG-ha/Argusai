@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from argusai.core.updater import (
-    MANIFEST_URL, MAX_MANIFEST_BYTES, UpdateManager, _safe_extract_linux,
+    MANIFEST_URL, MAX_MANIFEST_BYTES, SUFFIXES, UpdateManager, _safe_extract_linux,
     runtime_platform, validate_manifest,
     _macos_launcher,
     _update_parent_pids,
@@ -309,6 +309,153 @@ def test_oversized_install_report_is_ignored(tmp_path):
                              executable=mgr.executable)
     assert restored.status()["status"] == "downloaded"
     assert restored.status()["error"] == ""
+
+
+def test_successful_upgrade_cleans_known_installed_cache_files_only(tmp_path):
+    mgr, _, _ = manager(tmp_path)
+    mgr.check()
+    mgr.start_download()
+    wait_download(mgr)
+    assert mgr.prepare_install()["ok"]
+    cache = mgr.cache_dir
+    removable = [cache / "verified-update.json"]
+    for version in ("0.1.2", "0.1.4"):
+        names = [f"ArgusAI-{version}-{suffix}" for suffix in SUFFIXES.values()]
+        names += [f"install-{version}.ps1", f"install-elevated-{version}.ps1", f"install-{version}.sh"]
+        for name in names:
+            path = cache / name
+            if not path.exists():
+                path.write_text("owned updater fixture")
+            removable.append(path)
+    retained_names = [
+        "ArgusAI-0.1.5-win-x64-setup.exe", "install-0.1.5.ps1", "install-elevated-0.1.5.ps1",
+        "personal.txt", "personal.json", "install.log", "install-result.json", "download-abandoned.part",
+        "verified-update.json.tmp", "ArgusAI-0.1.4-not-a-release.exe", "install-elevated-0.1.4.sh",
+        "install-00.1.4.ps1", "ArgusAI-0.1.4-win-x64-setup.exe.sha256",
+    ]
+    for name in retained_names:
+        (cache / name).write_text("retain")
+    nested = cache / "nested"
+    nested.mkdir()
+    (nested / "ArgusAI-0.1.4-win-x64-setup.exe").write_text("do not recurse")
+    directory = cache / "ArgusAI-0.1.1-linux-x64.tar.gz"
+    directory.mkdir()
+    (directory / "personal.txt").write_text("not a package file")
+    installed_contents = mgr.executable.read_bytes()
+    upgraded = UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True, executable=mgr.executable)
+    assert upgraded.status()["status"] == "idle"
+    assert not any(path.exists() for path in removable)
+    assert all((cache / name).read_text() == "retain" for name in retained_names)
+    assert (nested / "ArgusAI-0.1.4-win-x64-setup.exe").read_text() == "do not recurse"
+    assert (directory / "personal.txt").is_file()
+    assert mgr.executable.read_bytes() == installed_contents
+
+
+def test_pending_failed_newer_update_is_kept_for_retry_during_cleanup(tmp_path):
+    mgr, _, _ = manager(tmp_path)
+    mgr.check()
+    mgr.start_download()
+    wait_download(mgr)
+    assert mgr.prepare_install()["ok"]
+    report = {"ok": False, "version": "0.1.4", "current_version": "0.1.3", "error": "retry fixture"}
+    (mgr.cache_dir / "install-result.json").write_text(json.dumps(report), encoding="utf-8-sig")
+    package = mgr._package
+    restored = UpdateManager(mgr.cache_dir, "0.1.3", platform_key="win-x64", packaged=True, executable=mgr.executable)
+    assert restored.status()["status"] == "downloaded"
+    assert restored.status()["error_code"] == "install_failed"
+    assert package.is_file()
+    assert (mgr.cache_dir / "verified-update.json").is_file()
+    assert (mgr.cache_dir / "install-0.1.4.ps1").is_file()
+    assert (mgr.cache_dir / "install-elevated-0.1.4.ps1").is_file()
+
+
+@pytest.mark.parametrize("operation", ["iterdir", "unlink"])
+def test_cache_cleanup_permission_errors_never_block_startup(tmp_path, monkeypatch, operation):
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    old = cache / "ArgusAI-0.1.2-win-x64-setup.exe"
+    old.write_text("old cache")
+    current = cache / "install-0.1.4.ps1"
+    current.write_text("old script")
+    original = getattr(Path, operation)
+    def denied(path, *args, **kwargs):
+        if path == (cache if operation == "iterdir" else old):
+            raise PermissionError("fixture denies cache cleanup")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, operation, denied)
+    mgr = UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True,
+                        executable=tmp_path / "installed/ArgusAI.exe")
+    assert mgr.status()["status"] == "idle"
+    assert old.is_file()
+    if operation == "unlink":
+        assert not current.exists()  # one denied file does not abort the rest
+
+
+def test_cache_cleanup_preserves_external_symlink_and_its_target(tmp_path):
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    external = tmp_path / "personal.txt"
+    external.write_text("outside the cache")
+    linked = cache / "ArgusAI-0.1.4-win-x64-setup.exe"
+    try:
+        linked.symlink_to(external)
+    except OSError:
+        pytest.skip("Creating symlinks requires Windows Developer Mode or privilege")
+    UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True,
+                  executable=tmp_path / "installed/ArgusAI.exe")
+    assert linked.is_symlink()
+    assert external.read_text() == "outside the cache"
+
+
+def test_cache_cleanup_preserves_external_hardlink_and_its_target(tmp_path):
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    external = tmp_path / "personal.txt"
+    external.write_text("outside the cache")
+    linked = cache / "ArgusAI-0.1.4-win-x64-setup.exe"
+    linked.hardlink_to(external)
+    UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True,
+                  executable=tmp_path / "installed/ArgusAI.exe")
+    assert linked.is_file()
+    assert external.read_text() == "outside the cache"
+
+
+def test_cache_cleanup_skips_reparse_point_files(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    candidate = cache / "ArgusAI-0.1.4-win-x64-setup.exe"
+    candidate.write_text("fixture presented as a Windows reparse point")
+    original = Path.lstat
+    def reparse(path, *args, **kwargs):
+        info = original(path, *args, **kwargs)
+        if path == candidate:
+            return SimpleNamespace(st_mode=info.st_mode, st_nlink=1, st_file_attributes=0x400)
+        return info
+    monkeypatch.setattr(Path, "lstat", reparse)
+    mgr = UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True,
+                        executable=tmp_path / "installed/ArgusAI.exe")
+    assert mgr.status()["status"] == "idle"
+    assert candidate.is_file()
+
+
+def test_unknown_or_invalid_ready_metadata_is_preserved(tmp_path):
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    ready = cache / "verified-update.json"
+    ready.write_text('{"personal":true}')
+    UpdateManager(cache, "0.1.4", platform_key="win-x64", packaged=True,
+                  executable=tmp_path / "installed/ArgusAI.exe")
+    assert ready.read_text() == '{"personal":true}'
+
+
+def test_source_runtime_does_not_clean_packaged_update_cache(tmp_path):
+    cache = tmp_path / "updates"
+    cache.mkdir()
+    package = cache / "ArgusAI-0.1.4-win-x64-setup.exe"
+    package.write_text("pending packaged app update")
+    UpdateManager(cache, "0.1.7", platform_key="win-x64", packaged=False)
+    assert package.read_text() == "pending packaged app update"
 
 
 def test_force_check_after_download_finds_newer_release(tmp_path):

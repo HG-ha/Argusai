@@ -216,6 +216,7 @@ class UpdateManager:
                  executable: Path | None = None, packaged: bool | None = None,
                  protected_paths: Iterable[Path | str] = ()) -> None:
         _version(current_version)
+        self._cache_cleanup_root = Path(cache_dir).absolute()
         self.cache_dir = Path(cache_dir).resolve()
         self.current_version = current_version
         self.packaged = packaged if packaged is not None else bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
@@ -247,7 +248,70 @@ class UpdateManager:
                 _target(self.executable, self.platform_key)
             except ValueError:
                 self._state["install_mode"] = "manual"
+        self._cleanup_installed_cache()
         self._restore_ready()
+
+    def _cleanup_installed_cache(self) -> None:
+        """Remove only known, installed-version files in the dedicated cache.
+
+        Future downloads, failure diagnostics, partial transfers and rollback
+        directories remain untouched. No recursive deletion or report-supplied
+        path is accepted, and cleanup failures must never block app startup.
+        """
+        if not self.packaged or self._cache_cleanup_root != self.cache_dir:
+            return
+        import stat
+
+        version_pattern = r"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
+        suffixes = "|".join(re.escape(value) for value in SUFFIXES.values())
+        patterns = (
+            rf"ArgusAI-{version_pattern}-(?:{suffixes})",
+            rf"install-{version_pattern}\.(?:ps1|sh)",
+            rf"install-elevated-{version_pattern}\.ps1",
+        )
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+        def regular_cache_file(path: Path) -> bool:
+            root_info = self.cache_dir.lstat()
+            if (not stat.S_ISDIR(root_info.st_mode)
+                    or getattr(root_info, "st_file_attributes", 0) & reparse):
+                return False
+            info = path.lstat()
+            return (stat.S_ISREG(info.st_mode)
+                    and not getattr(info, "st_file_attributes", 0) & reparse
+                    and info.st_nlink == 1
+                    and path.resolve(strict=True).parent == self.cache_dir)
+
+        try:
+            root_info = self.cache_dir.lstat()
+            if (not stat.S_ISDIR(root_info.st_mode)
+                    or getattr(root_info, "st_file_attributes", 0) & reparse):
+                return
+            entries = list(self.cache_dir.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            try:
+                if not regular_cache_file(entry):
+                    continue
+                candidate_version = None
+                if entry.name == "verified-update.json":
+                    if entry.stat().st_size > MAX_MANIFEST_BYTES:
+                        continue
+                    record = validate_manifest(json.loads(entry.read_text(encoding="utf-8")))
+                    candidate_version = record["version"]
+                else:
+                    for pattern in patterns:
+                        match = re.fullmatch(pattern, entry.name)
+                        if match:
+                            candidate_version = match.group(1)
+                            break
+                if (candidate_version is not None
+                        and _version(candidate_version) <= _version(self.current_version)
+                        and regular_cache_file(entry)):
+                    entry.unlink()
+            except (OSError, ValueError, TypeError):
+                continue
 
     def _restore_ready(self) -> None:
         try:
