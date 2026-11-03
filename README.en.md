@@ -39,7 +39,7 @@ The project is intended for internal security teams, application security engine
 
 ## Workbench architecture
 
-The main Agent plans around the goal, reads Skills, discovers tools and delegates to subagents or a persistent team as needed. Workbench capabilities return results with references to materials and evidence. The Agent reviews them, updates the plan and delivers a report or continues the next stage.
+The main Agent plans around the goal, reads Skills, discovers tools and delegates to subagents or a persistent team as needed. Tools operate on stateful work objects: the Agent can inspect their current state, continue acting on the same object, and record steps and artifacts before reviewing the results, updating the plan and delivering or moving to the next stage.
 
 ```mermaid
 flowchart TB
@@ -53,18 +53,18 @@ flowchart TB
     Main -->|Delegate / collect results| Sub["Temporary subagents<br/>Separate history / workbench tool scope<br/>Native or ACP workers"]
     Main -->|Coordinate / review| Team["Persistent Agent Team<br/>Message sequence / read cursors<br/>Member execution inboxes"]
     Main -->|Read as needed| Skills["Skills<br/>Task methods and workflows"]
-    Main --> Tools["Frozen core tools[] / tool catalog<br/>Discover schemas, dispatch the real tool"]
+    Main --> Tools["Frozen tools[] / catalog<br/>Discover / invoke tools<br/>Query state / continue"]
     Sub --> Tools
     Team --> Tools
     Skills -.->|Methods| Tools
 
-    Tools --> Web["Browser / MITM proxy<br/>Page actions, capture,<br/>breakpoints and replay"]
-    Tools --> Analysis["Scans / reverse engineering<br/>Checks, JS / WASM,<br/>mobile and binary analysis"]
-    Tools --> Execution["Sandbox / hosts / desktop<br/>Files, scripts, SSH and devices"]
+    Tools --> Web["Browser / MITM proxy<br/>Tabs / flows / paused requests<br/>Breakpoints, replay and HAR"]
+    Tools --> Analysis["Scans / reverse engineering<br/>Task / ReverseJob<br/>Samples, derived artifacts, analysis"]
+    Tools --> Execution["Sandbox / hosts / desktop<br/>Shell sessions / files / environments<br/>Scripts, SSH and devices"]
     Tools --> Knowledge["Knowledge / evidence / reports<br/>Cases, artifacts and evidence"]
     Tools --> Recall["Long-term and cross-session memory<br/>Search → session / message locators<br/>Paged history and archived references"]
     Tools -.-> Extensions["Optional tools and integrations<br/>MCP / external scanners<br/>Ghidra / Frida / JADX"]
-    Web --> Review["Main Agent reviews results and evidence"]
+    Web --> Review["Main Agent reviews<br/>State / steps / evidence"]
     Analysis --> Review
     Execution --> Review
     Knowledge --> Review
@@ -72,7 +72,7 @@ flowchart TB
     Extensions -.-> Review
     Review --> Delivery["Reports / PoCs<br/>Summaries and session sandbox files"]
     Delivery -.->|Remote delivery as agreed in the task| Outbox["Paired identity → Outbox<br/>Adapter sends<br/>Delivery status checks"]
-    Review -->|Update plan, continue / retest| Main
+    Review -->|Update plan / continue / retest| Main
     Sub -.->|Completion notice / eligible parent wake| Main
     Team -->|Queue public messages / respond or pass| Team
     Team -.->|Read chat and artifacts| Review
@@ -88,6 +88,7 @@ Conversation history, execution state, streaming events and domain artifacts are
 | --- | --- |
 | [Run identity and execution ownership](argusai/core/assistant/run_jobs.py) | `session_id` identifies the conversation, durable `job_id` the run, and temporary `run_id` the incremental event stream. A resumed run can open a new stream. The session lock is released after the worker actually exits; atomic snapshots and ordered JSONL events preserve run state. |
 | [Stable control surface and capability catalog](argusai/core/assistant/session_chat_loop.py) | The native session's core `tools[]` and system tool catalog are frozen. `tool_search` returns domain schemas and `invoke_catalogue_tool` executes them without growing the permanent tool array. Skills use a shortlist followed by reading selected content. |
+| [Stateful tools and continued operation](wiki/Architecture-and-Development.md#有状态工具与连续操作) | The model uses object IDs, steps and material references; the host manages resources and their lifecycles. Browser tabs, proxy flows and paused requests, interactive shells, Tasks and ReverseJobs expose state queries and further actions. Todos track phases, completion criteria, blockers and evidence so work can proceed from the current state. |
 | [Context budgets and protocol repair](argusai/core/assistant/session_budget.py) | Before native model calls, old tool results and early conversation chunks are compacted, and tool-call/result adjacency is repaired. Selected high-value results retain complete Artifacts while the model continues with summaries and `artifact_ref`, reading originals when needed. |
 | [Long-term and cross-session recall](argusai/core/assistant/session_memory.py) | Summaries, keyword indexes and session history are separate. The index retains excerpts of all visible user messages and detail from the latest 600 messages. `search_memory` / `search_all_memory` locate earlier sessions and messages; `list_session_messages` / `read_session_message` or `read_assistant_session` read pages or individual entries. Where archive references exist, `case_id` / `artifact_ref` lead to original artifacts. |
 | [Resource-aware tool batches](argusai/core/assistant/session_loop_control.py) | The native tool loop batches consecutive read-only calls according to permitted concurrency and non-conflicting resource keys. Mutating, control and pending-confirmation calls retain their execution boundaries. Results are committed in the original call order. |
@@ -100,6 +101,8 @@ Conversation history, execution state, streaming events and domain artifacts are
 | [Channel outbox and delivery receipts](argusai/core/channels/store.py) | Files from the executing session's sandbox are routed by paired identity into a durable Outbox. A sender worker claims a lease, calls the Adapter, records part-level progress and retries within a limit. `channel_delivery_status` distinguishes `pending`, `processing`, `sent` and `failed`, preserving provider errors. |
 
 See [Agent runtime and data flow](wiki/Architecture-and-Development.md#agent-运行时与数据流) for threads, event streams, storage, key functions and design boundaries.
+
+**The Agent works continuously with stateful tools.** It can keep operating on the same browser tab, inspect existing proxy flows and paused requests, send further commands to an interactive shell, or continue a ReverseJob from its samples, analysis and derived artifacts. Todos track steps, tasks and jobs expose state, and evidence references connect stage outputs. The Agent uses this information to choose its next action. Live connections, running processes and durable records have separate lifecycles; continuing work starts with checking state and deciding whether to reuse a resource or recreate its environment. See [stateful tools and continued operation](wiki/Agent-and-Sessions.md#有状态工具与连续操作) for examples.
 
 **Retrieve earlier work when it matters.** The Agent forms search queries, refines them when needed, locates previous sessions, messages and task references, then reads original text and evidence and checks the related task's current state before continuing. Searchable long-term records can extend far beyond a single model request's context window; only relevant material is brought into the current turn. Search covers saved sessions in the current local data environment; queries from ordinary incoming channel messages are also limited by the paired identity's accessible sessions. See [cross-session memory and task handoffs](wiki/Agent-and-Sessions.md#跨会话长期记忆与材料承接) for usage examples.
 
@@ -226,8 +229,10 @@ sequenceDiagram
         A->>M: Stable core tools / budgeted context
         M-->>A: Next call, delegation or wait
         alt Invoke workbench capabilities
-            A->>T: Discover tools, read Skills, confirm and execute
-            T-->>A: Results / evidence references / job receipt
+            A->>T: Discover tools, read Skills, create or select a work object
+            T-->>A: Object ID / current state / existing materials
+            A->>T: Choose next action from state, confirm and act on the same object
+            T-->>A: Updated state / results / evidence references / job receipt
         else Recall earlier work
             A->>T: search_memory / search_all_memory
             T-->>A: Session and message locators, task and artifact references

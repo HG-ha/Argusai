@@ -15,6 +15,7 @@
 ### 日常工作
 
 - [Agent 与会话](Agent-and-Sessions.md)
+- [有状态工具与连续操作](Agent-and-Sessions.md#有状态工具与连续操作)
 - [跨会话长期记忆](Agent-and-Sessions.md#跨会话长期记忆与材料承接)
 - [Web 审计与代理](Web-Audit-and-Proxy.md)
 - [逆向工作台](Reverse-Workbench.md)

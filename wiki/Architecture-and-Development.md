@@ -106,6 +106,26 @@ flowchart TB
 
 因此，`read_parallel` 是带条件的调度许可，资源键也是本批执行器的冲突判断。它们不能代替跨会话的数据库锁，未声明资源关系的工具也不会自动获得全局互斥。工具维护者需要准确声明元数据，并在领域存储中保留自己的并发保护。
 
+## 有状态工具与连续操作
+
+领域工具围绕可标识、可查询的工作对象组织操作。Agent 创建或选择对象，读取当前状态，在同一对象上执行下一步，再查询结果、更新计划并关联产物。这让浏览器操作、交互式命令、流量处置与样本分析能够沿着已有步骤持续推进。
+
+工具状态由领域服务持有，模型上下文保存本轮需要的观察、标识和引用。持久历史与记忆负责找回工作线索，领域查询接口负责核对当前事实；界面快照可提供正在查看的任务入口。它们共同支持“定位对象 → 读状态 → 操作 → 验证 → 继续”的工作循环。
+
+| 对象与实现 | 代表操作链 | 状态与生命周期 |
+| --- | --- | --- |
+| [浏览器标签页与控制](../argusai/core/tools/browser_attach.py) | `browser_list_tabs` → 按 `target_id` 或 `window_id` / `tab_index` 调用 `browser_use_tab` → 查看页面或执行脚本 | 浏览器连接、活动页面、控制权和页内环境用于连续操作；连接与 Hub 属于运行时资源，重新连接后应重新列出标签页 |
+| [代理流量与断点](../argusai/core/tools/kb_tasks.py) | `proxy_search_traffic` / `proxy_decode_flow` 定位流量；`proxy_breakpoints_list` → `proxy_breakpoint_resolve(pause_id=...)` 处理暂停请求 | 流量编号对应当前代理的捕获内容，断点标识对应仍在等待的真实请求；实时请求状态与保存的规则、导出材料分开管理 |
+| [交互式 Shell](../argusai/core/workspace/shell_sessions.py) | `shell_session_start` → `shell_session_exec` / `shell_session_write` → `shell_session_read(offset=...)` → `shell_session_stop` | `shell-*` 标识绑定所属助手会话，记录进程、状态、日志与退出码；后续命令在同一进程中执行。管理器与进程句柄在内存，日志和沙盒文件另存磁盘 |
+| [扫描任务](../argusai/core/tasks.py) | `get_task_detail` / `get_task_findings` → 读取发现与生成报告；复测可用 `rescan_task` | 目标、参数、检查进度、状态、发现与事件落盘。`rescan_task` 复用参数新建任务；应用退出时未结束的扫描不会因此变为可断点续跑的进程 |
+| [ReverseJob](../argusai/core/reverse/reverse_jobs.py) | `reverse_job_get` → `reverse_artifact_read` / `reverse_finding_read` / `reverse_reproduce_read` → 继续分析、保存产物及更新作业 | `job_id` 连接目标、意图、技术栈、`active` / `paused` / `done` / `archived` 状态和材料索引；`job.json`、产物与事件持久保存，便于再次进入同一分析 |
+| [Todo 步骤](../argusai/core/assistant/session_tool_methods.py) | `list_todos` → `update_todo` / `complete_todo_with_refs` → 检查下一步 | 步骤树保存阶段、目标引用、完成条件、证据与阻塞原因，随会话检查点持久保存；完成状态与材料仍需 Agent 核验 |
+| [Case 与材料](../argusai/core/workspace/cases.py) | `case_get` / `case_events` → `artifact_read` → 保存新材料并关联证据 | `case_id`、`artifact_id` 连接目标、时间线、原始字节、SHA-256 和证据关系；这是持久材料结构，不承担运行进程的调度 |
+
+会话的 `current_case_id`、Todo、历史与配置由 [session.py](../argusai/core/assistant/session.py) 保存；工具批次等重要变更后的 `_emit_checkpoint()` 通知宿主保存会话。运行状态还由前述 RunJob 监督。多对象协作时应保留各自标识，避免把扫描任务 ID、逆向作业 ID、助手运行 `job_id` 和临时后台 `job_ref` 混用。
+
+持久记录可以帮助恢复工作步骤，实时进程与连接则需要重新核实。ReverseJob 中的 `runtime_sessions` 是运行记录，不能单凭其中的 `running` 推断 Frida、JS Runtime 或浏览器会话仍然存活；`js_runtime_restore` 会关闭并重建环境、按选项重载源码，并非恢复任意进程内存。扩展工具的状态能力也由其自身协议决定。面向用户的继续操作示例见[Agent 与会话](Agent-and-Sessions.md#有状态工具与连续操作)。
+
 ## 长任务循环与上下文预算
 
 [session_loop_control.py](../argusai/core/assistant/session_loop_control.py) 的 `_agent_round_iter()` 不用固定轮次数作为主停止条件。每轮检查取消、墙钟截止时间、用户决策和执行进展；相同调用反复出现、轮询无变化、失败循环等模式进入提示或停止路径。没有固定轮数上限不代表没有运行预算。
