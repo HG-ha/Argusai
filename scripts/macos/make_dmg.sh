@@ -42,19 +42,129 @@ if [[ -z "$ICNS_SRC" ]]; then
     done
 fi
 
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/argusai-dmg.XXXXXX")"
-RW_DMG="$(mktemp "${TMPDIR:-/tmp}/argusai-dmg-rw.XXXXXX").dmg"
-MOUNT=""
-cleanup() {
-    if [[ -n "$MOUNT" && -d "$MOUNT" ]]; then
-        hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || \
-            hdiutil detach "$MOUNT" -force -quiet >/dev/null 2>&1 || true
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/argusai-dmg.XXXXXX")"
+WORK="$(cd "$WORK" && pwd -P)"
+STAGE="$WORK/stage"
+RW_DMG="$WORK/working.dmg"
+FINAL_DMG="$WORK/compressed.dmg"
+MOUNT="$WORK/mount"
+ATTACH_STARTED=0
+
+image_attached() {
+    if ! hdiutil info >"$WORK/image-info.txt"; then
+        echo "Cannot verify whether the temporary image is attached: $RW_DMG" >&2
+        return 2
     fi
-    rm -rf "$STAGE" "$RW_DMG"
+    awk -v image="$RW_DMG" '
+        /^[[:space:]]*image-path[[:space:]]*:/ {
+            sub(/^[[:space:]]*image-path[[:space:]]*:[[:space:]]*/, "")
+            if ($0 == image) found = 1
+        }
+        END { exit !found }
+    ' "$WORK/image-info.txt"
+}
+
+mountpoint_active() {
+    if ! mount >"$WORK/mount-info.txt"; then
+        echo "Cannot inspect the temporary mount point: $MOUNT" >&2
+        return 2
+    fi
+    grep -Fq " on $MOUNT (" "$WORK/mount-info.txt"
+}
+
+image_detached() {
+    local status
+    if image_attached; then
+        return 1
+    else
+        status=$?
+        [[ "$status" == 1 ]] || return 2
+    fi
+    if mountpoint_active; then
+        return 1
+    else
+        status=$?
+        [[ "$status" == 1 ]] || return 2
+    fi
+}
+
+close_finder_window() {
+    osascript - "$MOUNT" <<'EOF'
+on run argv
+    tell application "Finder"
+        try
+            close folder (POSIX file (item 1 of argv) as alias)
+        end try
+    end tell
+end run
+EOF
+}
+
+unmount_image() {
+    local attempt status detach_status=1
+    for attempt in 1 2 3 4 5 6; do
+        if image_detached; then
+            return 0
+        else
+            status=$?
+            [[ "$status" == 1 ]] || return "$status"
+        fi
+        # Never resolve a volume by its user-visible name, or force-detach a
+        # directory which is no longer this build's private mount point.
+        if ! image_attached || ! mountpoint_active; then
+            echo "Cannot safely detach the temporary image at $MOUNT" >&2
+            return 1
+        fi
+        if ! close_finder_window; then
+            echo "Finder did not close its temporary image window; attempting detach." >&2
+        fi
+        if [[ "$attempt" == 6 ]]; then
+            if hdiutil detach "$MOUNT" -force -quiet 2>"$WORK/detach.stderr"; then
+                detach_status=0
+            else
+                detach_status=$?
+                cat "$WORK/detach.stderr" >&2
+            fi
+        else
+            if hdiutil detach "$MOUNT" -quiet 2>"$WORK/detach.stderr"; then
+                detach_status=0
+            else
+                detach_status=$?
+                cat "$WORK/detach.stderr" >&2
+            fi
+        fi
+        if image_detached; then
+            return 0
+        else
+            status=$?
+            [[ "$status" == 1 ]] || return "$status"
+        fi
+        if [[ "$attempt" != 6 ]]; then
+            sleep 1
+        fi
+    done
+    echo "Temporary image is still attached; conversion is unsafe: $RW_DMG" >&2
+    [[ "$detach_status" != 0 ]] || detach_status=1
+    return "$detach_status"
+}
+
+cleanup() {
+    local status=$?
+    trap - EXIT
+    if [[ "$ATTACH_STARTED" == 1 ]] && ! unmount_image; then
+        echo "Keeping temporary files because detach could not be confirmed: $WORK" >&2
+        [[ "$status" != 0 ]] || status=1
+    else
+        if ! rm -rf -- "$WORK"; then
+            echo "Could not remove the temporary image files: $WORK" >&2
+            [[ "$status" != 0 ]] || status=1
+        fi
+    fi
+    exit "$status"
 }
 trap cleanup EXIT
 
-mkdir -p "$STAGE/.background"
+mkdir -p "$STAGE/.background" "$MOUNT"
 APP_NAME="$(basename "$APP_PATH")"
 if ! cp -Rc "$APP_PATH" "$STAGE/$APP_NAME" 2>/dev/null; then
     cp -R "$APP_PATH" "$STAGE/$APP_NAME"
@@ -79,15 +189,10 @@ hdiutil create \
     -format UDRW \
     "$RW_DMG" >/dev/null
 
-# Detach a leftover volume with the same name (previous failed build).
-if [[ -d "/Volumes/$VOL_NAME" ]]; then
-    hdiutil detach "/Volumes/$VOL_NAME" -quiet >/dev/null 2>&1 || \
-        hdiutil detach "/Volumes/$VOL_NAME" -force -quiet >/dev/null 2>&1 || true
-fi
-
-MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW_DMG" \
-    | awk '/\/Volumes\// { print $NF; exit }')"
-[[ -n "$MOUNT" && -d "$MOUNT" ]] || { echo "failed to mount $RW_DMG" >&2; exit 1; }
+# A private mount point also lets simultaneous builds use the same volume name.
+ATTACH_STARTED=1
+hdiutil attach -readwrite -noverify -noautoopen -mountpoint "$MOUNT" "$RW_DMG" >"$WORK/attach.stdout"
+image_attached && mountpoint_active || { echo "failed to mount $RW_DMG at $MOUNT" >&2; exit 1; }
 
 if command -v SetFile >/dev/null 2>&1; then
     SetFile -a V "$MOUNT/.background" >/dev/null 2>&1 || true
@@ -98,9 +203,12 @@ if command -v SetFile >/dev/null 2>&1; then
 fi
 
 # Finder writes .DS_Store only after the window is opened and positions settle.
-osascript <<EOF
-tell application "Finder"
-    tell disk "$VOL_NAME"
+osascript - "$MOUNT" "$APP_NAME" <<'EOF'
+on run argv
+    set mountPath to item 1 of argv
+    set appName to item 2 of argv
+    tell application "Finder"
+    tell folder (POSIX file mountPath as alias)
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
@@ -115,7 +223,7 @@ tell application "Finder"
             set background picture of theViewOptions to file ".background:background.png"
         end try
         try
-            set position of item "$APP_NAME" of container window to {140, 185}
+            set position of item appName of container window to {140, 185}
         end try
         try
             set position of item "Applications" of container window to {520, 185}
@@ -127,8 +235,10 @@ tell application "Finder"
         open
         update without registering applications
         delay 2
+        close
     end tell
-end tell
+    end tell
+end run
 EOF
 
 sync
@@ -136,24 +246,28 @@ if command -v bless >/dev/null 2>&1; then
     bless --folder "$MOUNT" --openfolder "$MOUNT" >/dev/null 2>&1 || true
 fi
 
-# Finder sometimes keeps the volume busy for a moment after AppleScript.
-for _ in 1 2 3 4 5; do
-    if hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1; then
-        MOUNT=""
-        break
-    fi
-    sleep 1
-done
-if [[ -n "$MOUNT" ]]; then
-    hdiutil detach "$MOUNT" -force -quiet >/dev/null 2>&1 || true
-    MOUNT=""
-fi
+# A successful command is insufficient: confirm neither image nor mount remains.
+unmount_image
+ATTACH_STARTED=0
 
 mkdir -p "$(dirname "$DMG_PATH")"
-rm -f "$DMG_PATH"
-hdiutil convert \
-    "$RW_DMG" \
-    -ov \
-    -format UDZO \
-    -imagekey zlib-level=9 \
-    -o "$DMG_PATH" >/dev/null
+for attempt in 1 2 3; do
+    if LC_ALL=C hdiutil convert "$RW_DMG" -ov -format UDZO \
+        -imagekey zlib-level=9 -o "$FINAL_DMG" >"$WORK/convert.stdout" 2>"$WORK/convert.stderr"; then
+        [[ -s "$FINAL_DMG" ]] || { echo "hdiutil produced no complete compressed image." >&2; exit 1; }
+        mv -f "$FINAL_DMG" "$DMG_PATH"
+        exit 0
+    else
+        status=$?
+    fi
+    cat "$WORK/convert.stderr" >&2
+    # Retry only recognized transient contention, never parameter, permission,
+    # or space errors (even if a secondary message also mentions contention).
+    if [[ "$attempt" == 3 ]] || \
+        grep -Eiq 'No space left|not enough space|invalid argument|invalid option|unrecognized option|permission denied|read-only file system' "$WORK/convert.stderr" || \
+        ! grep -Eiq 'Resource temporarily unavailable|Resource busy|Device or resource busy' "$WORK/convert.stderr"; then
+        exit "$status"
+    fi
+    echo "Temporary image conversion contention; retrying ($attempt/3)." >&2
+    sleep "$attempt"
+done
