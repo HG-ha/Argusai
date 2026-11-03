@@ -175,6 +175,16 @@ flowchart TB
 
 ACP 的过程是启动进程、`initialize` 协商、按能力 `load_session` 或 `new_session`，应用可用配置，再发送提示内容并收集更新。只有对端声明支持 `loadSession` 且已有会话标识时才尝试加载。图片、音频等附件也按对端能力协商，不能仅凭本地界面能选附件就断言外部 Agent 一定能读取。
 
+### ACP 宿主引导与系统提示协商
+
+宿主引导说明 Agent 正在 ArgusAI 内工作、如何发现与调用工作台工具，并带入用户习惯；外部子 Agent 另有受委派角色和任务范围。Agent 保留自身身份和运行时规则。
+
+`systemPrompt` 当前属于 ACP 的 Preview 能力，尚未进入稳定协议；适配以本次 `initialize` 的能力广告为准。[官方 RFD](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/client-system-prompt.mdx) 规定，v1 的 `agentCapabilities.sessionCapabilities.systemPrompt` 为对象（包括 `{}`）才表示支持，缺失或 `null` 表示不支持。协议版本号、未知字段或本地 SDK 版本不能代替协商。
+
+支持时，ArgusAI 在 `session/new` 与 `session/load` 顶层传递 `systemPrompt`，使用 `append` 和非空文本内容，保留对端原有指令；后续加载仍重传相同配置，不追加同内容的聊天消息。配置更新应在会话空闲时发起，后台终端也可能使对端拒绝。用户习惯变化经生命周期请求更新，现有会话可能到下一次压缩才采用新内容；无法应用时应报告错误，不静默丢掉系统配置。具体系统／开发者消息位置由外部 Agent 实现决定。[官方 SDK 说明](https://agentclientprotocol.github.io/rust-sdk/protocol.html#client-provided-system-prompts)
+
+未声明支持时，不发送该字段，改用明确标识的普通宿主上下文：首次远端会话补齐引导，偏好变更时更新，借助会话与内容标记避免每轮重复。此兼容方式没有系统提示的优先级，也不能保证压缩后永久保留。动态页面和任务标识仍作为本轮参考数据，真实状态通过工具查询；支持能力与提示传输方式不会扩大工具权限。
+
 会话指定的项目目录优先于运行时默认工作目录（`cwd`）。ArgusAI 在握手中不提供客户端文件读写与终端（`terminal`）能力；外部 Agent 可使用自身拥有的文件、命令行能力。ACP 客户端按收到的 NDJSON 顺序观察 `session/update`，避免提示请求结束后才补到的文本打乱显示。
 
 外部 Agent 调用 ArgusAI 能力时，经 [tool_broker.py](../argusai/core/agent_runtimes/tool_broker.py) 的 `ArgusAIToolBroker` 桥接：

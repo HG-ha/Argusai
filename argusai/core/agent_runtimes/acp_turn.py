@@ -204,7 +204,7 @@ def _resource_prompt_block(
 
 
 def acp_host_instruction() -> str:
-    """Stable workbench guidance, delivered as host context rather than system policy."""
+    """Stable workbench guidance for an appended instruction or fallback context."""
     return (
         "[ArgusAI host context]\n"
         "You are the selected external Agent working on this conversation inside ArgusAI. "
@@ -223,6 +223,31 @@ def acp_host_instruction() -> str:
     )
 
 
+def _supports_system_prompt(capabilities: dict[str, Any]) -> bool:
+    session = capabilities.get("sessionCapabilities")
+    return isinstance(session, dict) and isinstance(session.get("systemPrompt"), dict)
+
+
+def _system_prompt_payload(instruction: str, user_habits: str) -> dict[str, Any] | None:
+    content = []
+    if instruction.strip():
+        content.append({"type": "text", "text": instruction})
+    if user_habits.strip():
+        content.append({"type": "text", "text": "[ArgusAI user preferences]\n" + user_habits})
+    return {"mode": "append", "content": content} if content else None
+
+
+def _host_context_stamp(
+    session_id: str, instruction: str, user_habits: str, *, delivery: str,
+) -> dict[str, str]:
+    return {
+        "session_id": session_id,
+        "instruction_hash": hashlib.sha256(instruction.encode("utf-8")).hexdigest(),
+        "profile_hash": hashlib.sha256(user_habits.encode("utf-8")).hexdigest(),
+        "delivery": delivery,
+    }
+
+
 def _host_prompt_blocks(
     binding: SessionRuntimeBinding,
     session_id: str,
@@ -233,19 +258,20 @@ def _host_prompt_blocks(
 ) -> tuple[list[Any], dict[str, str]]:
     if not instruction:
         return [], {}
-    hashes = {
-        "instruction_hash": hashlib.sha256(instruction.encode("utf-8")).hexdigest(),
-        "profile_hash": hashlib.sha256(user_habits.encode("utf-8")).hexdigest(),
-    }
+    stamp = _host_context_stamp(session_id, instruction, user_habits, delivery="prompt")
     previous = binding.acp_host_context
-    same_session = not new_session and previous.get("session_id") == session_id
+    same_session = (
+        not new_session
+        and previous.get("session_id") == session_id
+        and previous.get("delivery", "prompt") == "prompt"
+    )
     blocks = []
-    if not same_session or previous.get("instruction_hash") != hashes["instruction_hash"]:
+    if not same_session or previous.get("instruction_hash") != stamp["instruction_hash"]:
         blocks.append(acp.text_block(instruction))
-    if (same_session and previous.get("profile_hash") != hashes["profile_hash"]) or (not same_session and user_habits):
+    if (same_session and previous.get("profile_hash") != stamp["profile_hash"]) or (not same_session and user_habits):
         profile = user_habits or "The saved user preferences have been cleared; use the current user's instructions."
         blocks.append(acp.text_block("[ArgusAI user preferences update]\n" + profile))
-    return blocks, {"session_id": session_id, **hashes}
+    return blocks, stamp
 
 
 def acp_workspace_instruction(cwd: str, *, project: bool) -> str:
@@ -415,6 +441,7 @@ async def run_acp_turn(
     capabilities: dict[str, Any] = {}
     prompt_capabilities: dict[str, bool] = dict(binding.acp_prompt_capabilities)
     replaying = False
+    system_prompt_method = ""
 
     def _event_sink(envelope: dict[str, Any]) -> None:
         update = envelope.get("update")
@@ -458,6 +485,10 @@ async def run_acp_turn(
         initialize_payload = _model_dict(initialize)
         capabilities = dict(initialize_payload.get("agentCapabilities") or {})
         prompt_capabilities = normalize_prompt_capabilities(capabilities)
+        system_prompt = (
+            _system_prompt_payload(host_instruction, user_habits)
+            if _supports_system_prompt(capabilities) else None
+        )
         connection = process.connection
         if connection is None:
             raise RuntimeError("ACP connection is unavailable after initialize")
@@ -467,11 +498,17 @@ async def run_acp_turn(
         if binding.acp_session_id and capabilities.get("loadSession"):
             replaying = True
             try:
-                loaded = await connection.load_session(
-                    cwd,
-                    binding.acp_session_id,
-                    mcp_servers=list(mcp_servers or []),
-                )
+                if system_prompt is not None:
+                    system_prompt_method = "session/load"
+                    loaded = await process.load_session(
+                        cwd, binding.acp_session_id, mcp_servers=list(mcp_servers or []),
+                        system_prompt=system_prompt,
+                    )
+                    system_prompt_method = ""
+                else:
+                    loaded = await connection.load_session(
+                        cwd, binding.acp_session_id, mcp_servers=list(mcp_servers or []),
+                    )
                 # Notifications are dispatched on their own tasks, so the tail
                 # of the replay can still arrive after the response does.
                 await asyncio.sleep(0.05)
@@ -485,7 +522,14 @@ async def run_acp_turn(
         else:
             session_created = True
             session_restarted = bool(binding.acp_session_id)
-            created = await connection.new_session(cwd, mcp_servers=list(mcp_servers or []))
+            if system_prompt is not None:
+                system_prompt_method = "session/new"
+                created = await process.new_session(
+                    cwd, mcp_servers=list(mcp_servers or []), system_prompt=system_prompt,
+                )
+                system_prompt_method = ""
+            else:
+                created = await connection.new_session(cwd, mcp_servers=list(mcp_servers or []))
             created_payload = _model_dict(created)
             session_id = str(created_payload.get("sessionId") or "")
             if not session_id:
@@ -544,9 +588,15 @@ async def run_acp_turn(
                 error_code="acp_prompt_empty",
                 error="No ACP-compatible prompt content remained after validation.",
             )
-        host_blocks, host_context = _host_prompt_blocks(
-            binding, session_id, host_instruction, user_habits, new_session=session_created,
-        )
+        if system_prompt is not None:
+            host_blocks = []
+            host_context = _host_context_stamp(
+                session_id, host_instruction, user_habits, delivery="system_prompt",
+            )
+        else:
+            host_blocks, host_context = _host_prompt_blocks(
+                binding, session_id, host_instruction, user_habits, new_session=session_created,
+            )
         prompt_blocks = [*host_blocks, *prompt_blocks]
         response = await asyncio.wait_for(
             connection.prompt(session_id, prompt_blocks),
@@ -583,7 +633,8 @@ async def run_acp_turn(
             prompt_capabilities=prompt_capabilities,
             config_options=config_options,
             error_code="acp_turn_timeout",
-            error=f"ACP turn timed out after {timeout_seconds:g} seconds",
+            error=(f"ACP {system_prompt_method} with systemPrompt.append timed out"
+                   if system_prompt_method else f"ACP turn timed out after {timeout_seconds:g} seconds"),
         )
     except Exception as exc:
         cancelled = active.cancel_requested
@@ -598,7 +649,10 @@ async def run_acp_turn(
             prompt_capabilities=prompt_capabilities,
             config_options=config_options,
             error_code="acp_turn_cancelled" if cancelled else "acp_turn_failed",
-            error="ACP turn cancelled" if cancelled else f"{type(exc).__name__}: {exc}",
+            error=("ACP turn cancelled" if cancelled else (
+                f"ACP {system_prompt_method} with systemPrompt.append failed: {type(exc).__name__}: {exc}"
+                if system_prompt_method else f"{type(exc).__name__}: {exc}"
+            )),
         )
     finally:
         await process.close()

@@ -208,6 +208,9 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
         }
         if remote_id and all(re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes.values()):
             acp_host_context = {"session_id": remote_id, **hashes}
+            delivery = raw_host_context.get("delivery")
+            if isinstance(delivery, str) and delivery in {"prompt", "system_prompt"}:
+                acp_host_context["delivery"] = delivery
     return SessionRuntimeBinding(
         runtime_id=runtime_id,
         workspace_mode=workspace_mode,  # type: ignore[arg-type]

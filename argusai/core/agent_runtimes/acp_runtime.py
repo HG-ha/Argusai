@@ -13,6 +13,7 @@ from typing import Any
 
 import acp
 from acp import schema
+from pydantic import Field
 
 from argusai import __version__
 from argusai.core.infra.win_stdio import background_subprocess_kwargs
@@ -25,6 +26,37 @@ ACP_EVENT_SINK = Callable[[dict[str, Any]], Awaitable[None] | None]
 ACP_PERMISSION_HANDLER = Callable[[dict[str, Any]], str]
 _STDERR_LIMIT = 64 * 1024
 _ALLOW_KINDS = ("allow_once", "allow_always")
+
+
+class _SessionCapabilitiesWithSystemPrompt(schema.SessionCapabilities):
+    """Local compatibility model for ACP fields absent from SDK 0.12."""
+
+    system_prompt: dict[str, Any] | None = Field(default=None, alias="systemPrompt")
+
+
+class _AgentCapabilitiesWithSystemPrompt(schema.AgentCapabilities):
+    session_capabilities: _SessionCapabilitiesWithSystemPrompt | None = Field(
+        default_factory=_SessionCapabilitiesWithSystemPrompt, alias="sessionCapabilities",
+    )
+
+
+class _InitializeResponseWithSystemPrompt(schema.InitializeResponse):
+    agent_capabilities: _AgentCapabilitiesWithSystemPrompt | None = Field(
+        default_factory=_AgentCapabilitiesWithSystemPrompt, alias="agentCapabilities",
+    )
+
+
+def _validated_system_prompt(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("mode") != "append" or not isinstance(value.get("content"), list):
+        raise ValueError("system_prompt requires append mode and a list of text blocks")
+    if not value["content"]:
+        raise ValueError("system_prompt content must not be empty")
+    blocks = []
+    for block in value["content"]:
+        if not isinstance(block, dict) or block.get("type") != "text" or not isinstance(block.get("text"), str):
+            raise ValueError("system_prompt content must contain only text blocks")
+        blocks.append(dict(block))
+    return {**value, "content": blocks}
 
 
 def _pick_permission_option(options: list[Any], verdict: str) -> str:
@@ -247,6 +279,27 @@ class ACPAgentProcess:
         self.connection: Any = None
         self.stderr_excerpt = ""
         self._stderr_task: asyncio.Task[None] | None = None
+        self._initialize_request_id: Any = None
+        self._initialize_payload: dict[str, Any] | None = None
+
+    def _observe_initialize_response(self, event: Any) -> None:
+        """Keep the advertised extension before the SDK drops unknown fields."""
+        message = getattr(event, "message", None)
+        if not isinstance(message, dict):
+            return
+        direction = str(getattr(event, "direction", "") or "").casefold()
+        if direction.endswith("outgoing") and message.get("method") == "initialize":
+            self._initialize_request_id = message.get("id")
+            return
+        if not direction.endswith("incoming") or self._initialize_request_id is None:
+            return
+        if message.get("id") != self._initialize_request_id or "result" not in message:
+            return
+        result = message["result"]
+        capabilities = result.get("agentCapabilities") if isinstance(result, dict) else None
+        session_capabilities = capabilities.get("sessionCapabilities") if isinstance(capabilities, dict) else None
+        if isinstance(session_capabilities, dict) and isinstance(session_capabilities.get("systemPrompt"), dict):
+            self._initialize_payload = result
 
     async def start(self) -> Any:
         if self.process is not None:
@@ -289,12 +342,15 @@ class ACPAgentProcess:
         raw_connection = getattr(self.connection, "_conn", None)
         add_observer = getattr(raw_connection, "add_observer", None)
         if callable(add_observer):
+            add_observer(self._observe_initialize_response)
             add_observer(self.callbacks.observe_stream)
             self.callbacks.enable_ordered_stream_updates()
         return self.connection
 
     async def initialize(self, *, timeout_seconds: float = 12.0) -> Any:
         connection = await self.start()
+        self._initialize_request_id = None
+        self._initialize_payload = None
         capabilities = schema.ClientCapabilities(
             fs=schema.FileSystemCapabilities(readTextFile=False, writeTextFile=False),
             terminal=False,
@@ -305,7 +361,63 @@ class ACPAgentProcess:
             connection.initialize(acp.PROTOCOL_VERSION, capabilities, info),
             timeout=max(1.0, float(timeout_seconds)),
         )
+        if self._initialize_payload is not None:
+            response = _InitializeResponseWithSystemPrompt.model_validate(self._initialize_payload)
         return _normalize_initialize_response(response)
+
+    async def _session_request_with_system_prompt(
+        self,
+        method: str,
+        request: Any,
+        response_model: Any,
+        system_prompt: dict[str, Any],
+    ) -> Any:
+        raw_connection = getattr(self.connection, "_conn", None)
+        send_request = getattr(raw_connection, "send_request", None)
+        if not callable(send_request):
+            raise RuntimeError("ACP connection cannot send top-level systemPrompt")
+        payload = _json_value(request)
+        payload["systemPrompt"] = system_prompt
+        result = await send_request(method, payload)
+        return response_model.model_validate(result)
+
+    async def new_session(
+        self,
+        cwd: str,
+        *,
+        mcp_servers: list[Any] | None = None,
+        system_prompt: dict[str, Any] | None = None,
+    ) -> Any:
+        """Create a session, preserving an explicitly negotiated systemPrompt."""
+        prompt = _validated_system_prompt(system_prompt) if system_prompt is not None else None
+        if self.connection is None:
+            raise RuntimeError("ACP connection is unavailable; initialize it before creating a session")
+        if prompt is None:
+            return await self.connection.new_session(cwd, mcp_servers=list(mcp_servers or []))
+        return await self._session_request_with_system_prompt(
+            "session/new", schema.NewSessionRequest(cwd=cwd, mcp_servers=list(mcp_servers or [])),
+            schema.NewSessionResponse, prompt,
+        )
+
+    async def load_session(
+        self,
+        cwd: str,
+        session_id: str,
+        *,
+        mcp_servers: list[Any] | None = None,
+        system_prompt: dict[str, Any] | None = None,
+    ) -> Any:
+        """Load a session without placing client instructions inside _meta."""
+        prompt = _validated_system_prompt(system_prompt) if system_prompt is not None else None
+        if self.connection is None:
+            raise RuntimeError("ACP connection is unavailable; initialize it before loading a session")
+        if prompt is None:
+            return await self.connection.load_session(cwd, session_id, mcp_servers=list(mcp_servers or []))
+        return await self._session_request_with_system_prompt(
+            "session/load", schema.LoadSessionRequest(
+                cwd=cwd, session_id=session_id, mcp_servers=list(mcp_servers or []),
+            ), schema.LoadSessionResponse, prompt,
+        )
 
     async def _collect_stderr(self) -> None:
         process = self.process
