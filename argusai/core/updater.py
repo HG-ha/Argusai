@@ -37,6 +37,27 @@ SUFFIXES = {
 }
 
 
+def _run_hdiutil(arguments: list[str], *, timeout: float) -> None:
+    """Retry Disk Arbitration contention, preserving actionable diagnostics."""
+    deadline = time.monotonic() + timeout
+    for attempt in range(3):
+        try:
+            subprocess.run(["/usr/bin/hdiutil", *arguments], check=True,
+                           capture_output=True, timeout=max(0.1, deadline - time.monotonic()))
+            return
+        except subprocess.CalledProcessError as exc:
+            detail = exc.stderr or exc.stdout or str(exc)
+            if isinstance(detail, bytes):
+                detail = detail.decode("utf-8", errors="replace")
+            transient = any(word in detail.lower() for word in (
+                "resource busy", "device busy", "temporarily unavailable", "resource temporarily",
+            ))
+            delay = 0.5 * (attempt + 1)
+            if not transient or attempt == 2 or time.monotonic() + delay >= deadline:
+                raise RuntimeError(f"hdiutil {arguments[0]} failed: {detail.strip()}") from exc
+            time.sleep(delay)
+
+
 def _version(value: str) -> tuple[int, int, int]:
     match = re.fullmatch(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
     if not match:
@@ -642,8 +663,8 @@ try {{
                 mount.mkdir()
                 attached = False
                 try:
-                    subprocess.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint",
-                                    str(mount), str(self._package)], check=True, capture_output=True, timeout=120)
+                    _run_hdiutil(["attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint",
+                                  str(mount), str(self._package)], timeout=120)
                     attached = True
                     app = mount / "ArgusAI.app"
                     if app.is_symlink() or not (app / "Contents/Info.plist").is_file():
@@ -654,7 +675,7 @@ try {{
                     subprocess.run(["/usr/bin/ditto", str(app), str(payload)], check=True, capture_output=True, timeout=120)
                 finally:
                     if attached:
-                        subprocess.run(["/usr/bin/hdiutil", "detach", str(mount)], check=True, capture_output=True, timeout=30)
+                        _run_hdiutil(["detach", str(mount)], timeout=30)
             launcher = _macos_launcher(payload) if self.platform_key.startswith("macos-") else payload / "ArgusAI"
             # Preflight another onefile binary as a fresh process, not a child
             # of the currently running application's bootstrap.

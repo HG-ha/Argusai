@@ -528,3 +528,33 @@ def test_download_failure_and_cancel_allow_retry(tmp_path):
     mgr._client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"installer")))
     mgr.start_download()
     assert wait_download(mgr)["status"] == "downloaded"
+
+
+@pytest.mark.parametrize("diagnostic,failures,expected_calls", [
+    (b"hdiutil: attach failed - Resource busy", 1, 2),
+    (b"hdiutil: attach failed - Resource temporarily unavailable", 3, 3),
+    (b"hdiutil: attach failed - no mountable file systems", 1, 1),
+])
+def test_hdiutil_retries_only_transient_errors_and_preserves_stderr(monkeypatch, diagnostic, failures, expected_calls):
+    import subprocess
+    from argusai.core.updater import _run_hdiutil
+
+    calls = []
+    sleeps = []
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["check"] and kwargs["capture_output"]
+        assert 0 < kwargs["timeout"] <= 120
+        if len(calls) <= failures:
+            raise subprocess.CalledProcessError(1, command, stderr=diagnostic)
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr("argusai.core.updater.subprocess.run", run)
+    monkeypatch.setattr("argusai.core.updater.time.sleep", sleeps.append)
+    monkeypatch.setattr("argusai.core.updater.time.monotonic", lambda: 0)
+    if expected_calls <= failures:
+        with pytest.raises(RuntimeError, match=diagnostic.decode()):
+            _run_hdiutil(["attach", "-readonly", "fixture.dmg"], timeout=120)
+    else:
+        _run_hdiutil(["attach", "-readonly", "fixture.dmg"], timeout=120)
+    assert len(calls) == expected_calls
+    assert len(sleeps) == expected_calls - 1
