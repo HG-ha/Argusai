@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.8",
+  "published_at": "2026-11-03T15:37:20Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.8",
+  "notes": "# ArgusAI v0.1.8\n\n- 修复 Windows 自动更新安装交接，改进 macOS 镜像挂载与错误诊断。\n- 修复本地 Agent 模型列表、会话切换和待审批请求的状态同步。\n- 支持 ACP 系统提示能力协商，共享原生 Agent 工作指导与全局用户习惯。\n- 将原生 Todo 进展守卫接入 ACP 续跑，并为定时任务继承运行时配置。\n- 完善架构说明、跨会话记忆文档、CLI 示例与 GUI 图文教程。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.8/ArgusAI-0.1.8-win-x64-setup.exe",
+      "sha256": "a8b72e5acb3ce41c302343d7bb1e35d38c393c902ed79531380d5d50dac57cdb",
+      "size": 69992866
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.8/ArgusAI-0.1.8-win-arm64-setup.exe",
+      "sha256": "32bd096542576c211b09083366ce0e49c91b2c455374c0c49663142867fff176",
+      "size": 58971417
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.8/ArgusAI-0.1.8-linux-x64.tar.gz",
+      "sha256": "afa4d07901ae5878746f21398d8a164091cb8bb83212981e8e9335a30fc1e981",
+      "size": 113392590
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.8/ArgusAI-0.1.8-linux-arm64.tar.gz",
+      "sha256": "4112172929f8aa270ef3dbdbc803700e89da898582ef248b09c528c6b3ca7948",
+      "size": 104783694
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.8/ArgusAI-0.1.8-macos-arm64.dmg",
+      "sha256": "bbbc082e77754ca33e09eacbcdeee4c6f67d7635815eee62fcf7e36da0e6595b",
+      "size": 100531464
+    }
+  }
+}
