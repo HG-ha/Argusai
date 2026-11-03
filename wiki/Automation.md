@@ -69,6 +69,119 @@ Cron 日历规则按运行主机的本地时间解释。迁到另一台主机或
 
 运行中的状态可能是完成、失败、等待会话空闲、等待用户决定、等待工具确认或授权阻止。计划列表存在不代表它正在执行；判断应以实际运行记录为准。
 
+## 用 CLI 安排检查并回传产物
+
+本例继续一个已有的审计或分析任务，任务完成后把报告发到配对的 QQ、飞书或其他渠道。软件使用发行包中的 `argusai` 命令。先按[渠道 CLI 配对示例](Integrations.md#用-cli-接通-qq-并绑定一个工作对话)准备模型、`audit-delivery` 对话与收件身份，取得完整 `IDENTITY_ID`。
+
+### 写下验收和交付约定
+
+在本机进入这份工作对话：
+
+```sh
+argusai chat --session audit-delivery
+```
+
+先提供实际目标、授权范围和现有扫描任务 ID 或材料，再输入以下执行约定。`IDENTITY_ID` 替换为已经核对的配对身份：
+
+```text
+这项工作的完成标准以本对话中确认的验收项为准。
+后续 cron-report-handoff 计划只检查本任务并推进授权范围内的未完成事项。
+每轮先读取 Todo、checkpoint 和已有 job_ref；后台工具仍在运行时只查询状态，不重复启动。
+若尚未完成，保存下一步和阻塞原因；没有需要处理的变化时，完成摘要写“无变化”。
+若已满足验收，复核证据，把最终报告保存为当前会话沙盒的 reports/final-review.md。
+用 channel_send_file 将该文件发给 identity_id=IDENTITY_ID，并记录 delivery_id 到 checkpoint。
+后续轮次先查同一 delivery_id，不重复提交同一文件。sent 后再用 channel_send_message 发简短完成通知，保存通知回执。
+文件和通知均为 sent 后，调用 cron_set_enabled 停用 cron-report-handoff。
+投递 pending/processing 时保留检查点等待下一轮；failed 时保留产物和错误，请我处理。
+缺少授权、材料或必要决定时报告阻塞，不把 blocked 或本轮 completed 当成目标已完成。
+```
+
+这是 Agent 对话内容，不是 shell 脚本。按提示处理需要的确认；退出 CLI 对话时可输入 `/quit`。在渠道发起的交互轮次中，需要 `channel_reply` 时应放在文件提交和回执记录之后，因为它被接受后会结束本轮。
+
+### 创建计划，核对后启用
+
+先保存为停用状态，避免配置尚未核对就开始执行：
+
+```sh
+argusai cron add --id cron-report-handoff --name "检查并交付审计报告" --every 600 --destination session --session audit-delivery --disable --prompt "读取本对话的验收与交付约定，检查 Todo、checkpoint 和后台任务状态，继续下一项可推进工作；按约定保存报告、发送渠道文件并检查投递，达成全部交付条件后停用 cron-report-handoff。"
+argusai cron list --json
+```
+
+核对计划 ID、提示词、`schedule.every_seconds=600`、`destination=session` 和 `session_id=audit-delivery`，再启用：
+
+```sh
+argusai cron enable cron-report-handoff
+argusai serve run
+```
+
+已有桌面或服务宿主在线时，不再另开 `serve run`。固定会话正在交互、执行工具或等待必要确认时，计划可能延期；它不会因此并发启动另一个同会话任务。计划需要工作宿主保持运行，手机无需一直打开聊天窗口。
+
+### 核对执行和投递
+
+在另一终端查看执行记录：
+
+```sh
+argusai cron runs cron-report-handoff --limit 10 --json
+argusai channels identities --json
+```
+
+运行记录中的 `session_id` 指向实际执行会话；本例始终是 `audit-delivery`。需要查看完整结果时重新进入该对话，让 Agent 查询已记录的 `delivery_id`：
+
+```sh
+argusai chat --session audit-delivery
+```
+
+```text
+读取 checkpoint，用 channel_delivery_status 检查最终报告和完成通知的投递回执。
+只报告 state、收件身份和 last_error，不重新发送。再核对 cron-report-handoff 是否已经停用。
+```
+
+`queued=true` 只表示已接受入队。`pending` 和 `processing` 尚未完成；`sent` 表示平台适配器发送成功，不代表用户已读；`failed` 需核对错误和已经送出的部分。完整说明见[渠道产物回传](Integrations.md#任务完成后回传结果和文件)。用户也可在绑定私聊中发送 `/file reports/final-review.md` 自行取回本例产物。
+
+要立即停止后续检查，可以手动停用并保留记录：
+
+```sh
+argusai cron disable cron-report-handoff
+```
+
+一次运行显示 `completed`，只说明该次执行结束，计划仍可能等待下一次触发。达到 `max_runs` 才按次数自动停用；按目标结束则需要 Agent 实际调用 `cron_set_enabled(enabled=false)`，或用户手动停用。上面的投递检查点用于避免“文件已排队、本轮已完成”被误认为最终交付已经完成。
+
+### CLI 能配置到哪里
+
+`cron add` 支持触发器、执行目的地、目标会话、标签、启停和高风险授权。当前没有 `--max-runs`、`--context-json`、`--on-change-only`、`--report-to-origin` 或模型选择参数；需要这些字段时，使用 GUI 或在对话中让 Agent 调用 `cron_upsert`，然后用 `cron list --json` 检查保存值。
+
+例如，在创建会话里提出：
+
+```text
+为这项工作建立任务专属会话的计划，每隔 30 分钟执行，max_runs=0。
+把资产范围、验收项、基线位置和收件 identity_id 保存到任务 context。
+启用 on_change_only 和 report_to_origin，保留失败通知。
+每次在实际执行会话生成报告，再按约定调用 channel_send_file 发送给指定身份。
+完成目标并确认文件发送成功后停用计划；展示保存后的 job_id 和关键字段让我核对。
+```
+
+`cron_upsert` 会记录当前 `origin_session_id`；纯 `cron add` 没有“创建对话”，不会自动获得回报来源。`session` 使用目标对话的历史和模型状态；`new_session`、首次建立的 `dedicated_session` 不应假定继承创建者完整历史或当前模型。需要固定模型时，先在固定会话中选择并验证，再使用 `destination=session`；ACP 会话还要核对对应运行时可在无人值守宿主中使用。
+
+## 四类触发器的 CLI 示例
+
+每次 `cron add` 必须且只能选择一种触发器。以下示例都先保存为停用状态，核对提示词、材料路径和授权后，再用 `cron enable 计划ID` 启用。
+
+```sh
+argusai cron add --id cron-daily-review --name "每日材料复查" --cron "0 9 * * *" --destination new_session --disable --prompt "读取已保存的授权范围和基线，复核现有材料并保存变化；无变化时摘要写无变化，不发渠道消息。"
+argusai cron add --id cron-inbox-review --name "新增报告分析" --watch-path "/absolute/path/to/report-inbox" --glob "*.json" --poll 5 --debounce 10 --destination dedicated_session --disable --prompt "读取本次文件变化事件，只分析所列变化材料，保存结论和引用；不要修改监听目录中的输入文件。"
+argusai cron add --id cron-build-review --name "构建完成后复查" --webhook --debounce 5 --destination new_session --disable --prompt "读取本次触发事件的构建信息和已保存范围，检查可用材料并保存报告；没有授权的目标不发送测试请求。"
+```
+
+间隔示例见上面的 `--every 600`。文件监听路径须替换为宿主可访问的真实绝对路径；默认递归，单层目录可加 `--no-recursive`。日历计划按宿主本地时间解释。`new_session` 每轮有独立沙盒，`dedicated_session` 复用自己的沙盒；它们都不能把创建会话的相对文件路径当成本轮已有文件。
+
+Webhook 创建命令会显示触发 URL，以及首次创建时的一次性签名密钥。发送端保管密钥，不把它放进 Agent 提示词。丢失后用以下命令轮换，并同步更新发送端：
+
+```sh
+argusai cron webhook-secret cron-build-review --yes
+```
+
+签名请求格式见[外部事件驱动分析](#外部事件驱动分析)。Webhook 的 HTTP 成功响应表示事件进入队列，不代表 Agent 已执行成功；后续用 `cron runs cron-build-review --json` 验收。默认回环地址只能由工作宿主本机访问，外部构建系统需要经过已配置的可达 HTTPS 入口。
+
 ## 长任务持续续跑
 
 持续续跑使用固定会话，把“保存进度 → 再次唤醒 → 继续下一项”串起来。它是多次执行组成的持久任务，每一段仍受运行时间、上下文、资源和授权约束。
@@ -166,27 +279,40 @@ X-ArgusAI-Signature: sha256=<HMAC-SHA256 十六进制结果>
 
 会话输入栏的自动审批只影响当前对话，不能替代定时任务的高风险授权。创建会话的显式工具与 MCP 授权也会影响新执行会话；不要用调度获得比原授权更大的权限。
 
-“仅变化时通知”用于减少重复回报。业务层面什么算变化，应在提示词中写清楚，并保存可比较的基线；更换提示词或基线时，也应查看一次实际运行结果。
+“仅变化时通知”按完成摘要中的约定词抑制通知：当前实现识别 `no change`、`无变化` 或 `安静`。它不会自动对网页、资产或报告做语义差异分析。业务上什么算变化，应在提示词中写清楚，由 Agent 读取并比较已保存的基线；有变化的摘要应写明变化项，避免混入表示静默的约定词。
+
+本机注意通知、回报创建会话和发送到聊天软件是三条路径。“回报创建会话”把结果写回 `origin_session_id`，空闲时可交给该会话 Agent 处理；创建会话正忙时会保留回源记录。固定会话原地执行时，不另向自己发送回源事件。这些选项不会自动把任意报告文件上传到 QQ 或飞书。需要渠道交付时，在执行约定中明确收件 `identity_id`、文件、发送工具和回执检查。
+
+从新的或专属执行会话给既有身份发送文件时，应明确传入该身份 ID，通过当前会话的确认与计划授权执行。发送不会因此把收件人的后续聊天重新绑定到本轮 Cron 会话；不要为了回传文件每轮修改渠道绑定。文件先保存在实际执行会话的沙盒，投递状态也应在该发送会话查询。
+
+需要给已审核计划增加无人值守高风险授权时，使用任务专属授权；撤销不会删除计划：
+
+```sh
+argusai cron authorize 计划ID --yes
+argusai cron authorize 计划ID --revoke --yes
+```
+
+两行分别展示授权与撤销，按实际需要选择一条执行。普通报告交付不应因为使用 Cron 就扩大为任意主机操作授权。
 
 ## 让调度器常驻
 
 桌面运行时可以托管计划；无需桌面窗口时，在终端运行：
 
 ```sh
-uv run argusai serve run --cron-only
+argusai serve run --cron-only
 ```
 
 同时托管通信渠道与计划：
 
 ```sh
-uv run argusai serve run
+argusai serve run
 ```
 
 这是前台服务，终端关闭或进程退出后停止。需要系统级常驻可查看：
 
 ```sh
-uv run argusai serve install --dry-run
-uv run argusai serve status
+argusai serve install --dry-run
+argusai serve status
 ```
 
 同一数据根目录的宿主应按程序的单实例管理要求运行，避免 GUI 与另一个服务竞争。源码环境注册系统服务后，不要随意移动仓库或重建对应解释器。完整命令见[CLI 参考](CLI-Reference.md)。
@@ -198,8 +324,8 @@ uv run argusai serve status
 CLI 可以先查看再操作：
 
 ```sh
-uv run argusai cron list
-uv run argusai cron --help
+argusai cron list
+argusai cron --help
 ```
 
 任务没有触发时，依次查看：宿主是否在线、计划是否启用、下次执行时间、目标会话是否忙、事件是否已排队、监听路径或签名是否正确、高风险授权是否缺失。不要仅通过提高频率来排查。
@@ -207,6 +333,9 @@ uv run argusai cron --help
 ## 本页源码依据
 
 - [任务模型与调度](../argusai/core/assistant/cron.py)
+- [Cron CLI 参数](../argusai/cli/commands/cron.py)
+- [Agent 计划工具与回源字段](../argusai/core/tools/assistant_cron_tools.py)
+- [执行、通知与回源](../argusai/gui/assistant_cron.py)
 - [Webhook 与文件变化触发](../argusai/core/assistant/cron_triggers.py)
 - [定时任务界面](../argusai/webui/src/components/CronPanel.vue)
 - [续跑与授权技能](../argusai/skills/assistant-cron/SKILL.md)

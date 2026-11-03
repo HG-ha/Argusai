@@ -14,8 +14,9 @@
 | 你现在的情况 | 从这里开始 | 完成后应得到什么 |
 | --- | --- | --- |
 | 第一次使用 | [快速开始](Quick-Start.md) | 能启动、能对话、能找到第一份任务结果 |
+| 想跟着界面操作 | [桌面图文入门](GUI-Guide.md) | 配置模型、开始对话、使用悬浮球，再接通渠道与定时任务 |
 | 需要安装或配置环境 | [安装与环境](Installation.md) | 明确桌面依赖、模型端点、浏览器和工具路径 |
-| 想从终端工作 | [命令行参考](CLI-Reference.md) | 能选择合适的命令，运行扫描、对话或后台服务 |
+| 想从终端工作 | [完整命令手册](CLI-Reference.md) · [参数表](CLI-Options.md) | 从模型与渠道配置开始，运行任务、接续对话并取得产物 |
 | 一个复杂任务需要连续运行数十小时 | [单轮长时间执行](Agent-and-Sessions.md#单轮长时间执行与三种持续方式) | 能配置时长、组织待办与检查点，并跟踪阶段证据 |
 | 想持续巡检或续跑 | [自动化与持续执行](Automation.md) | 能选择触发方式、执行对话、授权和通知策略 |
 
@@ -41,10 +42,10 @@
 
 | 类别 | 页面 |
 | --- | --- |
-| 开始使用 | [快速开始](Quick-Start.md) · [安装与环境](Installation.md) |
+| 开始使用 | [快速开始](Quick-Start.md) · [桌面图文入门](GUI-Guide.md) · [安装与环境](Installation.md) |
 | 日常工作 | [Agent 与会话](Agent-and-Sessions.md) · [Web 审计与代理](Web-Audit-and-Proxy.md) · [逆向工作台](Reverse-Workbench.md) |
 | 持续运行 | [自动化](Automation.md) · [集成](Integrations.md) · [企业工作流](Enterprise-Workflows.md) |
-| 终端与维护 | [CLI 参考](CLI-Reference.md) · [故障排查](Troubleshooting.md) |
+| 终端与维护 | [完整命令手册](CLI-Reference.md) · [CLI 参数表](CLI-Options.md) · [故障排查](Troubleshooting.md) |
 | 开发与分发 | [架构与开发](Architecture-and-Development.md) · [构建与发布](Build-and-Release.md) · [Wiki 维护](Wiki-Maintenance.md) |
 | 数据与权限 | [数据与执行边界](Data-and-Safety.md) |
 

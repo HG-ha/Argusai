@@ -12,21 +12,27 @@
 - 已准备可访问的 AI 端点与模型；只使用不含企业敏感信息的测试材料。
 - 为工作资料选择一个本地数据目录。配置、会话、任务和证据会按各自类型保存。
 
-使用发行包时，从桌面入口启动。源码环境在仓库根目录执行：
+使用发行包时，从桌面入口启动，也可以在终端执行：
 
 ```sh
-uv run argusai --gui
+argusai --gui
 ```
 
 如果看到终端控制台而不是桌面窗口，确认命令包含 `--gui`。交互终端中裸运行 `argusai` 默认进入 ops 控制台。
 
+本页使用安装包命令。未配置 PATH 的 Windows 用户可在安装目录把 `argusai` 换成 `.\ArgusAI.exe`；Linux 解压目录内使用 `./ArgusAI`。源码安装见[安装指南](Installation.md)。
+
 ## 第一步：配置模型
+
+需要对照界面操作时，打开[桌面图文入门](GUI-Guide.md)：端点表单、模型选择器、悬浮球和定时任务都有演示截图。
 
 打开设置中的 AI 端点配置，填写服务地址、协议、模型和所需凭据，再测试连接。服务地址应是模型服务要求的 API 地址；模型标识应与端点实际提供的模型一致。
 
 先使用非敏感短消息检查响应。连接成功说明端点可以响应这次测试；后续工具调用、长上下文和多模态能力仍取决于模型及端点配置。
 
 如果希望使用本地或内网模型，可以配置相应端点。源码安装不会附带一个可直接使用的大模型。
+
+纯命令行用户可以按[从零配置端点与模型](CLI-Reference.md#从零配置端点与模型)完成隐藏输入密钥、添加端点、配置模型和连接测试，再继续下面的材料分析。
 
 ## 第二步：创建一个离线分析对话
 
@@ -80,11 +86,24 @@ uv run argusai --gui
 
 ## 可选：用 CLI 完成相同的离线任务
 
-在源码环境中准备一个测试文件：
+先在当前工作目录准备一个测试文件。PowerShell：
+
+```powershell
+New-Item -ItemType Directory -Force quickstart | Out-Null
+Set-Content -LiteralPath quickstart/note.txt -Encoding UTF8 -Value 'Authentication: Cookie session. Endpoint: GET /api/profile. No response headers supplied.'
+```
+
+bash：
+
+```bash
+mkdir -p quickstart
+printf '%s\n' 'Authentication: Cookie session. Endpoint: GET /api/profile. No response headers supplied.' > quickstart/note.txt
+```
+
+然后在终端执行：
 
 ```sh
-uv run python -c "from pathlib import Path; p=Path('build/quickstart'); p.mkdir(parents=True, exist_ok=True); (p/'note.txt').write_text('Authentication: Cookie session. Endpoint: GET /api/profile. No response headers supplied.', encoding='utf-8')"
-uv run argusai chat --session quickstart-offline --once --file build/quickstart/note.txt "仅分析附件，不发起网络请求；列出事实、证据与待核实问题。"
+argusai chat --session quickstart-offline --once --file quickstart/note.txt "仅分析附件，不发起网络请求；列出事实、证据与待核实问题。"
 ```
 
 `--once` 运行一轮后退出；`--session` 指定保存和复用历史的对话 ID。此命令需要模型端点，网络限制指目标探测不联网，模型请求仍会发送到已配置的端点。
@@ -92,7 +111,7 @@ uv run argusai chat --session quickstart-offline --once --file build/quickstart/
 希望在同一对话继续讨论时：
 
 ```sh
-uv run argusai chat --session quickstart-offline
+argusai chat --session quickstart-offline
 ```
 
 ## 可选：检查一个本地测试页面
@@ -109,24 +128,17 @@ uv run argusai chat --session quickstart-offline
 
 查看 Agent 使用的地址、工具步骤和报告路径，再继续到[Web 审计与代理](Web-Audit-and-Proxy.md)。如果也想熟悉命令行，可按以下方式手动完成同一检查。
 
-先创建一个简单页面：
+先使用上面的 Agent 任务，或自己的现有环境，在本机准备并运行只绑定 `127.0.0.1` 的测试页面。下面假设页面已经在端口 `8000` 运行；若实际端口不同，修改命令里的地址：
 
 ```sh
-uv run python -c "from pathlib import Path; p=Path('build/quickstart-site'); p.mkdir(parents=True, exist_ok=True); (p/'index.html').write_text('<h1>ArgusAI local test</h1>', encoding='utf-8')"
-uv run python -m http.server 8000 --bind 127.0.0.1 --directory build/quickstart-site
-```
-
-保持该终端运行，在另一个终端执行：
-
-```sh
-uv run argusai scan http://127.0.0.1:8000 --checks headers --out build/quickstart-scan
+argusai scan http://127.0.0.1:8000 --checks headers --out quickstart-scan
 ```
 
 预期终端显示实际的运行目录与报告路径。打开其中的 `report.html`，核对发现是否能关联到响应头。简单测试服务器可能缺少常见安全头；这些发现应结合应用环境解读。
 
 `--out` 是扫描输出的基目录，具体运行目录以命令返回的 `run_dir` 为准。它不是 GUI 任务 ID。
 
-按 `Ctrl+C` 停止测试服务器。后续可继续阅读[Web 审计与代理](Web-Audit-and-Proxy.md)。
+在启动测试服务器的终端按 `Ctrl+C` 停止服务；如果服务由 Agent 启动，让它关闭本次任务启动的服务。后续可继续阅读[Web 审计与代理](Web-Audit-and-Proxy.md)。
 
 ## 接下来做什么
 
@@ -143,7 +155,7 @@ uv run argusai scan http://127.0.0.1:8000 --checks headers --out build/quickstar
 | 现象 | 先检查 |
 | --- | --- |
 | 桌面提示前端文件缺失 | 源码环境是否已运行 `npm --prefix argusai/webui run build` |
-| 对话没有模型响应 | 端点、模型名称、凭据和网络；运行 `uv run argusai doctor` 查看诊断 |
+| 对话没有模型响应 | 端点、模型名称、凭据和网络；运行 `argusai doctor` 查看诊断 |
 | 工具要求安装 Python、Node.js 或 WABT | 这是按需运行时安装；审批前核对工具用途与来源，离线环境需提前准备 |
 | 同一对话再次进入时没有预期历史 | 核对 `--session`、当前数据目录和所用用户环境 |
 | 代理或设备工具不可用 | 先按对应专题准备 CA、浏览器、外部 CLI 或设备；首次体验可继续使用离线材料 |

@@ -43,17 +43,17 @@ The main Agent plans around the goal, reads Skills, discovers tools and delegate
 
 ```mermaid
 flowchart TB
-    Input["Desktop / floating entry / CLI<br/>Paired chat on a phone or other device"] --> Session["Session runtime"]
+    Input["Desktop / floating entry / CLI<br/>Paired chat on a phone or other device"] --> Session["Session execution control<br/>session_id / run lock / runtime binding"]
     Events["Interval / Cron<br/>Webhook / file changes"] --> Session
-    Session --> Native["Configured AI endpoints<br/>ArgusAI native runtime"]
+    Session --> Native["AssistantSession<br/>Native endpoints / streaming provider<br/>Tool loop / progress guards"]
     Session --> ACP["Local Agent via ACP<br/>Codex / Cursor<br/>Claude Code"]
-    Native --> Main["Main Agent<br/>Understand, plan and coordinate<br/>Execute, review and deliver"]
+    Native --> Main["Main Agent / task coordination<br/>Plan, delegate and call tools<br/>Review state and results"]
     ACP --> Main
 
-    Main -->|Delegate / collect results| Sub["Temporary subagents<br/>Native or ACP workers"]
-    Main -->|Coordinate / review| Team["Persistent Agent Team<br/>Roles, models, chat and records"]
+    Main -->|Delegate / collect results| Sub["Temporary subagents<br/>Separate history / workbench tool scope<br/>Native or ACP workers"]
+    Main -->|Coordinate / review| Team["Persistent Agent Team<br/>Message sequence / read cursors<br/>Member execution inboxes"]
     Main -->|Read as needed| Skills["Skills<br/>Task methods and workflows"]
-    Main --> Tools["Built-in tool catalog and bridge<br/>Discovery, permissions and confirmations"]
+    Main --> Tools["Frozen core tools[] / tool catalog<br/>Discover schemas, dispatch the real tool"]
     Sub --> Tools
     Team --> Tools
     Skills -.->|Methods| Tools
@@ -68,7 +68,8 @@ flowchart TB
     Execution --> Review
     Knowledge --> Review
     Extensions -.-> Review
-    Review --> Delivery["Reports / PoCs / artifacts<br/>Conversation / paired chat<br/>Messages and files"]
+    Review --> Delivery["Reports / PoCs<br/>Summaries and session sandbox files"]
+    Delivery -.->|Remote delivery as agreed in the task| Outbox["Paired identity → Outbox<br/>Adapter sends<br/>Delivery status checks"]
     Review -->|Update plan, continue / retest| Main
     Sub -.->|Completion notice / eligible parent wake| Main
     Team -->|Queue public messages / respond or pass| Team
@@ -77,9 +78,31 @@ flowchart TB
 
 Domain tools and Skills are discovered and used as needed. The session sandbox provides files and a script environment; browser, proxy and scan services, and external Agents, use their own execution environments. See [execution loops and wakeups](#continuing-execution-and-proactive-discovery) for control flow, and [architecture and development](wiki/Architecture-and-Development.md) for module entry points.
 
+### Runtime design
+
+Conversation history, execution state, streaming events and domain artifacts are managed separately, connected by run identities and material references. Long tasks and multi-Agent work use these mechanisms:
+
+| Design | Implementation |
+| --- | --- |
+| [Run identity and execution ownership](argusai/core/assistant/run_jobs.py) | `session_id` identifies the conversation, durable `job_id` the run, and temporary `run_id` the incremental event stream. A resumed run can open a new stream. The session lock is released after the worker actually exits; atomic snapshots and ordered JSONL events preserve run state. |
+| [Stable control surface and capability catalog](argusai/core/assistant/session_chat_loop.py) | The native session's core `tools[]` and system tool catalog are frozen. `tool_search` returns domain schemas and `invoke_catalogue_tool` executes them without growing the permanent tool array. Skills use a shortlist followed by reading selected content. |
+| [Context budgets and protocol repair](argusai/core/assistant/session_budget.py) | Before native model calls, old tool results and early conversation chunks are compacted, and tool-call/result adjacency is repaired. Selected high-value results retain complete Artifacts while the model continues with summaries and `artifact_ref`, reading originals when needed. |
+| [Resource-aware tool batches](argusai/core/assistant/session_loop_control.py) | The native tool loop batches consecutive read-only calls according to permitted concurrency and non-conflicting resource keys. Mutating, control and pending-confirmation calls retain their execution boundaries. Results are committed in the original call order. |
+| [Permissions and capability projection](argusai/core/assistant/confirmation_broker.py) | Catalog calls resolve the real tool before policy, confirmation and execution. Todo plan approval, individual tool decisions and readonly/scoped child tool sets have separate roles; delegated capabilities and confirmation mode determine child permissions. |
+| [ACP sessions and the tool bridge](argusai/core/agent_runtimes/tool_broker.py) | ACP negotiates `initialize → session/new or load → prompt`. Workbench tools use a loopback MCP broker with a random session token and a per-binding lock for ordered confirmation and execution. External Agents manage their own tools through their runtime. |
+| [Collaboration queues and conditional wakeups](argusai/core/assistant/agent_threads.py) | Subagents retain separate histories and tool scopes. Team Room sequence numbers and read cursors are separate from member execution inboxes. Busy members retain input, with batching, deduplication and optional passing; completion notices are recorded and batched before attempting an eligible parent wakeup. |
+| [Durable scheduling control](argusai/core/assistant/cron.py) | A data-root host lease and execution lock coordinate scheduling. Jobs, run records, event queues and file baselines use atomic persistence. Signed Webhooks, file changes and time rules target existing, job-owned or new sessions, carrying checkpoints and task materials forward. |
+| [Material references and derivation](argusai/core/workspace/cases.py) | Case Artifacts store original bytes, SHA-256 and size; Evidence links materials, interactions and Findings. ReverseJob tracks samples and derived files. Scan reports, `artifact_ref` and `rev://` have their own storage and retrieval paths and can be explicitly linked. |
+| [Streaming events and the UI protocol](argusai/core/assistant/ui_protocol.py) | Text deltas produce `text_chunk`; tool results and confirmations produce `block_upsert`. The UI protocol normalizes block identity, versions and actions for each surface. `StreamHub` serves in-memory events by offset, separately from the durable RunJob journal. |
+| [Channel outbox and delivery receipts](argusai/core/channels/store.py) | Files from the executing session's sandbox are routed by paired identity into a durable Outbox. A sender worker claims a lease, calls the Adapter, records part-level progress and retries within a limit. `channel_delivery_status` distinguishes `pending`, `processing`, `sent` and `failed`, preserving provider errors. |
+
+See [Agent runtime and data flow](wiki/Architecture-and-Development.md#agent-运行时与数据流) for threads, event streams, storage, key functions and design boundaries.
+
 **Use model endpoints or a local Agent.** Configure AI endpoints directly, or connect locally installed and signed-in Agents such as Codex, Cursor and Claude Code through ACP. They can work inside ArgusAI and call workbench capabilities through its tool bridge. An ACP main conversation does not require a separate native ArgusAI model endpoint; native subagents, team members and other AI analysis tasks use their own runtime and model configuration.
 
 **Continue work on PCs and servers from your phone.** Pair QQ, Feishu, Telegram or another supported channel to send tasks, check progress and receive reports and files from a phone, tablet or another computer. The Agent uses SSH, MCP or other connections configured on its work host to operate reachable computers and servers. Desktop control acts on the desktop hosting the tool, and results can return to the paired channel. See [integrations and messaging](wiki/Integrations.md).
+
+For delivery after completion, include “Send the summary and report files back to this paired channel, then verify delivery” in the task's acceptance criteria. Ordinary channel replies can use `channel_reply` for the exact inbound identity; proactive messages use `channel_send_message`, and files use `channel_send_file`, subject to routing and tool confirmation policy. Queue acceptance means delivery was requested; `sent` means the send interface succeeded, not that the recipient read it. A scheduled task's `report_to_origin` reports to the application conversation that created it; agree separately on channel recipients and artifacts for QQ or other platforms.
 
 ## In action
 
@@ -295,7 +318,30 @@ Alerts and remote state come from materials supplied by the user or configured t
 
 ## Quick start
 
-The current version is `0.1.7`. Source execution needs Python 3.12+, uv, Node.js 18+ and npm. From the repository root:
+The current version is `0.1.7`. Download the prebuilt package for your platform and its `.sha256` from [Releases](https://github.com/HG-ha/Argusai/releases), then follow [installation](wiki/Installation.md) to verify and install it. The terminal examples use an `argusai` command entry. Without one, use `.\ArgusAI.exe` from the Windows installation directory or `./ArgusAI` from the extracted Linux directory; see the [CLI reference](wiki/CLI-Reference.md) for the macOS entry.
+
+```sh
+argusai version --json
+argusai --gui
+argusai chat
+```
+
+On first launch, choose a data directory and configure native AI endpoints and models, or select a locally installed, signed-in and tested ACP Agent. Check browser and external tool paths as needed. Open the full Agent conversation or floating entry and give the Agent the goal, materials and constraints so it can plan and start work. For a first task, provide an approved HAR or JS file and ask the Agent to inventory interfaces, identify leads and archive evidence, then inspect the results on the relevant feature pages.
+
+| Entry point | Start with | Read next |
+| --- | --- | --- |
+| Full Agent conversation | Open or create a conversation from the sidebar, then give the Agent a goal to execute | [Agent and sessions](wiki/Agent-and-Sessions.md) |
+| Agent floating button | Continue current work from a feature page; drag to reposition and check running/unread indicators | [Floating entry and workbench assistance](wiki/Agent-and-Sessions.md) |
+| Launch the desktop | Installed desktop entry, or `argusai --gui` | [Quick start](wiki/Quick-Start.md) |
+| Interactive terminal | `argusai` or `argusai chat` | [CLI reference](wiki/CLI-Reference.md) |
+| Release package | Download the published package and `.sha256` from [Releases](https://github.com/HG-ha/Argusai/releases) | [Installation](wiki/Installation.md) |
+
+Windows needs WebView2 Runtime; Windows ARM64 also needs the native Microsoft .NET Desktop Runtime. macOS desktop automation requires system permissions. Linux needs GTK and WebKitGTK desktop libraries. External models, scanners, reverse CLIs and devices are prepared for the features you use; see [installation](wiki/Installation.md).
+
+<details>
+<summary><strong>Source development, build and release</strong></summary>
+
+Source execution needs Python 3.12+, uv, Node.js 18+ and npm. Prepare dependencies and build the frontend from the repository root:
 
 ```sh
 uv sync --locked
@@ -303,21 +349,6 @@ npm --prefix argusai/webui ci
 npm --prefix argusai/webui run build
 uv run argusai --gui
 ```
-
-On first launch, configure the AI endpoint, model and data directory in Settings, then check browser and external tool paths as needed. Open the full Agent conversation or floating entry and give the Agent the goal, materials and constraints so it can plan and start work. For a first task, provide an approved HAR or JS file and ask the Agent to inventory interfaces, identify leads and archive evidence, then inspect the results on the relevant feature pages.
-
-| Entry point | Start with | Read next |
-| --- | --- | --- |
-| Full Agent conversation | Open or create a conversation from the sidebar, then give the Agent a goal to execute | [Agent and sessions](wiki/Agent-and-Sessions.md) |
-| Agent floating button | Continue current work from a feature page; drag to reposition and check running/unread indicators | [Floating entry and workbench assistance](wiki/Agent-and-Sessions.md) |
-| Launch the desktop | `uv run argusai --gui` | [Quick start](wiki/Quick-Start.md) |
-| Interactive terminal | `uv run argusai` or `uv run argusai chat` | [CLI reference](wiki/CLI-Reference.md) |
-| Release package | Download the published package and `.sha256` from [Releases](https://github.com/HG-ha/Argusai/releases) | [Installation](wiki/Installation.md) |
-
-Windows needs WebView2 Runtime; Windows ARM64 also needs the native Microsoft .NET Desktop Runtime. macOS desktop automation requires system permissions. Linux needs GTK and WebKitGTK desktop libraries. External models, scanners, reverse CLIs and devices are prepared for the features you use; see [installation](wiki/Installation.md).
-
-<details>
-<summary><strong>Build, development and release</strong></summary>
 
 All three platforms use the Python build entry point. Run on the target system with an environment for the target architecture:
 
@@ -341,7 +372,7 @@ The linked Wiki pages below are primarily in Chinese.
 <tr>
 <td width="33%" valign="top">
 <h3>Get started</h3>
-<p><a href="wiki/Quick-Start.md">Quick start</a><br><a href="wiki/Installation.md">Installation</a><br><a href="wiki/Agent-and-Sessions.md">Agent, conversations and teams</a><br><a href="wiki/CLI-Reference.md">CLI reference</a></p>
+<p><a href="wiki/Quick-Start.md">Quick start</a><br><a href="wiki/GUI-Guide.md">Illustrated desktop guide</a><br><a href="wiki/Installation.md">Installation</a><br><a href="wiki/Agent-and-Sessions.md">Agent, conversations and teams</a><br><a href="wiki/CLI-Reference.md">CLI examples</a><br><a href="wiki/CLI-Options.md">Full CLI parameters</a></p>
 </td>
 <td width="33%" valign="top">
 <h3>Do the work</h3>

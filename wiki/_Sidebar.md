@@ -5,8 +5,10 @@
 ### 开始使用
 
 - [快速开始](Quick-Start.md)
+- [桌面图文入门](GUI-Guide.md)
 - [安装与环境](Installation.md)
 - [命令行参考](CLI-Reference.md)
+- [CLI 完整参数表](CLI-Options.md)
 
 ### 日常工作
 

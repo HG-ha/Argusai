@@ -14,6 +14,17 @@ python scripts/wiki_docs.py check
 
 检查范围包括中英文 README、品牌资源说明和 `wiki/` 下的 Markdown：本地文件、页面锚点、代码围栏和 HTML 图片引用。它不访问外部网站，也不替代命令签名与内容核对。
 
+CLI 参数表从实际命令声明生成。修改命令后，在已安装项目依赖的开发环境中更新并检查：
+
+```sh
+uv run python scripts/cli_docs.py --write
+uv run python scripts/cli_docs.py --check
+```
+
+生成器不执行命令回调，也不读取用户配置。完整操作示例仍需在 [CLI 命令手册](CLI-Reference.md) 中维护。
+
+图文教程使用真实界面配合隔离的演示数据。重拍时不要复用个人浏览器资料、真实端点、密钥、渠道身份或会话记录；截图中注明演示状态，并核对表单、路径和文件引用。图片放在 `wiki/assets/gui/`，正文用相对路径引用。
+
 ## 准备 GitHub Wiki 文件
 
 GitHub Wiki 是独立的 Git 仓库，直接推送应用源码不会更新 Wiki 页签。可以先在本地导出：
@@ -22,7 +33,7 @@ GitHub Wiki 是独立的 Git 仓库，直接推送应用源码不会更新 Wiki 
 python scripts/wiki_docs.py export --output-dir build/wiki-export
 ```
 
-导出器把源稿的 `.md` 页面链接转换为 Wiki 页面地址，把指向应用源码的链接转换为主仓库链接，并保留 `_Sidebar.md`、`_Footer.md`。导出目录默认为新的独立目录；如果已存在，工具会停止，避免覆盖手动编辑的内容。
+导出器把源稿的 `.md` 页面链接转换为 Wiki 页面地址，把指向应用源码的链接转换为主仓库链接，并保留 `_Sidebar.md`、`_Footer.md`。图片链接转换为主仓库中相应版本的原始图片地址，无需把图片再复制一份到 Wiki 仓库。导出目录默认为新的独立目录；如果已存在，工具会停止，避免覆盖手动编辑的内容。
 
 默认源码链接对应 `https://github.com/HG-ha/Argusai` 的 `main` 分支。需要对齐一个发布标签时：
 

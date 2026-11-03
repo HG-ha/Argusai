@@ -43,17 +43,17 @@ ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全
 
 ```mermaid
 flowchart TB
-    Input["桌面 / 悬浮球 / CLI<br/>手机等设备的配对通讯渠道"] --> Session["会话运行方式"]
+    Input["桌面 / 悬浮球 / CLI<br/>手机等设备的配对通讯渠道"] --> Session["会话执行控制<br/>session_id / 运行锁 / runtime 绑定"]
     Events["间隔 / Cron<br/>Webhook / 文件变化"] --> Session
-    Session --> Native["已配置的 AI 端点<br/>ArgusAI 原生运行时"]
+    Session --> Native["AssistantSession<br/>原生端点 / 流式 Provider<br/>工具循环 / 进展守卫"]
     Session --> ACP["本地 Agent（ACP）<br/>Codex / Cursor<br/>Claude Code"]
-    Native --> Main["主 Agent<br/>理解目标、规划与调度<br/>执行、复核与交付"]
+    Native --> Main["主 Agent / 任务编排<br/>计划、委派、工具调用<br/>状态与结果复核"]
     ACP --> Main
 
-    Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>原生或 ACP 子 Agent"]
-    Main -->|组织 / 复核| Team["持久 Agent Team<br/>角色、模型、群聊与记录"]
+    Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>独立历史 / 工作台工具范围<br/>原生或 ACP 子 Agent"]
+    Main -->|组织 / 复核| Team["持久 Agent Team<br/>群聊序号 / 阅读游标<br/>成员执行邮箱"]
     Main -->|按需读取| Skills["Skills<br/>任务方法与工作流"]
-    Main --> Tools["内置工具目录与调用桥接<br/>按需发现、工具授权与确认"]
+    Main --> Tools["固定核心 tools[] / 工具目录<br/>按需取 schema，再分发真实工具"]
     Sub --> Tools
     Team --> Tools
     Skills -.->|方法指导| Tools
@@ -68,7 +68,8 @@ flowchart TB
     Execution --> Review
     Knowledge --> Review
     Extensions -.-> Review
-    Review --> Delivery["报告 / PoC / 工作区产物<br/>对话 / 配对渠道<br/>消息与文件"]
+    Review --> Delivery["交付报告 / PoC<br/>摘要与会话沙盒产物"]
+    Delivery -.->|按任务约定远程交付| Outbox["配对身份 / 持久 Outbox<br/>Adapter 发送<br/>投递状态核验"]
     Review -->|更新计划，继续 / 复测| Main
     Sub -.->|完成通知 / 条件唤醒| Main
     Team -->|公开消息入队，成员处理或跳过| Team
@@ -77,9 +78,31 @@ flowchart TB
 
 内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。单轮循环与跨轮唤醒见[持续执行与主动发现](#持续执行与主动发现)，模块入口见[架构与开发](wiki/Architecture-and-Development.md)。
 
+### 运行时设计
+
+会话历史、执行状态、流式事件和领域产物分别管理，再通过运行身份与材料引用连接。长任务与多 Agent 协作依赖以下机制：
+
+| 设计点 | 实际实现 |
+| --- | --- |
+| [运行身份与执行所有权](argusai/core/assistant/run_jobs.py) | `session_id` 标识会话，持久 `job_id` 标识任务运行，临时 `run_id` 标识增量事件流。恢复运行可以创建新流；真正的 worker 退出后才释放会话运行锁。运行状态以原子快照和单调 JSONL 事件保存。 |
+| [稳定控制面与能力目录](argusai/core/assistant/session_chat_loop.py) | 原生会话核心 `tools[]` 和 system 工具目录冻结；`tool_search` 返回领域 schema，`invoke_catalogue_tool` 执行真实工具，发现新能力不反复扩展常驻数组。Skills 先给短名单，再按需读取正文。 |
+| [上下文预算与协议修复](argusai/core/assistant/session_budget.py) | 原生模型请求前压缩旧工具结果、提炼早期对话，并修复 tool-call/result 邻接关系。选定高值输出保留完整 Artifact，模型使用摘要与 `artifact_ref` 续接，按需重新读取原文。 |
+| [按资源分批执行](argusai/core/assistant/session_loop_control.py) | 原生工具循环将连续只读调用按允许的并行度和 resource keys 组成无冲突波次；修改、控制和待确认调用保留各自执行边界。并行完成后仍按原调用顺序写入历史。 |
+| [调用授权与能力投影](argusai/core/assistant/confirmation_broker.py) | 先展开真实工具名，再进入策略、确认与执行。Todo 计划批准、具体工具确认、子 Agent 的 readonly/scoped 工具范围分别处理，委派能力与确认模式一起决定子任务权限。 |
+| [ACP 会话与工具桥](argusai/core/agent_runtimes/tool_broker.py) | ACP 按 `initialize → session/new 或 load → prompt` 协商与运行。工作台工具经随机会话 token 绑定的回环 MCP broker 接入，每个绑定以执行锁串行确认和调用；外部 Agent 自有工具仍由其运行时管理。 |
+| [协作消息与条件唤醒](argusai/core/assistant/agent_threads.py) | 子 Agent 保存独立历史和能力范围；Team Room 的消息序号、阅读游标与成员执行邮箱分开。成员忙时保留输入，可合批、去重和静默跳过；完成通知先记录，再合批尝试唤醒可运行的父会话。 |
+| [持久调度控制](argusai/core/assistant/cron.py) | 用数据目录级宿主租约和执行锁协调调度；计划、运行记录、事件队列与文件基线原子落盘。签名 Webhook、文件变化及时间规则可投递到指定、专属或新会话，按检查点与任务材料接续。 |
+| [材料引用与派生关系](argusai/core/workspace/cases.py) | Case Artifact 保存原始内容、SHA-256 与大小，Evidence 关联材料、交互和 Finding；ReverseJob 记录样本与派生物。扫描报告、`artifact_ref` 和 `rev://` 各有存储及读取路径，可显式关联。 |
+| [流式事件与界面协议](argusai/core/assistant/ui_protocol.py) | 正文增量形成 `text_chunk`，工具结果与确认形成 `block_upsert`；UI 协议规范 block 身份、版本和 action，再投影到各入口。`StreamHub` 按 offset 消费内存事件，与持久 RunJob 日志分开。 |
+| [渠道出站与投递回执](argusai/core/channels/store.py) | 文件由执行会话沙盒按配对 identity 路由进入持久 Outbox；发送 worker 领取租约，由 Adapter 投递，记录分段进度并有限重试。`channel_delivery_status` 区分 `pending`、`processing`、`sent`、`failed`，保留平台错误原因。 |
+
+执行线程、事件流和存储之间的关系、关键函数及设计边界，见 [Agent 运行时与数据流](wiki/Architecture-and-Development.md#agent-运行时与数据流)。
+
 **模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
 
 **一部手机，也能接续电脑与服务器上的工作。** 在 QQ、飞书、Telegram 等渠道完成配对后，手机、平板或另一台电脑都能成为任务入口，用于下达任务、查看进度、接收报告和文件。Agent 通过工作宿主上已配置的 SSH、MCP 或其他连接处理可达电脑与服务器上的任务，桌面控制操作运行工具的宿主桌面，结果可回传到当前配对渠道。接入方式见[扩展与通讯渠道](wiki/Integrations.md)。
+
+需要任务完成后远程交付时，把“将摘要与报告文件发回当前配对渠道，并核验投递结果”写入交付条件。普通渠道回答可用 `channel_reply` 回复本次入站身份；主动通知使用 `channel_send_message`，文件使用 `channel_send_file`，按目标路由与工具确认策略执行。入队成功表示已接受投递，`sent` 表示发送接口成功，不代表收件人已读。定时任务的 `report_to_origin` 回报创建任务的应用内会话；发往 QQ 等渠道的目标与产物应在任务中另行约定。
 
 ## 运行界面
 
@@ -293,7 +316,30 @@ flowchart TB
 
 ## 快速开始
 
-当前版本为 `0.1.7`。源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm；在项目根目录执行：
+当前版本为 `0.1.7`。从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载对应平台的预编译包和 `.sha256`，按[安装与环境](wiki/Installation.md)校验、安装后即可启动桌面。终端示例使用 `argusai` 命令入口；未设置入口时，Windows 在安装目录中使用 `.\ArgusAI.exe`、Linux 在解压目录中使用 `./ArgusAI`，macOS 入口见[CLI 命令参考](wiki/CLI-Reference.md)。
+
+```sh
+argusai version --json
+argusai --gui
+argusai chat
+```
+
+首次启动后，确认数据目录，配置原生 AI 端点与模型，或选择已安装、登录并测试通过的本地 ACP Agent；按需要检查浏览器与外部工具路径。打开完整 Agent 对话或点击悬浮球，把目标、材料和约束交给 Agent，让它建立计划并开展工作。第一次可以提供一份允许分析的 HAR 或 JS，让 Agent 整理接口、标注疑点并归档证据，再到相应功能页核对结果。
+
+| 选择入口 | 如何开始 | 继续阅读 |
+| --- | --- | --- |
+| 完整 Agent 对话 | 从侧栏进入或新建对话，直接描述目标并交给 Agent 执行 | [Agent 与会话](wiki/Agent-and-Sessions.md) |
+| Agent 悬浮球 | 在功能页点击浮球接续当前工作；可拖动位置，查看运行和未读提示 | [浮球与工作台协作](wiki/Agent-and-Sessions.md) |
+| 启动桌面 | 安装后的桌面入口，或 `argusai --gui` | [快速开始](wiki/Quick-Start.md) |
+| 交互终端 | `argusai` 或 `argusai chat` | [CLI 命令参考](wiki/CLI-Reference.md) |
+| 发行包 | 从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载发布后对应平台的包与 `.sha256` | [安装与环境](wiki/Installation.md) |
+
+Windows 桌面需要 WebView2 Runtime，Windows ARM64 还需要原生 Microsoft .NET Desktop Runtime；macOS 桌面自动化需要系统权限；Linux 桌面需要 GTK 与 WebKitGTK。外部模型、扫描器、逆向 CLI 和设备按功能准备，详细步骤见[安装说明](wiki/Installation.md)。
+
+<details>
+<summary><strong>源码开发、构建与发布</strong></summary>
+
+源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm。在项目根目录准备依赖并构建前端：
 
 ```sh
 uv sync --locked
@@ -301,21 +347,6 @@ npm --prefix argusai/webui ci
 npm --prefix argusai/webui run build
 uv run argusai --gui
 ```
-
-首次启动后，在设置页配置 AI 端点、模型和数据目录，按需要检查浏览器与外部工具路径。接着打开完整 Agent 对话或点击悬浮球，把目标、材料和约束交给 Agent，让它建立计划并开展工作。第一次可以提供一份允许分析的 HAR 或 JS，让 Agent 整理接口、标注疑点并归档证据，再到相应功能页核对结果。
-
-| 选择入口 | 如何开始 | 继续阅读 |
-| --- | --- | --- |
-| 完整 Agent 对话 | 从侧栏进入或新建对话，直接描述目标并交给 Agent 执行 | [Agent 与会话](wiki/Agent-and-Sessions.md) |
-| Agent 悬浮球 | 在功能页点击浮球接续当前工作；可拖动位置，查看运行和未读提示 | [浮球与工作台协作](wiki/Agent-and-Sessions.md) |
-| 启动桌面 | `uv run argusai --gui` | [快速开始](wiki/Quick-Start.md) |
-| 交互终端 | `uv run argusai` 或 `uv run argusai chat` | [CLI 命令参考](wiki/CLI-Reference.md) |
-| 发行包 | 从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载发布后对应平台的包与 `.sha256` | [安装与环境](wiki/Installation.md) |
-
-Windows 桌面需要 WebView2 Runtime，Windows ARM64 还需要原生 Microsoft .NET Desktop Runtime；macOS 桌面自动化需要系统权限；Linux 桌面需要 GTK 与 WebKitGTK。外部模型、扫描器、逆向 CLI 和设备按功能准备，详细步骤见[安装说明](wiki/Installation.md)。
-
-<details>
-<summary><strong>构建、开发与发布</strong></summary>
 
 三个平台统一使用 Python 构建入口，在目标系统和目标架构环境中运行：
 
@@ -337,7 +368,7 @@ Windows 可加 `--nsis`，macOS 可加 `--dmg`，`--onefile` 生成单文件；L
 <tr>
 <td width="33%" valign="top">
 <h3>开始使用</h3>
-<p><a href="wiki/Quick-Start.md">快速开始</a><br><a href="wiki/Installation.md">安装与环境</a><br><a href="wiki/Agent-and-Sessions.md">Agent、对话与小队</a><br><a href="wiki/CLI-Reference.md">CLI 命令参考</a></p>
+<p><a href="wiki/Quick-Start.md">快速开始</a><br><a href="wiki/GUI-Guide.md">桌面图文入门</a><br><a href="wiki/Installation.md">安装与环境</a><br><a href="wiki/Agent-and-Sessions.md">Agent、对话与小队</a><br><a href="wiki/CLI-Reference.md">CLI 完整命令示例</a><br><a href="wiki/CLI-Options.md">CLI 完整参数表</a></p>
 </td>
 <td width="33%" valign="top">
 <h3>开展工作</h3>

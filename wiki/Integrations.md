@@ -55,7 +55,7 @@ ArgusAI 工具可通过绑定会话的回环 MCP broker 提供给外部 Agent，
 
 当前提供商包括 QQ、Telegram、Discord、Slack、飞书、钉钉、企业微信、微信和签名 Webhook。各提供商有各自的机器人、应用或登录配置，详细字段以 **通讯接入** 面板和 `argusai channels providers` 为准。
 
-QQ 使用腾讯官方 [`qqbot-agent-sdk`](https://github.com/tencent-connect/qqbot-agent-sdk) 建立 WebSocket 长连接，不需要公网回调地址。新建并保存 QQ 渠道后，可在详情页点击 **QQ 扫码绑定**，用手机 QQ 完成官方 Onboard；返回的 App ID 与 Client Secret 会直接写入本机加密凭据存储，不经过 Web 界面。已有机器人也可以手动填写这两个字段。命令行使用 `argusai channels login-qq <渠道 ID>`，终端会显示二维码和可打开的扫码链接。
+QQ 使用腾讯官方 [`qqbot-agent-sdk`](https://github.com/tencent-connect/qqbot-agent-sdk) 建立 WebSocket 长连接，不需要公网回调地址。新建并保存 QQ 渠道后，可在详情页点击 **QQ 扫码绑定**，用手机 QQ 完成官方 Onboard；返回的 App ID 与 Client Secret 会直接写入本机加密凭据存储，不经过 Web 界面。已有机器人也可以手动填写这两个字段。命令行使用 `argusai channels login-qq CHANNEL_ID`，将 `CHANNEL_ID` 替换为实际渠道 ID，终端会显示二维码和可打开的扫码链接。
 
 QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器与运行时两层都会被忽略。文字按 QQ 限制分段，图片、语音、视频和文件通过官方媒体接口发送。扫码完成的是机器人凭据绑定，远端账号仍需发送一次性 `/pair` 口令，才能访问指定的 Agent 对话。
 
@@ -71,6 +71,132 @@ QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器�
 每个配对只应看到授予它的会话。把同一机器人配置给多人时，也不能把他们当成共享全部历史的同一个用户。事件重试有去重与限流，消息未回复时先看运行状态和投递记录。
 
 远端普通确认可按渠道能力转发；敏感操作和授权策略修改可能要求回到本机处理。不要假设聊天软件中的任意一句“同意”都能替代本机确认。
+
+### 用 CLI 接通 QQ 并绑定一个工作对话
+
+以下命令使用发行包中的 `argusai`，不需要检出源码。渠道接入和模型配置是两件事：QQ 负责收发消息，绑定的 Agent 对话负责选模型、执行任务和保存产物。配置命令、桌面程序和常驻宿主要使用同一系统用户及数据目录。
+
+1. 准备可用的模型端点。已有配置可先执行 `argusai ai list`；新配置可以使用下面的命令。环境变量应由你的终端或凭据管理器预先提供，示例不包含真实密钥。
+
+   ```sh
+   argusai ai add --name review --base-url "$ARGUSAI_AI_BASE_URL" --api-key "$ARGUSAI_AI_KEY" --model "$ARGUSAI_AI_MODEL" --protocol openai --activate
+   ```
+
+   这里的变量是 shell 展开，不是 ArgusAI 自动读取的配置项。PowerShell 中对应写为 `$env:ARGUSAI_AI_BASE_URL`、`$env:ARGUSAI_AI_KEY`、`$env:ARGUSAI_AI_MODEL`。API Key 会作为进程参数传入；不要把填入真实值的命令、终端录像或进程诊断公开。
+
+2. 建立一个命名对话，再在对话中选择它使用的模型：
+
+   ```sh
+   argusai chat --session audit-delivery
+   ```
+
+   以下内容输入 Agent 对话，不是另开终端执行的命令：
+
+   ```text
+   /model
+   /model review
+   /quit
+   ```
+
+   按交互提示确认模型选择。`/model` 只修改该对话；`argusai ai activate review` 调整的是全局默认端点优先级。之后 QQ 绑定 `audit-delivery`，便能接着同一份历史工作。
+
+3. 创建 QQ 渠道，完成官方扫码，再启用和检查连接：
+
+   ```sh
+   argusai channels providers
+   argusai channels add qq --id qq-work --name "我的 QQ 工作入口"
+   argusai channels login-qq qq-work --timeout 300
+   argusai channels enable qq-work
+   argusai channels test qq-work
+   ```
+
+   扫码应由账号本人在手机 QQ 完成。已有官方机器人可改用 `channels add qq --secret app_id=APP_ID --secret client_secret=CLIENT_SECRET`；这两个值是占位符。不要把机器人凭据发给 Agent 或写进任务提示词。
+
+4. 生成绑定到工作对话的一次性配对码，然后让宿主保持运行：
+
+   ```sh
+   argusai channels pair qq-work --session audit-delivery
+   argusai serve run
+   ```
+
+   `serve run` 占用当前终端；后续管理命令在另一终端执行。如果桌面程序已经托管同一数据目录，继续使用该宿主，避免再启动一个竞争连接的进程。`argusai channels serve` 也能前台托管渠道并启动调度器；同时需要渠道和计划时统一使用 `serve run`。
+
+5. 在手机 QQ 与机器人的私聊中发送输出的配对码，再检查会话：
+
+   ```text
+   /pair 实际配对码
+   /status
+   /model
+   /live on
+   ```
+
+   未指定 `--session` 的配对，可以在私聊中发送 `/new` 创建原生 Agent 对话；`/agents` 列出可用本地 Agent，`/new 编号或名称` 可建立相应 ACP 对话。远端创建的 ACP 对话使用会话沙盒，不会自动进入本机项目目录。
+
+6. 在本机核对身份和授权。`--json` 可以取得完整的身份 ID；下面的 `IDENTITY_ID` 必须替换为实际值。
+
+   ```sh
+   argusai channels identities qq-work --json
+   argusai channels bind IDENTITY_ID audit-delivery
+   argusai channels grant IDENTITY_ID chat status cancel confirm configure send
+   ```
+
+   已经由第 4 步绑定时无需重复 `bind`。`grant` 设置的是完整权限集合，会替换原集合；可以只保留任务需要的权限。远端切换模型或会话需要 `configure`，主动消息和文件投递需要 `send`。新配对默认拥有上述六项权限，应按使用者实际职责检查。
+
+其他提供商使用相同的配对、绑定和身份权限流程，创建字段以 `channels providers` 为准。例如，已准备 Telegram Bot Token 后可执行：
+
+```sh
+argusai channels add telegram --name "Telegram 工作入口" --secret "bot_token=$ARGUSAI_TELEGRAM_BOT_TOKEN" --enable
+```
+
+返回的渠道 ID 用于后续 `pair`，不能用显示名称代替。微信 iLink 使用 `argusai channels login-wechat 渠道ID` 完成自己的扫码流程。
+
+### 任务完成后回传结果和文件
+
+在桌面、CLI 或已配对私聊里，都可以把“完成后发送给谁、发送什么”写进任务。先核对目标身份，再让 Agent 执行。例如，在 `audit-delivery` 对话中输入：
+
+```text
+基于本对话已经授权的材料完成分析，把报告保存为 reports/review.md。
+先用 channel_list_targets 核对收件人，文件只发给 identity_id=IDENTITY_ID。
+完成并复核报告后，用 channel_send_file 发送 reports/review.md，附上简短说明。
+记录返回的 delivery_id，用 channel_delivery_status 检查该投递。
+如果仍在排队，如实说明排队状态，后续查询同一 delivery_id，不重复创建投递。
+如果失败，保留本地报告，报告 last_error，不把文件名或已排队说成送达成功。
+```
+
+`IDENTITY_ID` 从前面的身份清单取得。当前 CLI 没有独立的 `channels send`、`send-file` 或 `delivery` 子命令；这里通过 Agent 工具发送和查询，工具名也不是 shell 命令。
+
+| Agent 工具 | 用途与边界 |
+| --- | --- |
+| `channel_list_targets` | 查看本对话的配对收件人、权限及可能的自动路由；多个收件人时先确认身份 |
+| `channel_send_message(text, identity_id)` | 主动发送摘要或完成通知；省略身份可能向同会话多个渠道投递 |
+| `channel_send_file(path, identity_id, caption, filename)` | 发送当前执行对话沙盒中的一个已有文件，保留文件大小与 SHA-256；需要发送授权 |
+| `channel_delivery_status(delivery_id)` | 查询当前发送对话的投递记录、尝试次数、分段进度和错误 |
+| `channel_reply(messages)` | 仅用于渠道发起的当前轮次，固定回复来源身份；接受后结束该轮 Agent 执行 |
+
+因此，同一轮既要发文件又要回复时，应先生成文件、提交文件投递和记录回执，最后再调用 `channel_reply`。桌面或 Cron 发起的主动交付使用 `channel_send_message`，不使用仅限渠道当前轮次的 `channel_reply`。后台扫描返回 `job_ref` 时，先取得最终结果并核对实际产物，再发送报告。
+
+文件路径相对于当前执行对话的沙盒，不能借绝对路径发送其他会话或宿主任意文件。发送已有扫描报告、ReverseJob 产物时，先通过相应读取或导出工具把待交付文件放入当前沙盒。单文件上限为 32 MiB，平台还可能有更低的限制；超限时先生成精简报告或拆分产物。
+
+入队回执中的 `queued=true` 表示 accepted；持久投递记录使用以下状态，不另有 `delivered` 状态：
+
+| `state` | 如何理解 |
+| --- | --- |
+| `pending` | 已排队，或等待下一次重试 |
+| `processing` | 宿主正在向平台投递 |
+| `sent` | 各部分已通过平台适配器发送；不代表收件人已经阅读或下载 |
+| `failed` | 已停止投递，查看 `last_error`、`attempts` 和 `delivered_parts`，部分内容可能已经发出 |
+
+宿主需要保持在线，暂时性错误会按投递队列规则重试。平台权限不足、身份撤销或绑定变化可能导致失败；QQ 等平台对主动消息窗口、媒体上传和卡片另有规则，ArgusAI 的 `send` 权限不能代替平台权限。文件仍是本机产物，投递前后不要立即删除或覆盖它。
+
+用户也可以在已绑定私聊里自行取回文件：
+
+```text
+/file list
+/file search review
+/file reports/review.md
+```
+
+这些是聊天软件中的斜杠命令。跨轮自动交付见[定时任务与渠道回传示例](Automation.md#用-cli-安排检查并回传产物)。
 
 ### 渠道交互和文件
 
@@ -131,14 +257,14 @@ Discord 可读取事件自带的转发快照，Slack 可读取事件内携带的
 ## 不开桌面窗口继续托管
 
 ```sh
-uv run argusai serve run
+argusai serve run
 ```
 
 该前台宿主同时托管已启用渠道和计划。只运行计划可使用 `--cron-only`。查看状态与系统服务计划：
 
 ```sh
-uv run argusai serve status
-uv run argusai serve install --dry-run
+argusai serve status
+argusai serve install --dry-run
 ```
 
 先检查安装计划，再决定注册系统服务。源码仓库路径、虚拟环境或解释器变化可能使旧服务失效。GUI 与守护宿主不要竞争同一数据根目录的后台服务。
@@ -158,6 +284,8 @@ uv run argusai serve install --dry-run
 - [MCP 接入工作流](../argusai/skills/mcp-provision-workflow/SKILL.md)
 - [本地 Agent 桥接](../argusai/gui/agent_runtimes.py)
 - [通信渠道模型](../argusai/core/channels/models.py)
+- [渠道 CLI](../argusai/cli/commands/channels.py)
+- [渠道发送与投递状态工具](../argusai/core/tools/channel_tools.py)
 - [渠道交互工作流](../argusai/skills/channel-interaction/SKILL.md)
 - [渠道拟人回复工作流](../argusai/skills/channel-human-reply/SKILL.md)
 - [无界面宿主 CLI](../argusai/cli/commands/serve.py)
