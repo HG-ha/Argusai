@@ -1,6 +1,6 @@
 # ArgusAI 使用文档
 
-[项目首页](../README.md) · [English introduction](../README.en.md) · [项目仓库](https://github.com/HG-ha/Argusai) · [达瓦科技](https://dawahezhi.com/)
+[项目首页](../README.md) · [英文介绍](../README.en.md) · [项目仓库](https://github.com/HG-ha/Argusai) · [达瓦科技](https://dawahezhi.com/)
 
 这里是 ArgusAI `0.1.7` 的用户指南。**把目标交给 Agent，让它在 ArgusAI 中完成工作。** 扫描、代理、浏览器、逆向、知识与定时任务围绕同一个 Agent 工作流组织：你说明目标和范围，Agent 选择工具、推进步骤、保存证据并交付结果。
 

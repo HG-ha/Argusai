@@ -1,8 +1,8 @@
 # 构建与发布
 
-[Wiki 首页](Home.md) · [安装](Installation.md) · [架构与开发](Architecture-and-Development.md)
+[文档首页](Home.md) · [安装](Installation.md) · [架构与开发](Architecture-and-Development.md)
 
-根目录 [build.py](../build.py) 统一编排 Windows、macOS 和 Linux 的原生构建。它会准备前端、调用 Nuitka，并按平台生成 NSIS、DMG 或 Linux 压缩包。构建仍需在目标 OS 与目标架构的环境中进行。
+根目录 [build.py](../build.py) 统一编排 Windows、macOS 和 Linux 的原生构建。它会准备前端、调用 Nuitka，并按平台生成 NSIS、DMG 或 Linux 压缩包。构建仍需在目标操作系统与目标架构的环境中进行。
 
 ## 构建前提
 
@@ -23,7 +23,7 @@
 
 本版的原生发布目标如下。矩阵中的条目表示对应的构建目标；是否已有可下载包，以同一轮 CI 全部成功后的 Release 附件为准。
 
-| 构建目标 | 原生 runner | 发行格式 | 依赖边界 |
+| 构建目标 | 原生执行节点 | 发行格式 | 依赖边界 |
 | --- | --- | --- | --- |
 | Windows x64 | `windows-2022` | `win-x64-setup.exe` | x64 Python、MSVC、NSIS 与 WebView2 |
 | Windows ARM64 | `windows-11-arm` | `win-arm64-setup.exe` | ARM64 Python/MSVC；锁定 cryptography 需源码构建；.NET/WinForms/WebView2 需验证原生 ARM 路径 |
@@ -31,7 +31,7 @@
 | Linux x64 | `ubuntu-24.04` | `linux-x64.tar.gz` | x64 Python、编译工具与实际选用的 GUI 后端 |
 | Linux ARM64 | `ubuntu-24.04-arm` | `linux-arm64.tar.gz` | ARM64 Python/编译工具、GTK/WebKitGTK 与构建解释器可导入的 PyGObject |
 
-这些 runner 标签可在 [GitHub 官方列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)中核对。ARM64 构建使用原生 ARM64 解释器与依赖，`--arch arm64` 用于校验，不能把 x64 环境自动变成交叉编译环境。
+这些执行节点标签可在 [GitHub 官方列表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)中核对。ARM64 构建使用原生 ARM64 解释器与依赖，`--arch arm64` 用于校验，不能把 x64 环境自动变成交叉编译环境。
 
 ## 先检查构建计划
 
@@ -43,7 +43,7 @@ uv run --locked --group build python build.py --help
 uv run --locked --group build python build.py --dry-run --jobs 2
 ```
 
-`--dry-run` 只显示构建计划，不执行下载、编译或文件修改；前面的 `uv sync` / `uv run` 仍可能同步 Python 环境。预期计划中的版本、OS、架构、模式和输出目录与你的目标一致。
+`--dry-run` 只显示构建计划，不执行下载、编译或文件修改；前面的 `uv sync` / `uv run` 仍可能同步 Python 环境。预期计划中的版本、操作系统、架构、模式和输出目录与你的目标一致。
 
 ## 平台构建
 
@@ -66,7 +66,7 @@ uv run --locked --group build python build.py --onefile --nsis --jobs 2
 
 Windows ARM64 同样生成 NSIS 安装器，主程序需为原生 ARM64。安装器自身的 32 位启动外壳可以由 Windows ARM 仿真运行，不能只凭该外壳判断主程序架构。
 
-当前锁定的 `cryptography 48.0.0` 没有 Windows ARM64 wheel，需在同步依赖前准备匹配架构的 OpenSSL、Rust 与 MSVC，再实际完成源码安装。`primp`、`curl-cffi` 和 Playwright 则已有锁内 ARM64 wheel。`pythonnet`/`clr-loader` 的通用 wheel 仍有 .NET 架构边界：默认 netfx loader 仅带 x86/amd64 DLL，pywebview 的 coreclr 后备路径需要可用的 ARM64 .NET 桌面环境及 WinForms 解析配置。依赖同步与 CLI 版本检查成功，都不能替代 GUI 初始化验证。[cryptography 版本化安装说明](https://cryptography.io/en/48.0.0/installation/)说明了源码构建工具要求。
+当前锁定的 `cryptography 48.0.0` 没有 Windows ARM64 wheel，需在同步依赖前准备匹配架构的 OpenSSL、Rust 与 MSVC，再实际完成源码安装。`primp`、`curl-cffi` 和 Playwright 则已有锁内 ARM64 wheel。`pythonnet`/`clr-loader` 的通用 wheel 仍有 .NET 架构边界：默认 netfx 加载器仅带 x86/amd64 DLL，pywebview 的 coreclr 后备路径需要可用的 ARM64 .NET 桌面环境及 WinForms 解析配置。依赖同步与 CLI 版本检查成功，都不能替代 GUI 初始化验证。[cryptography 版本化安装说明](https://cryptography.io/en/48.0.0/installation/)说明了源码构建工具要求。
 
 ### macOS
 
@@ -75,9 +75,9 @@ uv run --locked --group build python build.py --jobs 2
 uv run --locked --group build python build.py --dmg --jobs 2
 ```
 
-默认输出 `dist/ArgusAI.app`；`--dmg` 额外生成带版本和架构的拖拽安装镜像。当前 CI 使用 Apple Silicon runner。
+默认输出 `dist/ArgusAI.app`；`--dmg` 额外生成带版本和架构的拖拽安装镜像。当前 CI 使用 Apple Silicon 执行节点。
 
-本地还可以选择 `--mode folder` 或 `--onefile`。`--dmg` 需要 app 模式，不能与 onefile 模式同时使用。
+本地还可以选择 `--mode folder` 或 `--onefile`。`--dmg` 需要 app 模式，不能与单文件模式同时使用。
 
 ### Linux
 
@@ -96,16 +96,16 @@ Linux ARM64 的主要锁定依赖已有 manylinux aarch64 wheel；Nuitka 与纯 
 | --- | --- |
 | `--mode folder\|onefile\|app` | 选择构建模式；app 仅用于 macOS |
 | `--onefile` | `--mode onefile` 的快捷方式 |
-| `--output-dir` | 专用输出目录，默认 dist |
+| `--output-dir` | 专用输出目录，默认 `dist` |
 | `--jobs` / `-j` | C 编译并发；0 使用 Nuitka 默认，也可用 `ARGUSAI_BUILD_JOBS` |
 | `--skip-webui` | 复用已有前端，并用已安装依赖核验第三方声明；缺失或与锁文件、依赖原文不符时失败 |
-| `--fast` | 关闭 onefile 压缩，用于本地迭代 |
+| `--fast` | 关闭单文件压缩，用于本地迭代 |
 | `--icon` | 覆盖可执行文件的平台图标；NSIS 使用项目品牌图标 |
 | `--app-name` | 应用文件名称 |
 | `--arch` | 校验目标架构；解释器与依赖也必须是该架构 |
 | `--nsis`、`--dmg` | 生成平台安装包 |
 
-构建会替换输出目录内已知的旧产物，onefile 成功后清理相关编译中间目录。不要把源码目录或其他重要目录当成输出目录。
+构建会替换输出目录内已知的旧产物，单文件成功后清理相关编译中间目录。不要把源码目录或其他重要目录当成输出目录。
 
 若前端已单独构建：
 
@@ -120,13 +120,13 @@ uv run --locked --group build python build.py --skip-webui --jobs 2
 
 声明收集不等于完成法律审查。少数 npm 包缺少原文时使用明确记录来源与版本的补充材料；如果输出审查警告，应核实相应组件。ArgusAI 自有代码与第三方组件的许可需要分别处理。
 
-Python、Node.js、WABT 等用户沙盒运行时按需安装，不应重新放入发布包。保留的资源包括前端构建、报告模板、Skills、外部运行脚本与可用的 innoextract。支持的 x64 平台缺少 innoextract 时，构建可能调用 vendor 安装脚本联网准备。
+Python、Node.js、WABT 等用户沙盒运行时按需安装，不应重新放入发布包。保留的资源包括前端构建、报告模板、技能、外部运行脚本与可用的 innoextract。支持的 x64 平台缺少 innoextract 时，构建可能调用 vendor 安装脚本联网准备。
 
 ## macOS 签名与公证
 
 默认使用临时签名。这适合本地验证，但公开分发时可能受到 Gatekeeper 限制。
 
-有 Developer ID Application 证书时，可传证书名称；`auto` 要求钥匙串中恰好存在一个该类签名身份。先按 Apple 工具流程将公证凭据保存为钥匙串 profile，再使用：
+有 Developer ID Application 证书时，可传证书名称；`auto` 要求钥匙串中恰好存在一个该类签名身份。先按 Apple 工具流程将公证凭据保存为钥匙串配置档案，再使用：
 
 ```sh
 uv run --locked --group build python build.py --dmg --sign-identity auto --notarize --notary-profile argusai-notary
@@ -144,7 +144,7 @@ arch -x86_64 .venv-x64/bin/python build.py --arch x86_64 --dmg
 
 ## 版本管理
 
-Python 版本源是 `argusai/__init__.py` 的 `__version__`，pyproject 动态读取它。版本脚本同步前端 package 与 lock 元数据。
+Python 版本源是 `argusai/__init__.py` 的 `__version__`，pyproject 动态读取它。版本脚本同步前端包与锁文件元数据。
 
 ```sh
 python scripts/bump_version.py
@@ -166,30 +166,30 @@ python scripts/bump_version.py --check --tag v0.1.7
 
 ```mermaid
 flowchart TD
-    A[推送 v* 版本标签] --> B[校验版本并固定源码 commit]
+    A[推送 v* 版本标签] --> B[校验版本并固定源码提交]
     M[手动选择 ref 验证构建] --> B
     B --> C[Windows x64 与 ARM64<br/>macOS ARM64<br/>Linux x64 与 ARM64]
     C --> D[发布工具测试与前端构建]
     D --> E[原生构建与 CLI 版本烟测]
-    E --> F[安装包与 SHA-256 上传为 artifacts]
-    B --> J[从同一 commit 导出源码归档与 SHA-256]
-    J --> K[上传源码 artifact]
+    E --> F[安装包与 SHA-256 上传为构建产物]
+    B --> J[从同一提交导出源码归档与 SHA-256]
+    J --> K[上传源码构建产物]
     F --> G{版本标签触发且平台与源码全部成功}
     K --> G
-    G -->|是| H[重新校验全部文件并创建或更新 Release]
-    G -->|否| I[保留 artifacts，不发布附件]
+    G -->|是| H[重新校验全部文件并创建或更新版本发布]
+    G -->|否| I[保留构建产物，不发布附件]
     H --> W[同步官网版本信息到 main]
 ```
 
 - 推送 `v*` 标签是正式发布的唯一入口，如 `v0.1.7`。标签必须与 Python、前端版本一致，并指向这次推送验证的源码提交。
-- 五个原生构建目标和独立源码作业使用预检确认的同一个 commit，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
+- 五个原生构建目标和独立源码作业使用预检确认的同一个提交，Python 安装使用锁文件；ARM64 的源码依赖与图形后端另按目标环境准备。
 - 前端构建后收集第三方许可声明，再在原生构建前核验；声明随应用资源分发。
-- 包装后的 CLI 必须启动并报告预期版本，才能上传平台 artifact。
+- 包装后的 CLI 必须启动并报告预期版本，才能上传平台构建产物。
 - 每份安装包和源码归档均附带 `.sha256`。汇总作业要求五个原生包、一个源码包和六份校验文件全部存在，重新校验实际字节，并检查源码提交标识及关键文件后统一上传。
-- 手动运行可选择 ref，只执行构建验证并保留 Actions artifacts，包括 `ArgusAI-版本-source`，当前 artifacts 保留 14 天。
-- 版本标签触发的五个平台与源码作业全部成功后，汇总作业才会创建正式 Release，使用该提交中的版本说明并上传全部附件。任一构建失败都会阻止发布。
-- 已存在的同名正式 Release，其标签提交和发布说明均须与验证的源码一致，才会覆盖上传附件；错误标签、草稿或说明不一致会停止发布。
-- 官网同步在正式发布成功后执行，只提交生成的版本信息到 `main`。推送 `main` 和发布 Release 事件都不会触发这条打包流水线，官网同步也不会再次发版。
+- 手动运行可选择版本引用（`ref`），只执行构建验证并保留 Actions 构建产物，包括 `ArgusAI-版本-source`，当前构建产物保留 14 天。
+- 版本标签触发的五个平台与源码作业全部成功后，汇总作业才会创建正式版本发布，使用该提交中的版本说明并上传全部附件。任一构建失败都会阻止发布。
+- 已有同名正式发布版本时，标签提交和发布说明均须与验证的源码一致，才会覆盖上传附件；错误标签、草稿或说明不一致会停止发布。
+- 官网同步在正式发布成功后执行，只提交生成的版本信息到 `main`。推送 `main` 和版本发布事件都不会触发这条打包流水线，官网同步也不会再次发版。
 
 维护者先把版本、发布说明和代码提交到仓库，确认当前提交就是待发布源码，再推送对应标签。例如：
 
@@ -199,18 +199,18 @@ git tag -a v0.1.7 -m "ArgusAI v0.1.7"
 git push origin refs/tags/v0.1.7
 ```
 
-需要先检查打包结果时，在 Actions 中手动运行 `Release packages`，填写目标 ref。通过后再为同一提交打版本标签。
+需要先检查打包结果时，在 Actions 中手动运行 `Release packages`，填写目标版本引用（`ref`）。通过后再为同一提交打版本标签。
 
 工作流能生成打包结果，不等于完成所有 GUI、浏览器、代理与设备集成验收。正式发布前还应在目标系统检查实际启动和所需功能。
 
 ## 与二进制对应的源码归档
 
-ArgusAI 自有代码采用 [GPL-3.0-only](../LICENSE)，第三方组件保留各自许可，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。正式 Release 的附件会同时提供：
+ArgusAI 自有代码采用 [GPL-3.0-only](../LICENSE)，第三方组件保留各自许可，见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。正式版本发布的附件会同时提供：
 
 - `ArgusAI-0.1.7-source.tar.gz`
 - `ArgusAI-0.1.7-source.tar.gz.sha256`
 
-独立源码作业先确认 checkout 与预检 commit 一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.7/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
+独立源码作业先确认检出与预检提交一致，再用 `git archive` 导出该提交。归档根目录为 `ArgusAI-0.1.7/`，保留 Git 写入的提交标识。作业会检查 LICENSE、第三方声明、build.py、pyproject.toml、uv.lock、前端源码与锁文件、构建相关脚本和发布工作流；缺少关键文件时失败。
 
 归档从已跟踪的提交内容生成，不读取工作区未提交修改、未跟踪文件或 `.git` 数据。用户配置、密钥、会话与流量资料应保持未跟踪；发布前仍要检查待发布提交，避免把私有材料误提交到其他路径。
 
@@ -223,9 +223,9 @@ uv sync --locked --group build
 uv run --locked --group build python build.py --dry-run --jobs 2
 ```
 
-预期得到与该版本源码一致的构建计划。完整原生编译仍需在对应 OS 和架构上执行；构建可能按锁文件下载 Python/npm 依赖以及所需外部工具。
+预期得到与该版本源码一致的构建计划。完整原生编译仍需在对应操作系统和架构上执行；构建可能按锁文件下载 Python/npm 依赖以及所需外部工具。
 
-**仓库源码归档的覆盖范围是当前提交中的跟踪文件。** `uv.lock` 和 npm lock 记录版本与校验信息，外部依赖的完整源码不因此自动进入归档。随二进制分发的原生库、静态库和外部工具仍须按其实际版本、链接与分发方式，分别处理许可通知、适用的对应源码及构建材料。生成这个归档不能据此宣称已完成全部第三方原生组件的源码交付审查。
+**仓库源码归档的覆盖范围是当前提交中的跟踪文件。** `uv.lock` 和 npm 锁文件记录版本与校验信息，外部依赖的完整源码不因此自动进入归档。随二进制分发的原生库、静态库和外部工具仍须按其实际版本、链接与分发方式，分别处理许可通知、适用的对应源码及构建材料。生成这个归档不能据此宣称已完成全部第三方原生组件的源码交付审查。
 
 ## 发布前核对
 
@@ -246,8 +246,8 @@ uv run --locked --group build python build.py --dry-run --jobs 2
 | 找不到 patchelf / NSIS / 平台工具 | 按目标平台补齐对应系统依赖 |
 | `--arch` 与解释器不一致 | 准备目标架构的解释器和全部依赖，不只改编译参数 |
 | 输出目录文件被锁定 | 关闭使用旧产物的应用，再重建；脚本不会代为杀进程 |
-| 版本检查不通过 | 用版本脚本同步元数据，核对标签对应的 commit |
-| 源码归档缺文件或提交不符 | 确认 LICENSE、第三方声明、构建脚本及前端源码已进入待发提交；源码作业必须 checkout 预检确认的 commit |
+| 版本检查不通过 | 用版本脚本同步元数据，核对标签对应的提交 |
+| 源码归档缺文件或提交不符 | 确认 LICENSE、第三方声明、构建脚本及前端源码已进入待发提交；源码作业必须检出预检确认的提交 |
 | macOS 签名身份不唯一或不存在 | 显式传有效 Developer ID Application 名称，或仅做临时签名构建 |
 
 更多运行期问题见[故障排查](Troubleshooting.md)。

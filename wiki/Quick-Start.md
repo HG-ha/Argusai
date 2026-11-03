@@ -1,6 +1,6 @@
 # 快速开始
 
-[Wiki 首页](Home.md) · [安装](Installation.md) · [命令行](CLI-Reference.md)
+[文档首页](Home.md) · [安装](Installation.md) · [命令行](CLI-Reference.md)
 
 把目标交给 Agent，让它在 ArgusAI 里完成工作。你可以从当前页面的悬浮球开始，也可以在 **Agent 对话**中集中管理任务。Agent 结合工作上下文组织工具，你查看进度、证据和结果，并在需要时补充信息。
 
@@ -18,7 +18,7 @@
 argusai --gui
 ```
 
-如果看到终端控制台而不是桌面窗口，确认命令包含 `--gui`。交互终端中裸运行 `argusai` 默认进入 ops 控制台。
+如果看到终端控制台而不是桌面窗口，确认命令包含 `--gui`。交互终端中裸运行 `argusai` 默认进入交互控制台。
 
 本页使用安装包命令。未配置 PATH 的 Windows 用户可在安装目录把 `argusai` 换成 `.\ArgusAI.exe`；Linux 解压目录内使用 `./ArgusAI`。源码安装见[安装指南](Installation.md)。
 

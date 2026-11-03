@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import argparse
 from enum import Enum
+import json
 from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "wiki/CLI-Options.md"
+TRANSLATIONS = ROOT / "scripts/cli_docs_zh.json"
 
 
 def _cell(value: object) -> str:
@@ -34,6 +36,8 @@ def _type_name(parameter) -> str:
         if not getattr(kind, "file_okay", True):
             traits.append("目录")
         name = "，".join(traits)
+    name = {"str": "文本", "string": "文本", "int": "整数", "integer": "整数",
+            "float": "数值", "boolean": "布尔值", "value": "值"}.get(name, name)
     lower, upper = getattr(kind, "min", None), getattr(kind, "max", None)
     if lower is not None or upper is not None:
         name += f" [{lower if lower is not None else '-∞'}, {upper if upper is not None else '∞'}]"
@@ -80,20 +84,36 @@ def command_tree():
     return rows
 
 
+def _translated_help(value: object, translations: dict[str, str]) -> str:
+    source = str(value or "").strip()
+    if not source:
+        return ""
+    if source not in translations:
+        raise ValueError(f"Missing Chinese CLI help; update scripts/cli_docs_zh.json: {source}")
+    translation = translations[source]
+    if not isinstance(translation, str) or not translation.strip():
+        raise ValueError(f"Empty Chinese CLI help: {source}")
+    return translation.strip()
+
+
 def render_reference() -> tuple[str, int, int]:
     rows = command_tree()
+    translations = json.loads(TRANSLATIONS.read_text(encoding="utf-8"))
+    if not isinstance(translations, dict):
+        raise ValueError("scripts/cli_docs_zh.json must contain a Chinese help mapping")
     leaves = sum(not group for _, _, group in rows)
     groups = sum(group for _, _, group in rows)
     result = [
-        "# CLI 参数参考", "",
-        "[Wiki 首页](Home.md) · [命令手册与完整示例](CLI-Reference.md) · [快速开始](Quick-Start.md)", "",
-        "本页从当前版本的实际 Typer 命令树生成，逐项列出参数、类型、必填状态、默认值和帮助原文。"
+        "# 命令行参数参考", "",
+        "[文档首页](Home.md) · [命令手册与完整示例](CLI-Reference.md) · [快速开始](Quick-Start.md)", "",
+        "本页从当前版本的实际命令声明生成，逐项列出参数、类型、必填状态、默认值和中文说明。"
         "从配置 AI 到渠道、任务与产物投递的可复制示例见[命令手册](CLI-Reference.md)。", "",
         f"覆盖 **{leaves} 个末端命令**、**{groups} 个命令分组或全局入口**。"
         "`proxy` 分组自身还可前台运行；交互控制台的斜杠指令见命令手册。", "",
         "参数的“必填”表示解析层要求；服务账号、模型、路径和平台等条件仍由命令执行时检查。"
         "默认值不求值，也不读取用户配置；运行时默认与全局设置可影响实际行为。"
-        "选项说明沿用 `--help` 原文，`--help` 本身不在每张表重复。", "",
+        "命令、参数、状态值和产品名称保留实际写法，说明统一使用中文。"
+        "`--help` 本身不在每张表重复。", "",
         "## 命令导航", "",
     ]
     for command, context, group in rows:
@@ -105,10 +125,13 @@ def render_reference() -> tuple[str, int, int]:
     for command, context, group in rows:
         path = context.command_path
         result += [("## " if group else "### ") + path, ""]
-        help_text = str(command.help or "").strip()
+        help_text = _translated_help(command.help, translations)
         if help_text:
             result += [help_text, ""]
         usage = command.get_usage(context).strip()
+        usage = (usage.replace("Usage: ", "用法：")
+                 .replace("[OPTIONS]", "[选项]").replace("COMMAND", "子命令")
+                 .replace("[ARGS]", "[参数]"))
         result += ["```text", usage, "```", ""]
         parameters = [p for p in command.params if not getattr(p, "hidden", False)]
         if not parameters:
@@ -119,8 +142,9 @@ def render_reference() -> tuple[str, int, int]:
         for parameter in parameters:
             options = list(getattr(parameter, "opts", [])) + list(getattr(parameter, "secondary_opts", []))
             label = " / ".join(f"`{_cell(value)}`" for value in options) or f"`{parameter.name}`"
-            record = parameter.get_help_record(context)
-            description = record[1] if record else str(getattr(parameter, "help", "") or "")
+            # Required/default metadata have their own columns. Do not append
+            # Click's English annotations to the translated description.
+            description = _translated_help(getattr(parameter, "help", ""), translations)
             arity = []
             if getattr(parameter, "multiple", False):
                 arity.append("可重复")
@@ -138,6 +162,7 @@ def render_reference() -> tuple[str, int, int]:
                "```sh", "uv run python scripts/cli_docs.py --write",
                "uv run python scripts/cli_docs.py --check", "```", "",
                "生成器只遍历命令声明，不执行登录、网络探测、扫描、服务安装或配置写入。"
+               "新增或修改帮助文案时，需同步更新 `scripts/cli_docs_zh.json`；缺少译文时生成会报错。"
                "新增命令的操作实例仍需同步补入命令手册。", ""]
     return "\n".join(result), leaves, groups
 
@@ -148,7 +173,11 @@ def main() -> int:
     mode.add_argument("--write", action="store_true", help="Regenerate wiki/CLI-Options.md")
     mode.add_argument("--check", action="store_true", help="Check the reference against actual declarations")
     args = parser.parse_args()
-    text, leaves, groups = render_reference()
+    try:
+        text, leaves, groups = render_reference()
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     if args.write:
         OUTPUT.write_text(text, encoding="utf-8", newline="\n")
         print(f"Generated {OUTPUT.relative_to(ROOT)}: {leaves} commands, {groups} groups")

@@ -1,6 +1,6 @@
 # 扩展、外部 Agent 与通信渠道
 
-[Wiki 首页](Home.md) · [Agent 对话](Agent-and-Sessions.md) · [自动化](Automation.md)
+[文档首页](Home.md) · [Agent 对话](Agent-and-Sessions.md) · [自动化](Automation.md)
 
 扩展的目的，是让 Agent 完成工作所需的工具和连接就位。ArgusAI 通过 MCP 接入工具与资源，通过 ACP 使用本地 Agent，也可以把授权对话接到通信渠道。
 
@@ -11,16 +11,16 @@
 | 需要 | 使用入口 | 主要检查点 |
 | --- | --- | --- |
 | 给现有 Agent 增加外部工具或资源 | **扩展**，即 MCP 服务 | 来源、执行命令或远端地址、凭据、工具清单与授权策略 |
-| 使用本机已经配置的编码或分析 Agent | **本地 Agent**，即 ACP runtime | 命令是否可用、握手是否通过、工作目录与会话绑定 |
+| 使用本机已经配置的编码或分析 Agent | **本地 Agent**，即 ACP 运行时 | 命令是否可用、握手是否通过、工作目录与会话绑定 |
 | 从聊天软件接续授权对话 | **通讯接入** | 渠道配置、私聊配对、身份与会话授权、消息路由 |
 | 长期在后台运行渠道和计划 | `argusai serve` | 数据目录、宿主单实例、服务状态与凭据可用性 |
-| 增加固定分析方法或检测 | Markdown Skill、Python Check、工具适配 | 契约、作用域、风险与证据输出 |
+| 增加固定分析方法或检测 | Markdown 技能、Python Check、工具适配 | 契约、作用域、风险与证据输出 |
 
-选择扩展前，可以先让 Agent 搜索已有工具和 Skills，避免为现成功能重复安装软件。
+选择扩展前，可以先让 Agent 搜索已有工具和技能，避免为现成功能重复安装软件。
 
 ## 接入 MCP 工具
 
-1. 在 **扩展** 面板检查已有服务。确认需要本地 stdio 进程，还是远端 HTTP/SSE 端点。
+1. 在 **扩展** 面板检查已有服务。确认需要本地通过标准输入输出（stdio）通信的进程，还是远端 HTTP/SSE 端点。
 2. 核对来源与版本、启动命令、环境变量、网络地址和需要的权限。第三方服务运行的是外部代码。
 3. 在界面添加或编辑服务，并按界面支持的测试、连接和工具发现操作检查状态。
 4. 读取工具与资源清单，确认名称、参数、风险分级和自动允许策略符合预期。
@@ -49,15 +49,15 @@
 
 ACP 模型清单取决于运行时提供的配置能力，可能需要刷新协商。不能因为另一个会话支持图片，就推定当前运行时也支持；图片、文件与工作目录以本次绑定和协商结果为准。
 
-ArgusAI 工具可通过绑定会话的回环 MCP broker 提供给外部 Agent，仍按宿主的工具与确认策略执行。项目目录的选择和外部 Agent 的权限需要一起核对。
+ArgusAI 工具可通过绑定会话的回环 MCP 工具代理服务提供给外部 Agent，仍按宿主的工具与确认策略执行。项目目录的选择和外部 Agent 的权限需要一起核对。
 
 ## 配对通信渠道
 
 当前提供商包括 QQ、Telegram、Discord、Slack、飞书、钉钉、企业微信、微信和签名 Webhook。各提供商有各自的机器人、应用或登录配置，详细字段以 **通讯接入** 面板和 `argusai channels providers` 为准。
 
-QQ 使用腾讯官方 [`qqbot-agent-sdk`](https://github.com/tencent-connect/qqbot-agent-sdk) 建立 WebSocket 长连接，不需要公网回调地址。新建并保存 QQ 渠道后，可在详情页点击 **QQ 扫码绑定**，用手机 QQ 完成官方 Onboard；返回的 App ID 与 Client Secret 会直接写入本机加密凭据存储，不经过 Web 界面。已有机器人也可以手动填写这两个字段。命令行使用 `argusai channels login-qq CHANNEL_ID`，将 `CHANNEL_ID` 替换为实际渠道 ID，终端会显示二维码和可打开的扫码链接。
+QQ 使用腾讯官方 [`qqbot-agent-sdk`](https://github.com/tencent-connect/qqbot-agent-sdk) 建立 WebSocket 长连接，不需要公网回调地址。新建并保存 QQ 渠道后，可在详情页点击 **QQ 扫码绑定**，用手机 QQ 完成官方接入流程；返回的 App ID 与 Client Secret 会直接写入本机加密凭据存储，不经过 Web 界面。已有机器人也可以手动填写这两个字段。命令行使用 `argusai channels login-qq CHANNEL_ID`，将 `CHANNEL_ID` 替换为实际渠道 ID，终端会显示二维码和可打开的扫码链接。
 
-QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器与运行时两层都会被忽略。文字按 QQ 限制分段，图片、语音、视频和文件通过官方媒体接口发送。扫码完成的是机器人凭据绑定，远端账号仍需发送一次性 `/pair` 口令，才能访问指定的 Agent 对话。
+QQ 渠道只接受 C2C 私聊事件；群消息及频道（`guild`）消息在适配器与运行时两层都会被忽略。文字按 QQ 限制分段，图片、语音、视频和文件通过官方媒体接口发送。扫码完成的是机器人凭据绑定，远端账号仍需发送一次性 `/pair` 口令，才能访问指定的 Agent 对话。
 
 ### 一次完整配对
 
@@ -82,7 +82,7 @@ QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器�
    argusai ai add --name review --base-url "$ARGUSAI_AI_BASE_URL" --api-key "$ARGUSAI_AI_KEY" --model "$ARGUSAI_AI_MODEL" --protocol openai --activate
    ```
 
-   这里的变量是 shell 展开，不是 ArgusAI 自动读取的配置项。PowerShell 中对应写为 `$env:ARGUSAI_AI_BASE_URL`、`$env:ARGUSAI_AI_KEY`、`$env:ARGUSAI_AI_MODEL`。API Key 会作为进程参数传入；不要把填入真实值的命令、终端录像或进程诊断公开。
+   这里的变量由命令行环境展开，不是 ArgusAI 自动读取的配置项。PowerShell 中对应写为 `$env:ARGUSAI_AI_BASE_URL`、`$env:ARGUSAI_AI_KEY`、`$env:ARGUSAI_AI_MODEL`。API 密钥会作为进程参数传入；不要把填入真实值的命令、终端录像或进程诊断公开。
 
 2. 建立一个命名对话，再在对话中选择它使用的模型：
 
@@ -142,7 +142,7 @@ QQ 渠道只接受 C2C 私聊事件；群、频道和 guild 消息在适配器�
 
    已经由第 4 步绑定时无需重复 `bind`。`grant` 设置的是完整权限集合，会替换原集合；可以只保留任务需要的权限。远端切换模型或会话需要 `configure`，主动消息和文件投递需要 `send`。新配对默认拥有上述六项权限，应按使用者实际职责检查。
 
-其他提供商使用相同的配对、绑定和身份权限流程，创建字段以 `channels providers` 为准。例如，已准备 Telegram Bot Token 后可执行：
+其他提供商使用相同的配对、绑定和身份权限流程，创建字段以 `channels providers` 为准。例如，已准备 Telegram 机器人令牌后可执行：
 
 ```sh
 argusai channels add telegram --name "Telegram 工作入口" --secret "bot_token=$ARGUSAI_TELEGRAM_BOT_TOKEN" --enable
@@ -163,7 +163,7 @@ argusai channels add telegram --name "Telegram 工作入口" --secret "bot_token
 如果失败，保留本地报告，报告 last_error，不把文件名或已排队说成送达成功。
 ```
 
-`IDENTITY_ID` 从前面的身份清单取得。当前 CLI 没有独立的 `channels send`、`send-file` 或 `delivery` 子命令；这里通过 Agent 工具发送和查询，工具名也不是 shell 命令。
+`IDENTITY_ID` 从前面的身份清单取得。当前 CLI 没有独立的 `channels send`、`send-file` 或 `delivery` 子命令；这里通过 Agent 工具发送和查询，工具名也不是终端命令。
 
 | Agent 工具 | 用途与边界 |
 | --- | --- |
@@ -177,7 +177,7 @@ argusai channels add telegram --name "Telegram 工作入口" --secret "bot_token
 
 文件路径相对于当前执行对话的沙盒，不能借绝对路径发送其他会话或宿主任意文件。发送已有扫描报告、ReverseJob 产物时，先通过相应读取或导出工具把待交付文件放入当前沙盒。单文件上限为 32 MiB，平台还可能有更低的限制；超限时先生成精简报告或拆分产物。
 
-入队回执中的 `queued=true` 表示 accepted；持久投递记录使用以下状态，不另有 `delivered` 状态：
+入队回执中的 `queued=true` 表示已接受；持久投递记录使用以下状态，不另有 `delivered` 状态：
 
 | `state` | 如何理解 |
 | --- | --- |
@@ -248,9 +248,9 @@ Discord 可读取事件自带的转发快照，Slack 可读取事件内携带的
 
 渠道发来的普通问题由 Agent 使用 `channel_reply` 回复。一次工具调用可按顺序发送多句话，形成少量独立气泡，并在气泡之间保留短暂停顿；目标固定为发起当前轮次的那个配对身份，不会广播到同会话的其他渠道。各渠道仍按自身能力渲染 Markdown、卡片、分段和附件。回复被投递队列接受后，Agent 本轮立即结束，不会再调用模型生成发送回执或重复总结。
 
-气泡边界由 Agent 决定：`channel_reply` 的 `messages` 每项就是一个完整气泡，工具不会按标点拆句。工具参数完整生成后，文字进入可靠投递队列；开启过程输出时，各气泡可通过平台流式接口逐步显示。这是已完成文字的流式投递，不是工具参数生成时的逐 token 推送。
+气泡边界由 Agent 决定：`channel_reply` 的 `messages` 每项就是一个完整气泡，工具不会按标点拆句。工具参数完整生成后，文字进入可靠投递队列；开启过程输出时，各气泡可通过平台流式接口逐步显示。这是已完成文字的流式投递，不是工具参数生成时的逐词元推送。
 
-表达方式先读取设置中的全局 **用户习惯**。说话风格、输出偏好、避免事项和备注同时作用于完整 Agent 对话、悬浮球和通讯渠道；渠道拟人回复 Skill 只负责把同一份习惯落实为自然措辞和合理气泡边界，不会另建一套渠道人格，也不会改写技术事实。思考开关、思考强度、模型选择和自动审批仍是当前对话的会话级状态，一个对话中的切换不会改变其他对话。
+表达方式先读取设置中的全局 **用户习惯**。说话风格、输出偏好、避免事项和备注同时作用于完整 Agent 对话、悬浮球和通讯渠道；渠道拟人回复技能只负责把同一份习惯落实为自然措辞和合理气泡边界，不会另建一套渠道人格，也不会改写技术事实。思考开关、思考强度、模型选择和自动审批仍是当前对话的会话级状态，一个对话中的切换不会改变其他对话。
 
 文件回传使用本机已有的会话产物和渠道投递机制。发送前核对目标身份、文件内容与脱敏要求；“已排队”不等于“已成功送达”。
 
@@ -274,7 +274,7 @@ argusai serve install --dry-run
 ## 常见检查顺序
 
 - 服务无法启动：先读解析后的可执行路径和错误，再核对环境变量与依赖。
-- 能连接但工具不可见：检查工具发现、允许列表和服务返回的 schema。
+- 能连接但工具不可见：检查工具发现、允许列表和服务返回的参数定义。
 - 外部 Agent 没响应：先测试 ACP 握手，再检查所选运行时、项目目录和对话绑定。
 - 远端没有回复：确认私聊身份已配对、会话已授权、适配器在线、调度宿主没有冲突。
 - 确认卡停住：查看是否要求本机处理，不要通过重复远端消息绕过。

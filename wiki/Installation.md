@@ -1,6 +1,6 @@
 # 安装与环境准备
 
-[Wiki 首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
+[文档首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
 
 发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.7`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
 
@@ -67,7 +67,7 @@ cd ArgusAI-0.1.7-linux-x64
 
 ARM64 系统将文件名和目录名中的 `linux-x64` 替换为 `linux-arm64`。
 
-交互终端中直接执行 `./ArgusAI` 会进入 ops 控制台。Linux 桌面依赖按发行版准备；Ubuntu 示例：
+交互终端中直接执行 `./ArgusAI` 会进入交互控制台。Linux 桌面依赖按发行版准备；Ubuntu 示例：
 
 ```sh
 sudo apt-get install libgtk-3-0 libwebkit2gtk-4.1-0 \
@@ -82,7 +82,7 @@ Linux 发布包包含 Python 的 GTK 桥接与相应 typelib，系统仍需提�
 
 下载完成后，选择“安装并重启”。有运行中的 Agent、扫描、代理或其他活动工作时，先完成或停止相应工作，再重试安装。Windows 会通过系统权限提示启动安装器；macOS 和 Linux 需要安装目录可写。安装过程保留旧程序备份，应用配置、会话与数据目录不随程序目录替换。若自定义数据位于安装目录内，先用设置中的迁移功能移到安装目录外。
 
-安装目录不可写、当前平台没有发行包，或使用源码环境时，按页面提示打开下载目录或 GitHub Release 手动更新；源码环境仍通过 Git 和依赖管理器升级。更新检查读取官网静态清单，安装包从对应 GitHub Release 下载，不需要配置 GitHub Token。早期发行包没有内置更新入口，需要先手动安装包含该功能的新版本。
+安装目录不可写、当前平台没有发行包，或使用源码环境时，按页面提示打开下载目录或 GitHub Release 手动更新；源码环境仍通过 Git 和依赖管理器升级。更新检查读取官网静态清单，安装包从对应 GitHub Release 下载，不需要配置 GitHub 令牌。早期发行包没有内置更新入口，需要先手动安装包含该功能的新版本。
 
 ## 从源码运行
 
@@ -95,7 +95,7 @@ Linux 发布包包含 Python 的 GTK 桥接与相应 typelib，系统仍需提�
 | Node.js 18+ 和 npm | 安装与构建 Vue 前端；发布 CI 使用 Node.js 22 |
 | 系统桌面运行库 | WebView2、macOS 系统组件或 Linux GTK/WebKitGTK |
 
-从仓库根目录执行以下命令。命令在 PowerShell 和常见 Unix shell 中均可使用：
+从仓库根目录执行以下命令。命令在 PowerShell 和常见 Unix 命令行环境中均可使用：
 
 ```sh
 git clone https://github.com/HG-ha/Argusai.git
@@ -149,7 +149,7 @@ uv run argusai doctor
 
 在设置页填写 AI 服务地址、协议、模型与凭据。先测试连接，再用一个非敏感短消息测试对话。凭据只保存在用户级配置中，不要放到仓库、截图或问题报告。
 
-CLI 提供 `ai providers`、`ai list`、`ai add` 等命令；涉及密钥时建议通过设置页输入，避免出现在 shell 历史和进程参数中。用法见[CLI 参考](CLI-Reference.md)。
+CLI 提供 `ai providers`、`ai list`、`ai add` 等命令；涉及密钥时建议通过设置页输入，避免出现在终端历史和进程参数中。用法见[CLI 参考](CLI-Reference.md)。
 
 ### 数据目录
 
@@ -184,7 +184,7 @@ CLI 提供 `ai providers`、`ai list`、`ai add` 等命令；涉及密钥时建�
 | 现象 | 排查方向 |
 | --- | --- |
 | 找不到 `argusai` | 源码环境使用 `uv run argusai`；确认工作目录含 `pyproject.toml` |
-| 找不到 `webui/dist/index.html` | 安装 npm 依赖并执行前端 build |
+| 找不到 `webui/dist/index.html` | 安装 npm 依赖并构建前端 |
 | `uv sync --locked` 报锁文件不一致 | 核对分支与文件是否完整；开发者更新依赖后应同步锁文件 |
 | GUI 空白或 WebView 初始化失败 | WebView2 / WebKitGTK、系统 WebView、图形环境与错误日志 |
 | 模型测试失败 | 地址、协议、模型、凭据、网络与服务端错误 |

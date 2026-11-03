@@ -1,4 +1,6 @@
-## ArgusAI Wiki
+<a id="argusai-wiki"></a>
+
+## ArgusAI 使用文档
 
 [文档首页](Home.md)
 
@@ -8,7 +10,7 @@
 - [桌面图文入门](GUI-Guide.md)
 - [安装与环境](Installation.md)
 - [命令行参考](CLI-Reference.md)
-- [CLI 完整参数表](CLI-Options.md)
+- [命令行完整参数表](CLI-Options.md)
 
 ### 日常工作
 

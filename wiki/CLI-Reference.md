@@ -1,6 +1,6 @@
 # 命令行参考
 
-[Wiki 首页](Home.md) · [快速开始](Quick-Start.md) · [完整参数表](CLI-Options.md) · [集成](Integrations.md) · [自动化](Automation.md)
+[文档首页](Home.md) · [快速开始](Quick-Start.md) · [完整参数表](CLI-Options.md) · [集成](Integrations.md) · [自动化](Automation.md)
 
 先配置一个 AI 端点，再用 `argusai chat` 开始工作。CLI 也能管理模型端点、通信渠道、MCP、ACP、小队、定时任务、知识库和逆向任务，或直接运行扫描、代理与报告命令。
 
@@ -20,9 +20,9 @@ argusai --chat
 argusai ai add --help
 ```
 
-交互终端中裸运行 `argusai` 进入 ops 控制台；`--gui` 启动桌面，`--tray` 启动到托盘。没有 TTY 的脚本应明确写子命令。`doctor` 检查运行环境，输出中的 `warn` 可能表示可选工具未安装，结合自己要用的功能判断。`--verbose` 将日志镜像到 stderr。
+交互终端中裸运行 `argusai` 进入交互控制台；`--gui` 启动桌面，`--tray` 启动到托盘。没有 TTY 的脚本应明确写子命令。`doctor` 检查运行环境，输出中的 `warn` 可能表示可选工具未安装，结合自己要用的功能判断。`--verbose` 将日志镜像到 stderr。
 
-需要 shell 补全时，`argusai --show-completion` 显示补全脚本，供你核对后手动加入配置。`argusai --install-completion` 会写入当前用户的 shell 配置；当前 Typer 实现在 PowerShell 下还会尝试把 CurrentUser 执行策略设为 Unrestricted。自行管理执行策略的用户应使用显示脚本的方式，按自己的策略安装补全。补全属于可选系统配置，不是软件使用前提。
+需要命令行补全时，`argusai --show-completion` 显示补全脚本，供你核对后手动加入配置。`argusai --install-completion` 会写入当前用户的终端配置；当前 Typer 实现在 PowerShell 下还会尝试把当前用户（`CurrentUser`）的执行策略设为不受限（`Unrestricted`）。自行管理执行策略的用户应使用显示脚本的方式，按自己的策略安装补全。补全属于可选系统配置，不是软件使用前提。
 
 普通单行命令可在 PowerShell 与 bash 中使用；包含 JSON 的两处示例另附 Windows PowerShell 5.1 写法。引号中的路径含空格时保留引号；重复值应重复选项，例如 `--tag review --tag internal`。`--arg=--stdio` 的等号用于把以短横线开头的内容作为参数值。不要把本页每一组示例整段执行：创建、派发、授权和删除各有不同的前提。
 
@@ -62,9 +62,9 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
 argusai ai add --name demo-ai --provider custom --protocol openai --base-url "$env:ARGUSAI_BASE_URL" --api-key "$env:ARGUSAI_API_KEY" --model "$env:ARGUSAI_MODEL" --priority 10 --activate
 ```
 
-变量由 shell 展开后传给 `--api-key`，ArgusAI 不会把字符串 `$ARGUSAI_API_KEY` 当成密钥引用。变量写法减少历史记录泄漏，但参数值仍可能被有权限查看进程的人看到；共享主机可在桌面设置里填写密钥。用完后 bash 执行 `unset ARGUSAI_API_KEY`，PowerShell 执行 `Remove-Item Env:ARGUSAI_API_KEY`。
+变量由命令行环境展开后传给 `--api-key`，ArgusAI 不会把字符串 `$ARGUSAI_API_KEY` 当成密钥引用。变量写法减少历史记录泄漏，但参数值仍可能被有权限查看进程的人看到；共享主机可在桌面设置里填写密钥。用完后 bash 执行 `unset ARGUSAI_API_KEY`，PowerShell 执行 `Remove-Item Env:ARGUSAI_API_KEY`。
 
-新端点必须有地址、模型和非空 API key；已知预设可以补齐前两项。本地服务若不校验 key，也要按服务约定填写非空占位值。Anthropic 端点使用 `--protocol anthropic`，并填写该服务要求的地址。
+新端点必须有地址、模型和非空 API 密钥；已知预设可以补齐前两项。本地服务若不校验密钥，也要按服务约定填写非空占位值。Anthropic 端点使用 `--protocol anthropic`，并填写该服务要求的地址。
 
 ### 测试、启用与切换
 
@@ -78,7 +78,7 @@ argusai chat --session cli-first
 
 `ai list` 显示端点索引、启用状态、当前默认、模型和密钥是否已设置。`ai test` 发送很短的 ping 请求，成功后可再测试一次真实对话。默认端点按优先级选择；`ai activate` 会启用端点并把它的优先级提高到现有最高值之上。
 
-在打开的 ops 对话内输入 `/model` 可列出当前运行时的选择，再用 `/model 1` 按列表序号切换当前会话。这里的显示序号与 `ai list` 的从 0 开始的端点索引不是一回事。
+在打开的交互对话内输入 `/model` 可列出当前运行时的选择，再用 `/model 1` 按列表序号切换当前会话。这里的显示序号与 `ai list` 的从 0 开始的端点索引不是一回事。
 
 ### 更新已有端点与绑定模型
 
@@ -121,9 +121,11 @@ argusai chat --session offline-review --once --file note.txt --file request.har 
 
 `--yes` 只处理可自动允许的普通工具确认；高风险确认仍遵循运行时规则。不要把它当成任意动作的通行证。材料分析虽然不向被分析目标发请求，模型调用仍会访问已配置端点。
 
-### 在 ops 输入区使用斜杠命令
+<a id="在-ops-输入区使用斜杠命令"></a>
 
-先执行 `argusai chat --session offline-review`，再把下表中的命令输入到对话输入区。斜杠命令由本地 shell 分派，其中旁路问答、续跑和带目标的授权命令也会调用 Agent。普通自然语言会提交到当前对话或小队房间。
+### 在交互输入区使用斜杠命令
+
+先执行 `argusai chat --session offline-review`，再把下表中的命令输入到对话输入区。斜杠命令由本地交互控制台分派，其中旁路问答、续跑和带目标的授权命令也会调用 Agent。普通自然语言会提交到当前对话或小队房间。
 
 | 功能 | 可直接输入的示例 | 结果或前提 |
 | --- | --- | --- |
@@ -381,7 +383,7 @@ argusai channels grant IDENTITY_ID chat status cancel
 
 `grant` 设置该身份的权限集合。可选项为 `chat`、`status`、`cancel`、`confirm`、`configure`、`send`；上例仅保留前三项。`argusai channels grant IDENTITY_ID --all` 授予全套权限，应按实际使用者职责决定。
 
-微信登录和已有 token 配置分别示例：
+微信登录和已有令牌配置分别示例：
 
 ```sh
 argusai channels add wechat --id wechat-demo --name "微信测试渠道"
@@ -392,7 +394,7 @@ argusai channels login-wechat wechat-demo
 argusai channels add telegram --id telegram-demo --name "Telegram测试渠道" --secret "bot_token=$TELEGRAM_BOT_TOKEN"
 ```
 
-Telegram 的 token 先按前面的隐藏输入方式放进环境变量；PowerShell 把值改为 `"bot_token=$env:TELEGRAM_BOT_TOKEN"`。其它平台先看 `channels providers --json` 返回的凭据字段，再按重复 `--secret KEY=VALUE` 和 `--setting KEY=VALUE` 配置；回调型平台还可用 `--host`、`--port`、`--path`。
+Telegram 的令牌先按前面的隐藏输入方式放进环境变量；PowerShell 把值改为 `"bot_token=$env:TELEGRAM_BOT_TOKEN"`。其它平台先看 `channels providers --json` 返回的凭据字段，再按重复 `--secret KEY=VALUE` 和 `--setting KEY=VALUE` 配置；回调型平台还可用 `--host`、`--port`、`--path`。
 
 停用和删除例子：
 
@@ -417,7 +419,7 @@ argusai mcp disable local-tools
 argusai mcp remove local-tools
 ```
 
-stdio 服务的配置例子是 `argusai mcp add --id stdio-tools --name "stdio工具" --command MCP_EXECUTABLE --arg=--stdio --cwd WORK_DIR --disable`。把 `MCP_EXECUTABLE` 与 `WORK_DIR` 换成已经安装的 MCP 服务程序和工作目录。`--env KEY=VALUE` 与 `--header KEY=VALUE` 可重复。
+通过标准输入输出（stdio）通信的服务配置例子是 `argusai mcp add --id stdio-tools --name "stdio工具" --command MCP_EXECUTABLE --arg=--stdio --cwd WORK_DIR --disable`。把 `MCP_EXECUTABLE` 与 `WORK_DIR` 换成已经安装的 MCP 服务程序和工作目录。`--env KEY=VALUE` 与 `--header KEY=VALUE` 可重复。
 
 `add` 带同一 `--id` 可更新配置，默认启用；示例先停用。`test` 会连接或启动一个服务，`probe` 批量探测，不只是读取设置。`remove` 删除配置。MCP 工具权限仍受当前会话规则控制。
 
@@ -436,7 +438,7 @@ argusai agent remove local-acp
 
 `--arg` 重复传多个参数，`--env KEY=VALUE` 提供该子进程环境；不同 Agent 的 ACP 启动参数不同，不能默认都接受 `--stdio`。`add` 带同一 ID 更新配置，`test` 会启动进程并测试 ACP 握手。凭据、模型和外部 Agent 自有工具权限按相应运行时管理，不能把本工作台的审批状态当成外部 Agent 的全部权限设置。
 
-在 ops 中用 `/agents` 查看，再 `/new local-acp` 创建对应运行时的新会话。不要复用已绑定其它运行时的执行会话。
+在交互控制台中用 `/agents` 查看，再 `/new local-acp` 创建对应运行时的新会话。不要复用已绑定其它运行时的执行会话。
 
 ## 更新、JSON 与脚本处理
 
@@ -457,10 +459,10 @@ argusai version --json
 | --- | --- |
 | `No such command` / `No such option` | `argusai version --json`、当前命令 `--help`；不要使用本页明确不存在的 `ai update` 等名称 |
 | 新端点保存失败 | 地址、模型、非空密钥、`--protocol` 是否为 openai 或 anthropic；JSON 参数是否有效对象 |
-| `ai test` 超时或鉴权失败 | 服务地址、API key、模型 ID、账号模型权限、网络；端点可响应不代表每种工具/模态能力均可用 |
+| `ai test` 超时或鉴权失败 | 服务地址、API 密钥、模型 ID、账号模型权限、网络；端点可响应不代表每种工具/模态能力均可用 |
 | 对话看不到预期模型 | 先查 `ai list`，再查会话内 `/model`；检查默认端点和当前会话是否固定了不同选择 |
 | 找不到 ID 或历史 | 从当前用户、当前数据目录的 list 命令重新取 ID；不要把示例占位名当作真实 ID |
-| MCP/ACP 测试失败 | 可执行程序、工作目录、启动参数和依赖；HTTP 服务是否运行；stdio 程序是否按相应协议通信 |
+| MCP/ACP 测试失败 | 可执行程序、工作目录、启动参数和依赖；HTTP 服务是否运行；标准输入输出程序是否按相应协议通信 |
 | 渠道显示 `ext` | 可能由另一个服务宿主托管，先查 `serve status` 与宿主 PID，不必重复启动 |
 | 定时任务不运行 | 启用状态、下次运行时间、在线宿主、授权、目的会话；`cron runs` 查看实际记录 |
 | 断点命令连接失败 | 同一用户/数据根的代理必须先运行；`PAUSE_ID` 需来自当前断点列表 |
