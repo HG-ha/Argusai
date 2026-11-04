@@ -95,7 +95,7 @@ def test_bump_updates_all_versions_and_preserves_line_endings(metadata):
 
 def workflow():
     # BaseLoader keeps the GitHub `on` key as text rather than YAML 1.1 boolean.
-    return yaml.load((ROOT / ".github/workflows/release-packages.yml").read_text(), Loader=yaml.BaseLoader)
+    return yaml.load((ROOT / ".github/workflows/release-packages.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
 
 
 def test_required_release_sources_exist_in_actual_project():
@@ -936,3 +936,103 @@ def test_tag_push_rejects_uncommitted_release_notes_before_gh_commands(tag_push,
     monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(SystemExit, match="Release notes do not match"):
         exec(python_step("publish", "Publish verified release assets"), {})
+
+
+def test_main_preview_never_updates_latest_or_the_stable_feed():
+    config = workflow()
+    preview = config["jobs"]["publish-preview"]
+    assert preview["if"] == "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    assert preview["needs"] == ["validate", "build", "source"]
+    assert preview["permissions"] == {"contents": "write"}
+    assert "publish-preview" not in config["jobs"]["update-website"]["needs"]
+    assert python_step("publish-preview", "Verify source, all five packages and checksums") == python_step("publish", "Verify source, all five packages and checksums")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_main_preview_marks_prerelease_and_not_latest(source_repository, monkeypatch, existing):
+    repository, commit = source_repository
+    monkeypatch.chdir(repository)
+    assets = repository / "release-assets"
+    assets.mkdir()
+    publish_assets(assets)
+    monkeypatch.setenv("EVENT_NAME", "push")
+    monkeypatch.setenv("EVENT_REF", "refs/heads/main")
+    monkeypatch.setenv("SOURCE_COMMIT", commit)
+    monkeypatch.setenv("RELEASE_VERSION", "0.1.0")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fixture/repository")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(repository / "summary.md"))
+    tag = "preview-" + commit[:12]
+    real_run = subprocess.run
+    calls = []
+    def run(command, **kwargs):
+        if command[0] != "gh":
+            return real_run(command, **kwargs)
+        calls.append(command)
+        if command[1] == "api":
+            return SimpleNamespace(returncode=0 if existing else 1, stdout=json.dumps({"object": {"type":"commit", "sha":commit}}), stderr="" if existing else "HTTP 404")
+        if command[1:3] == ["release", "view"]:
+            return SimpleNamespace(returncode=0 if existing else 1, stdout=json.dumps({"tagName":tag, "isDraft":False, "isPrerelease":True}))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(subprocess, "run", run)
+    exec(python_step("publish-preview", "Publish verified preview assets"), {})
+    publication = next(call for call in calls if call[1:3] == ["release", "edit" if existing else "create"])
+    assert "--prerelease" in publication and "--latest=false" in publication
+    assert publication[3] == tag and not tag.startswith("v")
+    if not existing:
+        assert publication[publication.index("--target")+1] == commit
+    assert len(list(assets.iterdir())) == 12
+    for package in assets.iterdir():
+        assert tag in package.name
+        if not package.name.endswith(".sha256"):
+            assert Path(str(package)+".sha256").read_text().strip() == hashlib.sha256(package.read_bytes()).hexdigest()+"  "+package.name
+
+
+@pytest.mark.parametrize("ref", ["refs/tags/v0.1.0", "refs/heads/develop"])
+def test_preview_refuses_non_main_push_before_any_release_write(monkeypatch, tmp_path, ref):
+    monkeypatch.setenv("EVENT_NAME", "push")
+    monkeypatch.setenv("EVENT_REF", ref)
+    calls=[]
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append(a))
+    with pytest.raises(SystemExit, match="requires a main push"):
+        exec(python_step("publish-preview", "Publish verified preview assets"), {})
+    assert not calls
+
+
+def test_preview_verification_still_checks_source_without_formal_notes(monkeypatch, tmp_path):
+    publish_assets(tmp_path)
+    write_source_archive(tmp_path, omit="scripts/packaging/release-notes-0.1.0.md")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RELEASE_VERSION", "0.1.0")
+    monkeypatch.setenv("SOURCE_COMMIT", "a"*40)
+    monkeypatch.setenv("PREVIEW_BUILD", "1")
+    exec(python_step("publish-preview", "Verify source, all five packages and checksums"), {})
+    package = tmp_path/"ArgusAI-0.1.0-win-arm64-setup.exe"
+    package.write_bytes(b"corrupted")
+    with pytest.raises(SystemExit, match="Checksum mismatch"):
+        exec(python_step("publish-preview", "Verify source, all five packages and checksums"), {})
+
+
+@pytest.mark.parametrize("damage", ["formal-release", "wrong-tag-target", "tag-lookup-failed"])
+def test_preview_refuses_existing_formal_release_or_unverified_tag(source_repository, monkeypatch, damage):
+    repository, commit = source_repository
+    monkeypatch.chdir(repository)
+    assets = repository / "release-assets"
+    assets.mkdir()
+    publish_assets(assets)
+    for key,value in {"EVENT_NAME":"push", "EVENT_REF":"refs/heads/main", "SOURCE_COMMIT":commit,
+                      "RELEASE_VERSION":"0.1.0", "GITHUB_REPOSITORY":"fixture/repository"}.items():
+        monkeypatch.setenv(key,value)
+    calls=[]
+    real_run=subprocess.run
+    def run(command, **kwargs):
+        if command[0]!="gh": return real_run(command, **kwargs)
+        calls.append(command)
+        if command[1]=="api":
+            return SimpleNamespace(returncode=1 if damage=="tag-lookup-failed" else 0,
+                                   stdout=json.dumps({"object":{"type":"commit", "sha":"b"*40 if damage=="wrong-tag-target" else commit}}),
+                                   stderr="HTTP 503" if damage=="tag-lookup-failed" else "")
+        return SimpleNamespace(returncode=0,stdout=json.dumps({"tagName":"preview-"+commit[:12], "isDraft":False,"isPrerelease":False}))
+    monkeypatch.setattr(subprocess,"run",run)
+    with pytest.raises(SystemExit):
+        exec(python_step("publish-preview", "Publish verified preview assets"),{})
+    assert not any(call[1:3] in (["release","edit"],["release","create"],["release","upload"]) for call in calls)

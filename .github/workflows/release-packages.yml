@@ -11,7 +11,7 @@ on:
         required: false
         type: string
 
-# Compilation jobs only read the repository. Only publish can change a Release.
+# Compilation jobs only read the repository. Release publication jobs opt into write access.
 permissions:
   contents: read
 
@@ -68,7 +68,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"version={version}\ncommit={commit}\nrelease_tag={release_tag}\nartifact_suffix={artifact_suffix}\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              kind = "Release" if release_tag else "Test build (Artifacts only)"
+              kind = "Release" if release_tag else ("Preview release" if os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main" else "Test build (Artifacts only)")
               summary.write(f"## ArgusAI {version}\n\n{kind}\n\nSource commit: `{commit}`\n")
       - name: Validate release tag target
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -658,7 +658,8 @@ jobs:
           pattern: ArgusAI-${{ needs.validate.outputs.version }}-*
           merge-multiple: true
           path: release-assets
-      - name: Verify source, all five packages and checksums
+      - &verify_release_assets
+        name: Verify source, all five packages and checksums
         working-directory: release-assets
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -697,6 +698,8 @@ jobs:
                       f"scripts/packaging/release-notes-{version}.md", "argusai/gui/windows-arm64.runtimeconfig.json",
                       "argusai/vendor/sqlmap/LICENSE", "argusai/vendor/sqlmap/sqlmap.py",
                       ".github/workflows/release-packages.yml")
+          if os.environ.get("PREVIEW_BUILD") == "1":
+              required = tuple(name for name in required if not name.startswith("scripts/packaging/release-notes-"))
           try:
               with tarfile.open(packages[-1], "r:gz") as archive:
                   if archive.pax_headers.get("comment") != os.environ["SOURCE_COMMIT"]:
@@ -768,6 +771,84 @@ jobs:
           else:
               subprocess.run(["gh", "release", "create", tag, "--verify-tag", "--target", commit,
                               "--title", f"ArgusAI v{version}", "--notes-file", str(notes), *assets], check=True)
+
+  publish-preview:
+    name: Publish main preview without changing Latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [validate, build, source]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
+      PREVIEW_BUILD: "1"
+      EVENT_NAME: ${{ github.event_name }}
+      EVENT_REF: ${{ github.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ArgusAI-${{ needs.validate.outputs.version }}-*
+          merge-multiple: true
+          path: release-assets
+      - *verify_release_assets
+      - name: Publish verified preview assets
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          if os.environ["EVENT_NAME"] != "push" or os.environ["EVENT_REF"] != "refs/heads/main":
+              raise SystemExit("Preview publication requires a main push")
+          commit = os.environ["SOURCE_COMMIT"]
+          actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if actual != commit:
+              raise SystemExit("Preview checkout does not match validated source commit")
+          version = os.environ["RELEASE_VERSION"]
+          tag = f"preview-{commit[:12]}"
+          tag_result = subprocess.run(["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/tags/{tag}"], capture_output=True, text=True)
+          if tag_result.returncode == 0:
+              target = json.loads(tag_result.stdout)["object"]
+              if target.get("type") != "commit" or target.get("sha") != commit:
+                  raise SystemExit("Preview tag points to another commit")
+          elif "404" not in tag_result.stderr:
+              raise SystemExit("Cannot verify preview tag identity")
+          assets = Path("release-assets")
+          for package in sorted(assets.iterdir()):
+              if package.name.endswith(".sha256"):
+                  continue
+              destination = package.with_name(package.name.replace(f"ArgusAI-{version}-", f"ArgusAI-{version}-{tag}-", 1))
+              package.rename(destination)
+              Path(str(package) + ".sha256").unlink()
+              with destination.open("rb") as stream:
+                  digest = hashlib.file_digest(stream, "sha256").hexdigest()
+              Path(str(destination) + ".sha256").write_text(f"{digest}  {destination.name}\n", encoding="utf-8")
+          files = sorted(str(path) for path in assets.iterdir())
+          notes = Path("preview-notes.md")
+          notes.write_text(f"# ArgusAI main 预发布版\n\n提交：`{commit}`\n\n用于测试 main 最新改动。正式版和自动更新仍跟随 v* 标签发布。\n", encoding="utf-8")
+          result = subprocess.run(["gh", "release", "view", tag, "--json", "tagName,isDraft,isPrerelease"], capture_output=True, text=True)
+          if result.returncode == 0:
+              release = json.loads(result.stdout)
+              if release.get("tagName") != tag or release.get("isDraft") or not release.get("isPrerelease"):
+                  raise SystemExit("Existing preview release has unexpected flags")
+              if tag_result.returncode != 0:
+                  raise SystemExit("Existing preview release has no matching tag")
+              subprocess.run(["gh", "release", "edit", tag, "--prerelease", "--latest=false", "--notes-file", str(notes)], check=True)
+              subprocess.run(["gh", "release", "upload", tag, *files, "--clobber"], check=True)
+          else:
+              subprocess.run(["gh", "release", "create", tag, "--target", commit, "--prerelease", "--latest=false",
+                              "--title", f"ArgusAI main preview ({commit[:12]})", "--notes-file", str(notes), *files], check=True)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"Preview: https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}\n")
 
   update-website:
     name: Synchronize and verify the public update feed
