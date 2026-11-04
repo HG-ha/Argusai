@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "version": "0.1.9",
+  "published_at": "2026-11-04T07:36:07Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.9",
+  "notes": "# ArgusAI v0.1.9\n\n- 新建本地 Agent 对话支持追加或替换系统提示，按会话保存并核验运行时能力。\n- 修复 ACP 授权模式与会话能力状态同步。\n- GUI 支持定期自动检查更新。\n- main 推送生成独立预发布包，正式版本仍由版本标签发布。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.9/ArgusAI-0.1.9-win-x64-setup.exe",
+      "sha256": "f410c5708c26936fa8ab853f6cdab07f1b9e3574c631e5f9f245d3271f67b78a",
+      "size": 70066337
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.9/ArgusAI-0.1.9-win-arm64-setup.exe",
+      "sha256": "8cef376a1d6cf45de7f2f5b7a6c91f5e9aa2d660c29a6a08feb8678b6ba754fd",
+      "size": 58967016
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.9/ArgusAI-0.1.9-linux-x64.tar.gz",
+      "sha256": "a341fdd176064f72bf697f59d46982a15c5cbafa12455bc7ba1b58eb3a6ca07a",
+      "size": 113393608
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.9/ArgusAI-0.1.9-linux-arm64.tar.gz",
+      "sha256": "949659eaf344a6e65742bcdcedbfa39981824ff887bd37949788e6338c4c18d2",
+      "size": 104780907
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.9/ArgusAI-0.1.9-macos-arm64.dmg",
+      "sha256": "a7910b190398955fee93b0e172297feaa012bc89fcc4191087685d68e1b8e839",
+      "size": 100532663
+    }
+  }
+}
