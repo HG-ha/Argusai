@@ -335,3 +335,33 @@ def _run_scenario(scenario: str, panel: Path = PANEL) -> subprocess.CompletedPro
 def test_external_auto_approve_ui(scenario: str) -> None:
     result = _run_scenario(scenario)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_greenlight_toolbar_uses_negotiated_capability_and_can_disable():
+    source = PANEL.read_text(encoding="utf-8")
+    start = source.index("const greenlightAvailable = computed(")
+    finish = source.index("const engagementScopeSummary", start)
+    declaration = source[start:finish]
+    script = f"""
+import {{computed, ref}} from {json.dumps(VUE.as_uri())};
+import assert from 'node:assert/strict';
+const activeTab = ref({{runtimePending:false}});
+const isAcpSession = ref(true);
+const engagementActive = ref(false);
+const sessionRuntime = ref({{acp_prompt_capabilities:{{}}}});
+{declaration}
+assert.equal(greenlightAvailable.value,false);
+sessionRuntime.value.acp_prompt_capabilities.system_prompt=true;
+assert.equal(greenlightAvailable.value,true);
+activeTab.value.runtimePending=true;
+assert.equal(greenlightAvailable.value,false);
+activeTab.value.runtimePending=false;
+sessionRuntime.value.acp_prompt_capabilities.system_prompt=false;
+engagementActive.value=true;
+assert.equal(greenlightAvailable.value,true);
+engagementActive.value=false;
+isAcpSession.value=false;
+assert.equal(greenlightAvailable.value,true);
+"""
+    result = subprocess.run([NODE, "--input-type=module", "-e", script], cwd=WEBUI, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr

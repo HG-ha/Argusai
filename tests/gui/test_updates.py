@@ -270,3 +270,56 @@ def test_native_windows_helper_starts_and_waits_before_gui_quits(tmp_path, monke
             if process.poll() is None:
                 process.terminate()
             process.wait(timeout=10)
+
+
+def test_update_monitor_periodic_checks_and_toggle_cleanup():
+    import shutil
+    import json
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("requires Node")
+    source = (Path(__file__).resolve().parents[2] / "argusai/webui/src/composables/useUpdates.js").read_text(encoding="utf-8")
+    source = "\n".join(line for line in source.splitlines() if not line.startswith("import ")).replace("export ", "")
+    harness = r"""
+let sequence = 0;
+const timers = new Map();
+const window = {setTimeout: (fn, delay) => {timers.set(++sequence, {fn, delay}); return sequence}, clearTimeout: id => timers.delete(id)};
+const localStorage = {getItem: () => null, setItem: () => {}};
+const reactive = value => value;
+const computed = getter => ({get value() {return getter()}});
+const t = key => key;
+let checks = 0;
+let state = {status: 'up_to_date', install_mode: 'installer', version: '0.1.8'};
+const api = {updateStatus: async () => state, checkForUpdates: async force => {if (force) throw Error('unexpected forced background check'); checks++; return state}};
+async function fire(delay) {
+ const entry = [...timers].find(([, timer]) => timer.delay === delay);
+ if (!entry) throw Error('missing timer '+delay);
+ timers.delete(entry[0]); await entry[1].fn();
+}
+function assert(value, reason) {if (!value) throw Error(reason)}
+"""
+    scenarios = r"""
+startUpdateMonitor(); startUpdateMonitor();
+assert(timers.size===1, 'duplicate startup monitor');
+await fire(3500);
+assert(checks===1, 'startup check missing');
+await fire(AUTO_CHECK_INTERVAL);
+assert(checks===2, 'periodic check missing');
+state = {...state, status:'downloading'};
+await fire(AUTO_CHECK_INTERVAL);
+assert(checks===2, 'checking while downloading');
+setAutoCheck(false);
+assert(![...timers.values()].some(t=>t.delay===AUTO_CHECK_INTERVAL), 'disabled timer retained');
+setAutoCheck(true);
+assert([...timers.values()].filter(t=>t.delay===AUTO_CHECK_INTERVAL).length===1, 'enable did not restore one timer');
+stopUpdateMonitor();
+assert(timers.size===0, 'timers leaked after stop');
+state = {...state, status:'up_to_date', install_mode:'source'};
+startUpdateMonitor(); await fire(3500); await fire(AUTO_CHECK_INTERVAL);
+assert(checks===2, 'source installation checked automatically');
+stopUpdateMonitor();
+console.log(JSON.stringify({checks, timers:timers.size}));
+"""
+    result = subprocess.run([node, "--input-type=module", "-e", harness + source + scenarios], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"checks": 2, "timers": 0}

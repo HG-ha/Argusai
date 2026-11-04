@@ -198,7 +198,7 @@ export default {
     "authorization": "授權",
     "authorizationDisableTitle": "關閉目前會話授權；真實 scope={scope}。不會繞過工具確認。",
     "authorizationEnableTitle": "開啟目前會話授權宣告；工具確認與 NO_AUTO_APPROVE 仍分別生效。",
-    "authorizationUnavailableAcp": "ACP 沒有 system/developer prompt 通道，無法向本地 Agent 注入受信任的授權宣告。",
+    "authorizationUnavailableAcp": "此本地 Agent 尚未宣告 systemPrompt 能力。請先重新整理模型與能力；授權模式需要此能力。",
     "autoAllow": "自動允許",
     "autoApprove": "自動審批",
     "autoApproveAgentDecide": "自動審批已開啟。請根據目前證據自行決定並繼續執行，不要再向我提問，也不要預設選第一項。",

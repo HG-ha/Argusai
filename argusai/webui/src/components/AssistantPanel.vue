@@ -365,7 +365,9 @@ const macosDesktopPermMissing = computed(() => {
 })
 
 const engagementActive = computed(() => Boolean(engagement.value?.active))
-const greenlightAvailable = computed(() => !activeTab.value?.runtimePending && !isAcpSession.value)
+const greenlightAvailable = computed(() => !activeTab.value?.runtimePending && (
+  !isAcpSession.value || engagementActive.value || sessionRuntime.value?.acp_prompt_capabilities?.system_prompt === true
+))
 const engagementScopeSummary = computed(() => {
   if (!engagementActive.value) return t('assistant.off')
   const raw = String(engagement.value?.scope || '').trim()
@@ -4159,6 +4161,7 @@ async function toggleGreenlightMode() {
       : { active: false }
     const r = await api.setAssistantEngagement(tab.sessionId, declaration)
     if (!r?.ok) throw new Error(r?.error || t('assistant.greenlightToggleFailed'))
+    if (r.runtime) tab.runtime = r.runtime
     tab.engagement = enabled ? (r.engagement_declaration || { active: true, mode: 'greenlight', scope: '*' }) : null
     showToast(
       enabled ? t('assistant.greenlightEnabled') : t('assistant.greenlightDisabled'),

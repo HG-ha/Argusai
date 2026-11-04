@@ -29,7 +29,7 @@ MANIFEST_URL = "https://argusai.sh/updates/stable.json"
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_PACKAGE_BYTES = 2 * 1024**3
 MAX_EXTRACTED_BYTES = 8 * 1024**3
-CHECK_INTERVAL = 24 * 3600
+CHECK_INTERVAL = 6 * 3600
 SUFFIXES = {
     "win-x64": "win-x64-setup.exe", "win-arm64": "win-arm64-setup.exe",
     "linux-x64": "linux-x64.tar.gz", "linux-arm64": "linux-arm64.tar.gz",

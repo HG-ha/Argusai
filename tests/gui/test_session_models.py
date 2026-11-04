@@ -415,3 +415,22 @@ def test_acp_selection_does_not_change_another_conversation(tmp_path) -> None:
     host.list_session_models("other")
     assert host.switch_session_model("chosen", index=0, value="m1", name="Model One")["ok"]
     assert host.list_session_models("other")["active"]["value"] == "m2"
+
+
+@pytest.mark.parametrize("supported", [True, False])
+def test_acp_engagement_is_scoped_to_supported_session(tmp_path, supported):
+    from argusai.gui.assistant_tools import AssistantToolsMixin
+    host = _host(tmp_path, {"runtime_id": "test-acp", "acp_prompt_capabilities": {"system_prompt": supported}})
+    selected = host._ensure_session("selected")
+    other = host._ensure_session("other")
+    result = AssistantToolsMixin.set_assistant_engagement(host, "selected", {"active": True})
+    assert result["ok"] is supported
+    assert not other.engagement_declaration
+    if supported:
+        assert selected.engagement_declaration["active"]
+    else:
+        assert result["error_code"] == "acp_system_prompt_required"
+        assert not selected.engagement_declaration
+    cleared = AssistantToolsMixin.set_assistant_engagement(host, "selected", {"active": False})
+    assert cleared["ok"]
+    assert not selected.engagement_declaration

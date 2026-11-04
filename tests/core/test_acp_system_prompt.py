@@ -58,6 +58,24 @@ def test_native_prompt_default_is_unchanged_by_external_projection():
     assert before.endswith("fixture preferences")
 
 
+@pytest.mark.parametrize("supported", [True, False])
+def test_greenlight_requires_fresh_negotiation_and_never_falls_back(monkeypatch, supported):
+    harness = ACPHarness(monkeypatch, {} if supported else MISSING)
+    host = turns.acp_host_instruction(greenlight_active=True)
+    result = harness.run(host=host, greenlight_active=True)
+    if supported:
+        assert result.ok
+        assert "GREENLIGHT MODE is active" in _system_text(harness.calls[0])
+        assert "runtime's own policies" in _system_text(harness.calls[0])
+        assert "GREENLIGHT" not in _prompt_text(harness.prompts[0])
+        assert result.prompt_capabilities["system_prompt"] is True
+    else:
+        assert not result.ok
+        assert result.error_code == "acp_system_prompt_required"
+        assert not harness.calls and not harness.prompts
+    assert harness.processes[0].closed
+
+
 class ACPHarness:
     def __init__(self, monkeypatch, system_capability=MISSING):
         self.system_capability = system_capability

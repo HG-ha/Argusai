@@ -144,6 +144,7 @@ def normalize_prompt_capabilities(agent_capabilities: dict[str, Any]) -> dict[st
         "embedded_context": _capability_enabled(
             raw.get("embeddedContext", raw.get("embedded_context"))
         ),
+        **({"system_prompt": True} if _supports_system_prompt(agent_capabilities) else {}),
     }
 
 
@@ -204,11 +205,12 @@ def _resource_prompt_block(
     )
 
 
-def acp_host_instruction() -> str:
+def acp_host_instruction(*, greenlight_active: bool = False, allow_web_search: bool = False) -> str:
     """Use native workbench policy with external-runtime transport contracts."""
     from argusai.core.assistant.skills import _build_system_prompt
 
-    return _build_system_prompt("", "", external_agent=True)
+    return _build_system_prompt("", "", external_agent=True, greenlight_active=greenlight_active,
+                                allow_web_search=allow_web_search)
 
 
 def _supports_system_prompt(capabilities: dict[str, Any]) -> bool:
@@ -421,6 +423,7 @@ async def run_acp_turn(
     user_habits: str = "",
     timeout_seconds: float = 604800,
     continuation_session: Any = None,
+    greenlight_active: bool = False,
 ) -> ACPTurnResult:
     """Run initialize → session/new|load → optional set_config_option → prompt."""
     updates: list[dict[str, Any]] = []
@@ -483,6 +486,13 @@ async def run_acp_turn(
         initialize_payload = _model_dict(initialize)
         capabilities = dict(initialize_payload.get("agentCapabilities") or {})
         prompt_capabilities = normalize_prompt_capabilities(capabilities)
+        if greenlight_active and not _supports_system_prompt(capabilities):
+            return ACPTurnResult(
+                ok=False, runtime_id=runtime.id, agent_capabilities=capabilities,
+                prompt_capabilities=prompt_capabilities,
+                error_code="acp_system_prompt_required",
+                error="当前本地 Agent 未声明 systemPrompt 能力，无法应用授权模式；请关闭授权模式或使用支持的 Agent。",
+            )
         system_prompt = (
             _system_prompt_payload(host_instruction, user_habits)
             if _supports_system_prompt(capabilities) else None

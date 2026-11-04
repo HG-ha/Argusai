@@ -198,7 +198,7 @@ export default {
     "authorization": "Autorización",
     "authorizationDisableTitle": "Desactivar la autorización de esta sesión; alcance efectivo={scope}. Las confirmaciones de herramientas siguen vigentes.",
     "authorizationEnableTitle": "Activar autorización para esta sesión. Las confirmaciones de herramientas y NO_AUTO_APPROVE siguen vigentes.",
-    "authorizationUnavailableAcp": "ACP no tiene canal de prompt system/developer, así que no se puede inyectar autorización de confianza en un agente local.",
+    "authorizationUnavailableAcp": "Este agente local no ha anunciado compatibilidad con systemPrompt. Actualiza los modelos y capacidades; el modo de autorización requiere esta función.",
     "autoAllow": "Permitir automáticamente",
     "autoApprove": "Aprobar automáticamente",
     "autoApproveAgentDecide": "La aprobación automática está activada. Decide a partir de la evidencia actual y continúa. No me preguntes de nuevo y no elijas por defecto la primera opción.",

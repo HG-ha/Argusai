@@ -147,6 +147,12 @@ class AssistantToolsMixin:
             if payload is not None:
                 payload.pop("goal_text", None)
                 payload.pop("context_seed", None)
+            binding = getattr(session, "runtime_binding", None)
+            if (payload and payload.get("active")
+                    and binding is not None and binding.runtime_id != "argusai-native"
+                    and not binding.acp_prompt_capabilities.get("system_prompt")):
+                return {"ok": False, "error_code": "acp_system_prompt_required",
+                        "error": "本地 Agent 尚未声明 systemPrompt 能力，请先刷新模型与能力，或使用支持的 Agent。"}
             session.set_engagement_declaration(payload)
             p = self._session_path(session_id)
             name = "AI 助手"

@@ -198,7 +198,7 @@ export default {
     "authorization": "권한",
     "authorizationDisableTitle": "이 세션의 권한을 끕니다. 유효 범위={scope}. 도구 확인은 계속 강제됩니다.",
     "authorizationEnableTitle": "이 세션의 권한을 켭니다. 도구 확인과 NO_AUTO_APPROVE는 계속 강제됩니다.",
-    "authorizationUnavailableAcp": "ACP에는 system/developer 프롬프트 채널이 없어 신뢰 권한을 로컬 Agent에 주입할 수 없습니다.",
+    "authorizationUnavailableAcp": "이 로컬 Agent는 systemPrompt 지원을 알리지 않았습니다. 모델과 기능을 새로 고치세요. 권한 모드에는 이 기능이 필요합니다.",
     "autoAllow": "자동 허용",
     "autoApprove": "자동 승인",
     "autoApproveAgentDecide": "자동 승인이 켜져 있습니다. 현재 증거로 결정하고 이어가세요. 다시 묻지 말고 첫 옵션을 기본값으로 쓰지 마세요.",

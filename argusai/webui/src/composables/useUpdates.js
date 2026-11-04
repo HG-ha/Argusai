@@ -17,6 +17,26 @@ let monitorActive = false
 let startupTimer = null
 let pollTimer = null
 let pendingAction = null
+const AUTO_CHECK_INTERVAL = 6 * 60 * 60 * 1000
+let autoCheckTimer = null
+
+function scheduleAutoCheck() {
+  if (autoCheckTimer) window.clearTimeout(autoCheckTimer)
+  autoCheckTimer = null
+  if (!monitorActive || !updateState.autoCheck) return
+  autoCheckTimer = window.setTimeout(async () => {
+    autoCheckTimer = null
+    try {
+      await refreshUpdateStatus()
+      if (monitorActive && updateState.autoCheck && updateState.install_mode !== 'source'
+          && !pendingAction && !['checking', 'downloading', 'downloaded', 'installing'].includes(updateState.status)) {
+        await checkForUpdates(false)
+      }
+    } finally {
+      scheduleAutoCheck()
+    }
+  }, AUTO_CHECK_INTERVAL)
+}
 
 function mergeStatus(result) {
   if (result && typeof result === 'object') Object.assign(updateState, result)
@@ -83,6 +103,7 @@ export function installUpdate() {
 export function setAutoCheck(enabled) {
   updateState.autoCheck = !!enabled
   try { localStorage.setItem(AUTO_CHECK_KEY, String(!!enabled)) } catch (_) {}
+  scheduleAutoCheck()
 }
 export function dismissUpdateNotice() {
   updateState.dismissedVersion = updateState.version
@@ -100,14 +121,17 @@ export function startUpdateMonitor() {
       await checkForUpdates(false)
     }
     schedulePoll()
+    scheduleAutoCheck()
   }, 3500)
 }
 export function stopUpdateMonitor() {
   monitorActive = false
   if (startupTimer) window.clearTimeout(startupTimer)
   if (pollTimer) window.clearTimeout(pollTimer)
+  if (autoCheckTimer) window.clearTimeout(autoCheckTimer)
   startupTimer = null
   pollTimer = null
+  autoCheckTimer = null
 }
 
 export function useUpdates() {

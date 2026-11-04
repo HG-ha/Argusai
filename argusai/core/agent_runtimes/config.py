@@ -195,7 +195,7 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
     raw_prompt_capabilities = raw.get("acp_prompt_capabilities")
     acp_prompt_capabilities: dict[str, bool] = {}
     if isinstance(raw_prompt_capabilities, Mapping):
-        for key in ("image", "audio", "embedded_context"):
+        for key in ("image", "audio", "embedded_context", "system_prompt"):
             if key in raw_prompt_capabilities:
                 acp_prompt_capabilities[key] = bool(raw_prompt_capabilities.get(key))
     raw_host_context = raw.get("acp_host_context")
@@ -211,6 +211,10 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
             delivery = raw_host_context.get("delivery")
             if isinstance(delivery, str) and delivery in {"prompt", "system_prompt"}:
                 acp_host_context["delivery"] = delivery
+    if acp_host_context.get("delivery") == "system_prompt":
+        # Older snapshots recorded successful negotiated delivery before the
+        # toolbar capability hint existed. Fresh turns still re-negotiate it.
+        acp_prompt_capabilities.setdefault("system_prompt", True)
     return SessionRuntimeBinding(
         runtime_id=runtime_id,
         workspace_mode=workspace_mode,  # type: ignore[arg-type]

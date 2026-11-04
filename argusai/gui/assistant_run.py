@@ -892,6 +892,21 @@ class AssistantRunMixin:
         mcp_server = tool_broker.mcp_server(broker_token)
 
         async def _run() -> dict[str, Any]:
+            from argusai.core.assistant.engagement import normalize_engagement
+
+            greenlight = bool(normalize_engagement(session.engagement_declaration))
+            session._current_turn_source = str(
+                edited_user.source if edited_user is not None else params.get("message_source") or ""
+            ).strip().lower()
+            session._current_turn_source_ref = str(
+                edited_user.source_ref if edited_user is not None else params.get("message_source_ref") or ""
+            ).strip()
+            session._current_turn_id = f"t{int(time.time() * 1000)}"
+            if params.get("allow_web_search") is not None:
+                allowed = bool(params["allow_web_search"])
+                if bool(getattr(session, "allow_web_search", False)) != allowed:
+                    session.allow_web_search = allowed
+                    self._refresh_session_registry(session_id, session)
             if _acp_cancel_requested():
                 return {"ok": False, "error": "ACP turn cancelled before startup", "error_code": "acp_turn_cancelled"}
             result = await run_acp_turn(
@@ -906,7 +921,11 @@ class AssistantRunMixin:
                 on_permission=tool_broker.permission_handler(broker_token),
                 mcp_servers=[mcp_server],
                 stateless_message=stateless_message,
-                host_instruction=acp_host_instruction(),
+                host_instruction=acp_host_instruction(
+                    greenlight_active=greenlight,
+                    allow_web_search=bool(getattr(session, "allow_web_search", False)),
+                ),
+                greenlight_active=greenlight,
                 user_habits=profile_prompt_summary(self.settings_mgr.get()),
                 timeout_seconds=turn_timeout_seconds,
                 continuation_session=session,
@@ -962,7 +981,7 @@ class AssistantRunMixin:
                 acp_prompt_capabilities={
                     str(key): bool(value)
                     for key, value in dict(result.get("prompt_capabilities") or {}).items()
-                    if key in {"image", "audio", "embedded_context"}
+                    if key in {"image", "audio", "embedded_context", "system_prompt"}
                 },
                 acp_host_context=(
                     dict(result.get("host_context") or {})

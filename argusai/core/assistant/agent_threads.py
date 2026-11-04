@@ -1770,6 +1770,9 @@ class AgentThreadManager:
                     with self._lock:
                         if self._hold_unstarted_input_locked(live, runtime, child, queued_item):
                             return
+                    from argusai.core.assistant.engagement import normalize_engagement
+
+                    greenlight = bool(normalize_engagement(child.engagement_declaration))
                     result = await run_acp_turn(
                         runtime_config,
                         binding,
@@ -1781,7 +1784,10 @@ class AgentThreadManager:
                         on_permission=permission_handler,
                         mcp_servers=[mcp_server],
                         host_instruction=(
-                            acp_host_instruction()
+                            acp_host_instruction(
+                                greenlight_active=greenlight,
+                                allow_web_search=bool(getattr(child, "allow_web_search", False)),
+                            )
                             + "\n[ArgusAI delegated role]\n"
                             "You are a delegated child Agent or team member, not the main conversation Agent. "
                             "Follow the assigned specialist role, objective and capability projection. "
@@ -1790,6 +1796,7 @@ class AgentThreadManager:
                         user_habits=profile_prompt_summary(settings_mgr.get()),
                         timeout_seconds=_SUBAGENT_TIMEOUT_SECONDS,
                         continuation_session=child,
+                        greenlight_active=greenlight,
                     )
                     runtime["acp_turn"] = None
                     if result.acp_session_id:

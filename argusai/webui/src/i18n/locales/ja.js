@@ -198,7 +198,7 @@ export default {
     "authorization": "認可",
     "authorizationDisableTitle": "このセッションの認可を無効化。有効スコープ={scope}。ツール確認は引き続き強制されます。",
     "authorizationEnableTitle": "このセッションの認可を有効化。ツール確認と NO_AUTO_APPROVE は引き続き強制されます。",
-    "authorizationUnavailableAcp": "ACP には system/developer プロンプト経路がないため、信頼認可をローカル Agent に注入できません。",
+    "authorizationUnavailableAcp": "このローカル Agent は systemPrompt 対応を通知していません。モデルと機能を更新してください。認可モードにはこの機能が必要です。",
     "autoAllow": "自動許可",
     "autoApprove": "自動承認",
     "autoApproveAgentDecide": "自動承認はオンです。現在の証拠から判断して続けてください。再度尋ねず、最初の選択肢を既定にしないでください。",
