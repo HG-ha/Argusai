@@ -195,7 +195,7 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
     raw_prompt_capabilities = raw.get("acp_prompt_capabilities")
     acp_prompt_capabilities: dict[str, bool] = {}
     if isinstance(raw_prompt_capabilities, Mapping):
-        for key in ("image", "audio", "embedded_context", "system_prompt"):
+        for key in ("image", "audio", "embedded_context", "system_prompt", "system_prompt_override"):
             if key in raw_prompt_capabilities:
                 acp_prompt_capabilities[key] = bool(raw_prompt_capabilities.get(key))
     raw_host_context = raw.get("acp_host_context")
@@ -221,6 +221,9 @@ def normalize_session_runtime_binding(value: Any) -> SessionRuntimeBinding:
         project_dir=project_dir,
         acp_session_id=str(raw.get("acp_session_id") or "").strip()[:512],
         locked=bool(raw.get("locked", False)),
+        acp_system_prompt_mode=(
+            "override" if raw.get("acp_system_prompt_mode") == "override" else "append"
+        ),
         acp_config=acp_config,
         acp_config_options=acp_config_options,
         acp_prompt_capabilities=acp_prompt_capabilities,

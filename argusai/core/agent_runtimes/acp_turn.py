@@ -145,6 +145,7 @@ def normalize_prompt_capabilities(agent_capabilities: dict[str, Any]) -> dict[st
             raw.get("embeddedContext", raw.get("embedded_context"))
         ),
         **({"system_prompt": True} if _supports_system_prompt(agent_capabilities) else {}),
+        **({"system_prompt_override": True} if _supports_system_prompt_override(agent_capabilities) else {}),
     }
 
 
@@ -218,13 +219,27 @@ def _supports_system_prompt(capabilities: dict[str, Any]) -> bool:
     return isinstance(session, dict) and isinstance(session.get("systemPrompt"), dict)
 
 
-def _system_prompt_payload(instruction: str, user_habits: str) -> dict[str, Any] | None:
+def _supports_system_prompt_override(capabilities: dict[str, Any]) -> bool:
+    if not _supports_system_prompt(capabilities):
+        return False
+    prompt = capabilities["sessionCapabilities"]["systemPrompt"]
+    modes = prompt.get("mode")
+    return isinstance(modes, dict) and isinstance(modes.get("override"), dict)
+
+
+def _system_prompt_payload(instruction: str, user_habits: str, *, mode: str = "append") -> dict[str, Any] | None:
     content = []
+    if mode == "override":
+        instruction = instruction.replace(
+            "This appended guidance does not replace your runtime's own policies.",
+            "These client instructions replace the runtime's default role and workflow guidance. "
+            "Continue to follow workspace instructions and runtime permissions; this mode grants no additional access.",
+        )
     if instruction.strip():
         content.append({"type": "text", "text": instruction})
     if user_habits.strip():
         content.append({"type": "text", "text": "[ArgusAI user preferences]\n" + user_habits})
-    return {"mode": "append", "content": content} if content else None
+    return {"mode": mode, "content": content} if content else None
 
 
 def _host_context_stamp(
@@ -486,6 +501,15 @@ async def run_acp_turn(
         initialize_payload = _model_dict(initialize)
         capabilities = dict(initialize_payload.get("agentCapabilities") or {})
         prompt_capabilities = normalize_prompt_capabilities(capabilities)
+        if binding.acp_system_prompt_mode == "override" and not _supports_system_prompt_override(capabilities):
+            return ACPTurnResult(
+                ok=False, runtime_id=runtime.id, agent_capabilities=capabilities,
+                prompt_capabilities=prompt_capabilities,
+                error_code="acp_system_prompt_override_unsupported",
+                error="当前本地 Agent 未声明 systemPrompt.override 能力，无法替换默认系统指令；请新建追加模式对话或使用支持此能力的 Agent。",
+            )
+        if binding.acp_system_prompt_mode == "override" and not host_instruction.strip():
+            raise ValueError("systemPrompt.override requires complete ArgusAI host instructions")
         if greenlight_active and not _supports_system_prompt(capabilities):
             return ACPTurnResult(
                 ok=False, runtime_id=runtime.id, agent_capabilities=capabilities,
@@ -494,7 +518,7 @@ async def run_acp_turn(
                 error="当前本地 Agent 未声明 systemPrompt 能力，无法应用授权模式；请关闭授权模式或使用支持的 Agent。",
             )
         system_prompt = (
-            _system_prompt_payload(host_instruction, user_habits)
+            _system_prompt_payload(host_instruction, user_habits, mode=binding.acp_system_prompt_mode)
             if _supports_system_prompt(capabilities) else None
         )
         connection = process.connection
@@ -656,7 +680,7 @@ async def run_acp_turn(
             prompt_capabilities=prompt_capabilities,
             config_options=config_options,
             error_code="acp_turn_timeout",
-            error=(f"ACP {system_prompt_method} with systemPrompt.append timed out"
+            error=(f"ACP {system_prompt_method} with systemPrompt.{binding.acp_system_prompt_mode} timed out"
                    if system_prompt_method else f"ACP turn timed out after {timeout_seconds:g} seconds"),
         )
     except Exception as exc:
@@ -673,7 +697,7 @@ async def run_acp_turn(
             config_options=config_options,
             error_code="acp_turn_cancelled" if cancelled else "acp_turn_failed",
             error=("ACP turn cancelled" if cancelled else (
-                f"ACP {system_prompt_method} with systemPrompt.append failed: {type(exc).__name__}: {exc}"
+                f"ACP {system_prompt_method} with systemPrompt.{binding.acp_system_prompt_mode} failed: {type(exc).__name__}: {exc}"
                 if system_prompt_method else f"{type(exc).__name__}: {exc}"
             )),
         )

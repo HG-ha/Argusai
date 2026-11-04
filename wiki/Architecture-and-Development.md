@@ -181,7 +181,7 @@ ACP 的过程是启动进程、`initialize` 协商、按能力 `load_session` �
 
 `systemPrompt` 当前属于 ACP 的 Preview 能力，尚未进入稳定协议；适配以本次 `initialize` 的能力广告为准。[官方 RFD](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/rfds/client-system-prompt.mdx) 规定，v1 的 `agentCapabilities.sessionCapabilities.systemPrompt` 为对象（包括 `{}`）才表示支持，缺失或 `null` 表示不支持。协议版本号、未知字段或本地 SDK 版本不能代替协商。
 
-支持时，ArgusAI 在 `session/new` 与 `session/load` 顶层传递 `systemPrompt`，使用 `append` 和非空文本内容，保留对端原有指令；后续加载仍重传相同配置，不追加同内容的聊天消息。配置更新应在会话空闲时发起，后台终端也可能使对端拒绝。用户习惯变化经生命周期请求更新，现有会话可能到下一次压缩才采用新内容；无法应用时应报告错误，不静默丢掉系统配置。具体系统／开发者消息位置由外部 Agent 实现决定。[官方 SDK 说明](https://agentclientprotocol.github.io/rust-sdk/protocol.html#client-provided-system-prompts)
+支持时，ArgusAI 在 `session/new` 与 `session/load` 顶层传递 `systemPrompt`，默认使用 `append` 和非空文本内容，保留对端原有指令；后续加载仍重传相同配置，不追加同内容的聊天消息。配置更新应在会话空闲时发起，后台终端也可能使对端拒绝。用户习惯变化经生命周期请求更新，现有会话可能到下一次压缩才采用新内容；无法应用时应报告错误，不静默丢掉系统配置。具体系统／开发者消息位置由外部 Agent 实现决定。[官方 SDK 说明](https://agentclientprotocol.github.io/rust-sdk/protocol.html#client-provided-system-prompts)
 
 未声明支持时，不发送该字段，改用明确标识的普通宿主上下文：首次远端会话补齐引导，偏好变更时更新，借助会话与内容标记避免每轮重复。此兼容方式没有系统提示的优先级，也不能保证压缩后永久保留。动态页面和任务标识仍作为本轮参考数据，真实状态通过工具查询；支持能力与提示传输方式不会扩大工具权限。
 

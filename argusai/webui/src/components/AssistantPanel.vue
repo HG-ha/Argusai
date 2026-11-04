@@ -43,7 +43,40 @@ const newSessionForm = reactive({
   runtime_id: 'argusai-native',
   workspace_mode: 'sandbox',
   project_dir: '',
+  acp_system_prompt_mode: 'append',
 })
+const newRuntimeCapabilities = ref(null)
+const newRuntimeProbing = ref(false)
+let newRuntimeProbeSeq = 0
+const newRuntimeOverrideSupported = computed(() => {
+  const capability = newRuntimeCapabilities.value?.sessionCapabilities?.systemPrompt
+  const override = capability?.mode?.override
+  return Boolean(capability && typeof capability === 'object' && !Array.isArray(capability)
+    && override !== null && typeof override === 'object' && !Array.isArray(override))
+})
+watch(() => newSessionForm.runtime_id, () => {
+  ++newRuntimeProbeSeq
+  newRuntimeCapabilities.value = null
+  newRuntimeProbing.value = false
+  newSessionForm.acp_system_prompt_mode = 'append'
+})
+async function probeNewRuntimePromptModes() {
+  const runtimeId = newSessionForm.runtime_id
+  const seq = ++newRuntimeProbeSeq
+  newRuntimeProbing.value = true
+  newRuntimeCapabilities.value = null
+  newSessionForm.acp_system_prompt_mode = 'append'
+  try {
+    const result = await api.testAgentRuntime(runtimeId)
+    if (seq !== newRuntimeProbeSeq || runtimeId !== newSessionForm.runtime_id) return
+    if (!result?.ok) throw new Error(result?.error || t('assistant.runtimeLoadFailed'))
+    newRuntimeCapabilities.value = result.agent_capabilities || {}
+  } catch (error) {
+    if (seq === newRuntimeProbeSeq) showToast(String(error?.message || error), 'error')
+  } finally {
+    if (seq === newRuntimeProbeSeq) newRuntimeProbing.value = false
+  }
+}
 const agentRuntimeOptions = computed(() => (
   agentRuntimeInventory.value
     .filter(item => item.enabled !== false)
@@ -6250,11 +6283,17 @@ async function addTab() {
   newSessionForm.runtime_id = 'argusai-native'
   newSessionForm.workspace_mode = 'sandbox'
   newSessionForm.project_dir = ''
+  newSessionForm.acp_system_prompt_mode = 'append'
+  newRuntimeCapabilities.value = null
+  ++newRuntimeProbeSeq
+  newRuntimeProbing.value = false
   await loadAgentRuntimeInventory()
   showNewSessionModal.value = true
 }
 
 function createAgentSessionTab() {
+  if (newRuntimeProbing.value) return
+  if (newSessionForm.acp_system_prompt_mode === 'override' && !newRuntimeOverrideSupported.value) return
   if (newSessionForm.workspace_mode === 'project' && !newSessionForm.project_dir) {
     showToast(t('assistant.projectDirectoryRequired'), 'error')
     return
@@ -6263,6 +6302,8 @@ function createAgentSessionTab() {
     name: t('assistant.newSession'),
     runtime: {
       runtime_id: newSessionForm.runtime_id,
+      acp_system_prompt_mode: selectedNewRuntime.value?.backend === 'acp'
+        ? newSessionForm.acp_system_prompt_mode : 'append',
       workspace_mode: newSessionForm.workspace_mode,
       project_dir: newSessionForm.workspace_mode === 'project' ? newSessionForm.project_dir : '',
       locked: false,
@@ -8445,6 +8486,18 @@ watch(input, (newVal) => {
           :placeholder="t('assistant.chooseRuntime')"
         />
       </label>
+      <div v-if="selectedNewRuntime?.backend === 'acp'" class="new-agent-field">
+        <span>{{ t('assistant.acpPromptMode') }}</span>
+        <NSelect v-model:value="newSessionForm.acp_system_prompt_mode" :options="[
+          { label: t('assistant.acpPromptAppend'), value: 'append' },
+          { label: t('assistant.acpPromptOverride'), value: 'override', disabled: !newRuntimeOverrideSupported },
+        ]" :disabled="newRuntimeProbing" />
+        <p class="runtime-lock-note">{{ t('assistant.acpPromptModeHint') }}</p>
+        <button class="ghost" type="button" :disabled="newRuntimeProbing" @click="probeNewRuntimePromptModes">
+          {{ newRuntimeProbing ? t('assistant.toolsLoading') : t('assistant.acpPromptCheck') }}
+        </button>
+        <p v-if="newRuntimeCapabilities" class="runtime-lock-note">{{ newRuntimeOverrideSupported ? t('assistant.acpPromptSupported') : t('assistant.acpPromptUnsupported') }}</p>
+      </div>
       <div class="new-agent-field">
         <span>{{ t('assistant.workspace') }}</span>
         <div class="workspace-choices">
@@ -8466,7 +8519,7 @@ watch(input, (newVal) => {
     </div>
     <template #footer>
       <button class="ghost" type="button" @click="showNewSessionModal = false">{{ t('common.cancel') }}</button>
-      <button class="primary" type="button" :disabled="agentRuntimesLoading" @click="createAgentSessionTab">{{ t('assistant.createConversation') }}</button>
+      <button class="primary" type="button" :disabled="agentRuntimesLoading || newRuntimeProbing" @click="createAgentSessionTab">{{ t('assistant.createConversation') }}</button>
     </template>
   </WorkbenchModal>
 

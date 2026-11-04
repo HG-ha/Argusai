@@ -21,7 +21,7 @@ from argusai.core.agent_runtimes.models import AgentRuntimeConfig, SessionRuntim
 
 FAKE_AGENT = r"""
 import json, sys
-capture, advertise = sys.argv[1], sys.argv[2] == 'yes'
+capture, advertise = sys.argv[1], sys.argv[2] != 'no'
 for line in sys.stdin:
     request = json.loads(line)
     with open(capture, 'a', encoding='utf-8') as stream:
@@ -30,7 +30,7 @@ for line in sys.stdin:
     if method == 'initialize':
         capabilities = {'loadSession': True, 'sessionCapabilities': {'list': {}}}
         if advertise:
-            capabilities['sessionCapabilities']['systemPrompt'] = {}
+            capabilities['sessionCapabilities']['systemPrompt'] = {'mode': {'override': {}}} if sys.argv[2] == 'override' else {}
         result = {'protocolVersion': 1, 'agentInfo': {'name': 'wire-fixture', 'version': '1'}, 'agentCapabilities': capabilities}
     elif method in ('session/new', 'session/load'):
         blocks = (params.get('systemPrompt') or {}).get('content') or []
@@ -51,13 +51,13 @@ for line in sys.stdin:
 """
 
 
-def fake_process(tmp_path: Path, *, advertise: bool = True, updates=None):
+def fake_process(tmp_path: Path, *, advertise: bool = True, override: bool = False, updates=None):
     script = tmp_path / "fake_system_prompt_agent.py"
     capture = tmp_path / "wire.jsonl"
     script.write_text(FAKE_AGENT, encoding="utf-8")
     runtime = AgentRuntimeConfig(
         id="system-prompt-wire-fixture", name="Wire fixture", backend="acp",
-        command=sys.executable, args=(str(script), str(capture), "yes" if advertise else "no"),
+        command=sys.executable, args=(str(script), str(capture), "override" if override else "yes" if advertise else "no"),
     )
     return ACPAgentProcess(runtime, cwd=str(tmp_path), event_sink=updates), capture
 
@@ -83,9 +83,10 @@ def test_initialize_preserves_wire_capability_without_changing_sdk_models(tmp_pa
 
 
 @pytest.mark.parametrize("operation", ["new", "load"])
-def test_session_system_prompt_is_top_level_and_keeps_typed_config(tmp_path: Path, operation: str) -> None:
-    process, capture = fake_process(tmp_path)
-    prompt = {"mode": "append", "content": [{"type": "text", "text": "fixture host instructions"}]}
+@pytest.mark.parametrize("mode", ["append", "override"])
+def test_session_system_prompt_is_top_level_and_keeps_typed_config(tmp_path: Path, operation: str, mode: str) -> None:
+    process, capture = fake_process(tmp_path, override=mode == "override")
+    prompt = {"mode": mode, "content": [{"type": "text", "text": "fixture host instructions"}]}
     server = schema.McpServerStdio(
         name="Fixture Tools", command="not-executed", args=["fixture-only"],
         env=[schema.EnvVariable(name="FIXTURE_VALUE", value="demo")],
@@ -166,15 +167,16 @@ def test_invalid_system_prompt_fails_without_starting_a_process(payload) -> None
     assert process.process is None
 
 
-def test_system_prompt_rejection_is_not_silently_retried_without_it(tmp_path: Path) -> None:
-    process, capture = fake_process(tmp_path)
+@pytest.mark.parametrize("mode", ["append", "override"])
+def test_system_prompt_rejection_is_not_silently_retried_without_it(tmp_path: Path, mode: str) -> None:
+    process, capture = fake_process(tmp_path, override=mode == "override")
 
     async def run():
         try:
             await process.initialize(timeout_seconds=5)
             with pytest.raises(acp.RequestError, match="fixture rejected instructions"):
                 await process.new_session(str(tmp_path), system_prompt={
-                    "mode": "append", "content": [{"type": "text", "text": "reject fixture instructions"}],
+                    "mode": mode, "content": [{"type": "text", "text": "reject fixture instructions"}],
                 })
         finally:
             await process.close()
@@ -213,10 +215,11 @@ def test_empty_system_prompt_is_rejected_before_any_session_wire_request(tmp_pat
     assert methods == ["initialize"]
 
 
-def test_real_turn_new_and_load_keep_host_context_out_of_user_prompt(tmp_path: Path) -> None:
-    fixture, capture = fake_process(tmp_path)
+@pytest.mark.parametrize("mode", ["append", "override"])
+def test_real_turn_new_and_load_keep_host_context_out_of_user_prompt(tmp_path: Path, mode: str) -> None:
+    fixture, capture = fake_process(tmp_path, override=mode == "override")
     runtime = fixture.runtime
-    binding = SessionRuntimeBinding(runtime_id=runtime.id)
+    binding = SessionRuntimeBinding(runtime_id=runtime.id, acp_system_prompt_mode=mode)
     instruction = "FIXTURE_HOST_POLICY: use only the agreed fixture tools."
     preferences = "FIXTURE_STYLE: answer in concise Chinese."
     messages = ["请核对演示材料。", "继续核对下一项演示材料。"]
@@ -242,7 +245,7 @@ def test_real_turn_new_and_load_keep_host_context_out_of_user_prompt(tmp_path: P
     assert [row["method"] for row in session_requests] == ["session/new", "session/load"]
     for row in session_requests:
         params = row["params"]
-        assert params["systemPrompt"]["mode"] == "append"
+        assert params["systemPrompt"]["mode"] == mode
         text = "\n".join(block["text"] for block in params["systemPrompt"]["content"])
         assert instruction in text and preferences in text
         assert "_meta" not in params

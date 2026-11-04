@@ -47,8 +47,8 @@ class _InitializeResponseWithSystemPrompt(schema.InitializeResponse):
 
 
 def _validated_system_prompt(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.get("mode") != "append" or not isinstance(value.get("content"), list):
-        raise ValueError("system_prompt requires append mode and a list of text blocks")
+    if not isinstance(value, dict) or value.get("mode") not in ("append", "override") or not isinstance(value.get("content"), list):
+        raise ValueError("system_prompt requires append/override mode and a list of text blocks")
     if not value["content"]:
         raise ValueError("system_prompt content must not be empty")
     blocks = []
@@ -372,6 +372,12 @@ class ACPAgentProcess:
         response_model: Any,
         system_prompt: dict[str, Any],
     ) -> Any:
+        if system_prompt.get("mode") == "override":
+            capabilities = (self._initialize_payload or {}).get("agentCapabilities") or {}
+            prompt = (capabilities.get("sessionCapabilities") or {}).get("systemPrompt") or {}
+            modes = prompt.get("mode")
+            if not isinstance(modes, dict) or not isinstance(modes.get("override"), dict):
+                raise ValueError("system_prompt override was not advertised by the current Agent")
         raw_connection = getattr(self.connection, "_conn", None)
         send_request = getattr(raw_connection, "send_request", None)
         if not callable(send_request):

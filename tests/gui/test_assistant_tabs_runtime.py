@@ -62,6 +62,22 @@ async function loadStore(storage = new Map()) {
 
 CASES = [
     (
+        "prompt_modes_are_restored_per_conversation",
+        r"""
+const fixture = await loadStore();
+await fixture.finish([]);
+const a = fixture.store.openTab({ runtime: { ...acpRuntime, acp_system_prompt_mode: 'override' } });
+const b = fixture.store.openTab({ runtime: { ...acpRuntime, acp_system_prompt_mode: 'append' } });
+const restored = await loadStore(fixture.storage);
+await restored.finish([
+  { id: a.sessionId, ...acpRuntime, acp_system_prompt_mode: 'override' },
+  { id: b.sessionId, ...acpRuntime, acp_system_prompt_mode: 'append' },
+]);
+assert.equal(restored.store.tabs.find(t => t.sessionId === a.sessionId).runtime.acp_system_prompt_mode, 'override');
+assert.equal(restored.store.tabs.find(t => t.sessionId === b.sessionId).runtime.acp_system_prompt_mode, 'append');
+""",
+    ),
+    (
         "known_saved_runtime_is_seeded_before_history",
         r"""
 const fixture = await loadStore();
@@ -203,4 +219,43 @@ def test_assistant_tabs_runtime(scenario: str) -> None:
         timeout=20,
         check=False,
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_creation_prompt_mode_probe_ignores_stale_reply():
+    panel = WEBUI / "src/components/AssistantPanel.vue"
+    script = (
+        "import assert from 'node:assert/strict';\n"
+        "import { readFileSync } from 'node:fs';\n"
+        f"import {{ ref, computed, reactive, watch, nextTick }} from {json.dumps(VUE.resolve().as_uri())};\n"
+        f"const source = readFileSync({json.dumps(str(panel))}, 'utf8');\n"
+        + r"""
+const block = source.slice(source.indexOf('const newSessionForm = reactive'), source.indexOf('const agentRuntimeOptions = computed'));
+const calls = [];
+const api = { testAgentRuntime(id) { return new Promise(resolve => calls.push({ id, resolve })); } };
+const create = new Function('ref', 'computed', 'reactive', 'watch', 'api', 'showToast', 't', block + '\nreturn { newSessionForm, newRuntimeOverrideSupported, newRuntimeCapabilities, newRuntimeProbing, probeNewRuntimePromptModes };');
+const ui = create(ref, computed, reactive, watch, api, () => {}, x => x);
+ui.newSessionForm.runtime_id = 'agent-a'; await nextTick();
+assert.equal(ui.newRuntimeOverrideSupported.value, false);
+const first = ui.probeNewRuntimePromptModes();
+calls[0].resolve({ok: true, agent_capabilities: {sessionCapabilities: {systemPrompt: {mode: {override: {}}}}}});
+await first;
+assert.equal(ui.newRuntimeOverrideSupported.value, true);
+ui.newSessionForm.acp_system_prompt_mode = 'override';
+const stale = ui.probeNewRuntimePromptModes();
+ui.newSessionForm.runtime_id = 'agent-b'; await nextTick();
+calls[1].resolve({ok: true, agent_capabilities: {sessionCapabilities: {systemPrompt: {mode: {override: {}}}}}});
+await stale;
+assert.equal(ui.newRuntimeCapabilities.value, null);
+assert.equal(ui.newRuntimeOverrideSupported.value, false);
+assert.equal(ui.newSessionForm.acp_system_prompt_mode, 'append');
+const second = ui.probeNewRuntimePromptModes();
+calls[2].resolve({ok: true, agent_capabilities: {sessionCapabilities: {systemPrompt: {}}}});
+await second;
+assert.equal(ui.newRuntimeOverrideSupported.value, false);
+assert.equal(ui.newRuntimeProbing.value, false);
+"""
+    )
+    result = subprocess.run([str(NODE), "--input-type=module", "-e", script], cwd=WEBUI,
+                            capture_output=True, text=True, encoding="utf-8", timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr

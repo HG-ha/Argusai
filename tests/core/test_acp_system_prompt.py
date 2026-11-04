@@ -182,6 +182,47 @@ def _prompt_text(prompt):
     return "\n".join(block.get("text", "") for block in prompt["blocks"] if block.get("type") == "text")
 
 
+@pytest.mark.parametrize("remote", [False, True])
+def test_override_is_negotiated_and_sent_on_new_and_load(monkeypatch, remote):
+    harness = ACPHarness(monkeypatch, {"mode": {"override": {}}})
+    binding = SessionRuntimeBinding(
+        runtime_id="fixture-acp", acp_system_prompt_mode="override",
+        acp_session_id="old-remote" if remote else "",
+    )
+    result = harness.run(binding=binding, host=turns.acp_host_instruction())
+    assert result.ok, result.to_dict()
+    assert harness.calls[0]["method"] == ("session/load" if remote else "session/new")
+    system = harness.calls[0]["payload"]["systemPrompt"]
+    assert system["mode"] == "override"
+    text = "\n".join(block["text"] for block in system["content"])
+    assert "argusai_invoke_tool" in text and "search_all_memory" in text
+    assert "This appended guidance" not in text
+    assert "grants no additional access" in text
+    assert result.prompt_capabilities["system_prompt_override"] is True
+    assert "[ArgusAI host context]" not in _prompt_text(harness.prompts[0])
+
+
+@pytest.mark.parametrize("capability", [MISSING, None, {}, {"mode": {}}, {"mode": {"override": None}}, {"mode": {"override": True}}])
+def test_override_never_silently_falls_back_to_append_or_user_prompt(monkeypatch, capability):
+    harness = ACPHarness(monkeypatch, capability)
+    result = harness.run(binding=SessionRuntimeBinding(
+        runtime_id="fixture-acp", acp_system_prompt_mode="override",
+        acp_prompt_capabilities={"system_prompt_override": True},
+    ))
+    assert not result.ok
+    assert result.error_code == "acp_system_prompt_override_unsupported"
+    assert not harness.calls and not harness.prompts
+    assert harness.processes[0].closed
+
+
+def test_prompt_mode_roundtrip_and_old_binding_defaults():
+    first = normalize_session_runtime_binding({"runtime_id": "fixture-acp", "acp_system_prompt_mode": "override"})
+    assert normalize_session_runtime_binding(first.to_dict()).acp_system_prompt_mode == "override"
+    assert normalize_session_runtime_binding({"runtime_id": "fixture-acp"}).acp_system_prompt_mode == "append"
+    assert normalize_session_runtime_binding({"acp_system_prompt_mode": "invalid"}).acp_system_prompt_mode == "append"
+    assert SessionRuntimeBinding().acp_system_prompt_mode == "append"
+
+
 @pytest.mark.parametrize("capability", [{}, {"append": True}, {"mode": {"override": {}}}])
 def test_native_append_on_session_new_keeps_host_out_of_user_message(monkeypatch, capability):
     harness = ACPHarness(monkeypatch, capability)

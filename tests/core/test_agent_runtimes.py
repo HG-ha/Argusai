@@ -181,6 +181,7 @@ def test_runtime_normalization_includes_cursor_codex_claude_presets() -> None:
 def test_session_runtime_binding_persists_acp_config() -> None:
     binding = SessionRuntimeBinding(
         runtime_id="codex-acp",
+        acp_system_prompt_mode="override",
         acp_session_id="s1",
         locked=True,
         acp_config={"model": "gpt-5"},
@@ -204,6 +205,7 @@ def test_session_runtime_binding_persists_acp_config() -> None:
         ),
     )
     restored = normalize_session_runtime_binding(binding.to_dict())
+    assert restored.acp_system_prompt_mode == "override"
     assert restored.acp_config == {"model": "gpt-5"}
     assert restored.acp_prompt_capabilities == {
         "image": True,

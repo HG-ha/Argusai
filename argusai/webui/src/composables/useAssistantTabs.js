@@ -71,6 +71,8 @@ function runtimeFromMetadata(row, previous = {}) {
     runtime_id: row.runtime_id,
     workspace_mode: row.workspace_mode || 'sandbox',
     project_dir: row.project_dir || '',
+    acp_system_prompt_mode: row.acp_system_prompt_mode
+      || (previous.runtime_id === row.runtime_id ? previous.acp_system_prompt_mode : '') || 'append',
     locked: true,
   }
 }

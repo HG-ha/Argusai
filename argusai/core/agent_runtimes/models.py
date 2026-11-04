@@ -79,6 +79,7 @@ class SessionRuntimeBinding:
     project_dir: str = ""
     acp_session_id: str = ""
     locked: bool = False
+    acp_system_prompt_mode: Literal["append", "override"] = "append"
     # Preferred ACP session/set_config_option values (configId → value).
     acp_config: dict[str, str | bool] = field(default_factory=dict)
     # Last configOptions snapshot from session/new|load|set_config_option.
@@ -97,6 +98,7 @@ class SessionRuntimeBinding:
             "project_dir": self.project_dir,
             "acp_session_id": self.acp_session_id,
             "locked": bool(self.locked),
+            "acp_system_prompt_mode": self.acp_system_prompt_mode,
             "acp_config": dict(self.acp_config),
             "acp_config_options": [dict(item) for item in self.acp_config_options],
         }

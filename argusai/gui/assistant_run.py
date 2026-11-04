@@ -981,7 +981,7 @@ class AssistantRunMixin:
                 acp_prompt_capabilities={
                     str(key): bool(value)
                     for key, value in dict(result.get("prompt_capabilities") or {}).items()
-                    if key in {"image", "audio", "embedded_context", "system_prompt"}
+                    if key in {"image", "audio", "embedded_context", "system_prompt", "system_prompt_override"}
                 },
                 acp_host_context=(
                     dict(result.get("host_context") or {})

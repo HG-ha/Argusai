@@ -543,6 +543,7 @@ class AssistantSessionsMixin:
                             "updated_at": data.get("updated_at", 0),
                             "runtime_id": binding.runtime_id,
                             "workspace_mode": binding.workspace_mode,
+                            "acp_system_prompt_mode": binding.acp_system_prompt_mode,
                             "project_dir": binding.project_dir,
                             "origin": origin,
                             "session_type": session_type,
