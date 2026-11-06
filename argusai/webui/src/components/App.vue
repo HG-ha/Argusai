@@ -257,6 +257,7 @@ async function maximize() {
   }
 }
 function closeWin() { api.closeWindow().catch(e => console.warn(e)) }
+function handleOpenAssistantEvent() { showAssistant.value = true }
 function toggleAssistant() { showAssistant.value = !showAssistant.value }
 function closeAssistant() { showAssistant.value = false }
 
@@ -714,6 +715,7 @@ onMounted(() => {
   // The native launcher starts this probe before WebView boot. Calling the
   // idempotent ensure endpoint here also covers dev/Vite and embedded hosts.
   api.ensureMcpStartupProbe().catch(() => {})
+  window.addEventListener('argusai:open-assistant', handleOpenAssistantEvent)
   window.addEventListener('argusai:close-assistant', handleCloseAssistantEvent)
   window.addEventListener('argusai:open-assistant-session', handleOpenAssistantSessionEvent)
   window.addEventListener('argusai:assistant-session-updated', handleAssistantSessionUpdatedEvent)
@@ -729,6 +731,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   stopUpdateMonitor()
+  window.removeEventListener('argusai:open-assistant', handleOpenAssistantEvent)
   window.removeEventListener('argusai:close-assistant', handleCloseAssistantEvent)
   window.removeEventListener('argusai:open-assistant-session', handleOpenAssistantSessionEvent)
   window.removeEventListener('argusai:assistant-session-updated', handleAssistantSessionUpdatedEvent)

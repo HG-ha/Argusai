@@ -189,7 +189,7 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
     ]
     for package in ("argusai.vendor.sqlmap", "argusai.vendor.sqlmap.*", "lark_oapi.api", "lark_oapi.api.*"):
         flags.append(f"--nofollow-import-to={package}")
-    data = ["argusai/webui/dist", "argusai/report/templates", "argusai/skills"]
+    data = ["argusai/gui/pet_assets", "argusai/webui/dist", "argusai/report/templates", "argusai/skills"]
     raw_data: list[str] = []
     flags.append(f"--include-data-dir=build/release-licenses/{args.runtime_arch}=argusai/legal")
     if args.mode != "app":
@@ -409,10 +409,14 @@ def nonempty_file(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+PET_FILES = ("bridge.js", "bounds.json", "index.html", "pet.js", "chat.html", "chat.js", "poster.png", "idle.webp", "thinking.webp", "working.webp", "wave.webp", "complete.webp", "sleep.webp", "alert.webp", "drag-start.webp", "drag.webp", "release.webp", "drag-left.webp", "drag-right.webp", "drag-up.webp", "drag-down.webp")
+
+
 def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> None:
     roots = (path, *other_roots)
     required = ["argusai/webui/dist/index.html", "argusai/webui/dist/THIRD_PARTY_NOTICES.txt",
                 "argusai/vendor/runners", "argusai/vendor/sqlmap/sqlmap.py"]
+    required += [f"argusai/gui/pet_assets/{name}" for name in PET_FILES]
     required += [f"argusai/core/reverse/ghidra_scripts/{name}" for name in GHIDRA_SCRIPTS]
     required += [f"argusai/legal/{name}" for name in LEGAL_FILES]
     if args.system == "Windows":

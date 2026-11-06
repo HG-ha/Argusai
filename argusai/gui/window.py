@@ -251,10 +251,72 @@ class WindowMixin:
             return {"ok": False, "error": "no window"}
         try:
             self.persist_window_geometry()
+            pet = getattr(self, "_desktop_pet", None)
+            if pet is not None:
+                pet.close()
             self._window.destroy()
             return {"ok": True, "quit": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def set_desktop_pet_scale(self, scale: float = 1.0) -> dict[str, Any]:
+        # Retain the bridge method for older clients, but size is now fixed.
+        from .desktop_pet import PET_SCALE
+        value = PET_SCALE
+        self.settings_mgr.update(lambda settings: setattr(settings, 'gui_pet_scale', value))
+        controller = getattr(self, '_desktop_pet', None)
+        animation = getattr(controller, '_native_animation', None)
+        if animation is not None:
+            from .tray import run_on_winforms_ui
+            def refresh_size():
+                if not animation.closed:
+                    animation._update_size()
+                    animation.next_frame = 0
+                    animation._tick()
+                    controller.position_chat()
+            run_on_winforms_ui(refresh_size)
+        from .live_push import push_ui
+        push_ui('desktop_pet', {'scale': value})
+        return {'ok': True, 'scale': value}
+
+    def reset_desktop_pet_position(self) -> dict[str, Any]:
+        controller = getattr(self, '_desktop_pet', None)
+        if controller is None:
+            return {'ok': False, 'error': 'Desktop GUI required'}
+        controller.reset_position()
+        return {'ok': True}
+
+    def set_desktop_pet_snap(self, enabled: bool = False) -> dict[str, Any]:
+        controller = getattr(self, '_desktop_pet', None)
+        if controller is None:
+            return {'ok': False, 'error': 'Desktop GUI required'}
+        self.settings_mgr.update(lambda settings: setattr(settings, 'gui_pet_snap', bool(enabled)))
+        controller.snap_generation += 1
+        if not enabled:
+            controller.dock_side = None
+        if enabled:
+            controller.snap_to_edge()
+        from .live_push import push_ui
+        push_ui('desktop_pet', {'snap': bool(enabled)})
+        return {'ok': True, 'snap': bool(enabled)}
+
+    def set_desktop_pet_enabled(self, enabled: bool = False) -> dict[str, Any]:
+        controller = getattr(self, "_desktop_pet", None)
+        if controller is None:
+            return {"ok": False, "error": "Desktop GUI required"}
+        previous = bool(getattr(self.settings_mgr.get(), "gui_desktop_pet", False))
+        try:
+            controller.set_enabled(bool(enabled))
+            self.settings_mgr.update(lambda settings: setattr(settings, "gui_desktop_pet", bool(enabled)))
+            from .live_push import push_ui
+            push_ui("desktop_pet", {"enabled": bool(enabled)})
+            return {"ok": True, "enabled": bool(enabled)}
+        except Exception as exc:
+            try:
+                controller.set_enabled(previous)
+            except Exception:
+                pass
+            return {"ok": False, "error": str(exc)}
 
     def set_gui_close_to_tray(self, enabled: bool = True) -> dict[str, Any]:
         try:

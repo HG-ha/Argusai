@@ -1,7 +1,8 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
-import { NInput, NInputNumber, NSelect, NButton, NSwitch, NText, NSpace, NEmpty, NTag, NRadioGroup, NRadio, NAlert, NProgress } from 'naive-ui'
+import { NInput, NInputNumber, NSelect, NButton, NSwitch, NSlider, NText, NSpace, NEmpty, NTag, NRadioGroup, NRadio, NAlert, NProgress } from 'naive-ui'
 import { t } from '../i18n.js'
+import { onLiveChannel } from '../livebus.js'
 import { api } from '../api.js'
 import { showToast, state } from '../state.js'
 import { theme, setPreferred } from '../theme.js'
@@ -140,6 +141,40 @@ const settings = reactive({
 // during hydration may schedule an autosave, even if load() grows more awaits.
 const settingsHydrating = ref(true)
 const closeToTray = ref(true)
+const desktopPet = ref(false)
+const desktopPetSaving = ref(false)
+const desktopPetSnap = ref(false)
+async function onDesktopPetReset() {
+  try {
+    const result = await api.resetDesktopPetPosition()
+    if (!result?.ok) throw new Error(result?.error || t('toast.error'))
+  } catch (error) { showToast(String(error?.message || error), 'error') }
+}
+const stopPetUpdates = onLiveChannel('desktop_pet', payload => {
+  if ('enabled' in payload) desktopPet.value = !!payload.enabled
+  if ('snap' in payload) desktopPetSnap.value = !!payload.snap
+})
+async function onDesktopPetSnapChange(next) {
+  try {
+    const result = await api.setDesktopPetSnap(!!next)
+    if (!result?.ok) throw new Error(result?.error || t('toast.error'))
+    desktopPetSnap.value = !!result.snap
+  } catch (error) { showToast(String(error?.message || error), 'error') }
+}
+onUnmounted(() => {
+  stopPetUpdates()
+
+})
+async function onDesktopPetChange(next) {
+  if (desktopPetSaving.value) return
+  desktopPetSaving.value = true
+  try {
+    const result = await api.setDesktopPetEnabled(!!next)
+    if (!result?.ok) throw new Error(result?.error || t('toast.error'))
+    desktopPet.value = !!result.enabled
+  } catch (error) { showToast(String(error?.message || error), 'error') }
+  finally { desktopPetSaving.value = false }
+}
 
 const loggingStatus = reactive({ log_dir: '', files: [] })
 const loggingLevels = [
@@ -683,6 +718,8 @@ async function load() {
       showToast(t('settings.recoveredFromBackup'), 'warning')
     }
     closeToTray.value = data.gui?.close_to_tray !== false
+    desktopPet.value = !!data.gui?.desktop_pet
+    desktopPetSnap.value = !!data.gui?.pet_snap
     settings.ai_enabled = data.ai?.enabled ?? true
     const aux = data.ai?.auxiliary || {}
     settings.ai_auxiliary = {
@@ -2923,26 +2960,51 @@ watch(() => route.params.section, (section) => {
           <span class="settings-scope">{{ t('settings.aiScopeGlobal') }}</span>
         </div>
       </div>
-      <div class="settings-section-content">
-        <div class="settings-field">
-          <label>{{ t('theme.label') }}</label>
+      <div class="settings-section-content appearance-settings">
+        <section class="settings-group appearance-group">
+        <div class="appearance-row">
+          <div class="appearance-copy">
+            <label>{{ t('theme.label') }}</label>
+            <div class="hint">{{ t('settings.themeHint') }}</div>
+          </div>
           <NSelect
             :value="theme.preferred"
             :options="themePrefOptions"
-            style="max-width: 220px"
+            class="appearance-theme-select"
             @update:value="setPreferred"
           />
-          <div class="hint">{{ t('settings.themeHint') }}</div>
         </div>
-        <div class="settings-field">
-          <label>{{ t('settings.closeToTray') }}</label>
+        <div class="appearance-row">
+          <div class="appearance-copy">
+            <label>{{ t('settings.closeToTray') }}</label>
+            <div class="hint">{{ t('settings.closeToTrayHint') }}</div>
+          </div>
           <NSwitch
             :value="closeToTray"
             :aria-label="t('settings.closeToTray')"
             @update:value="onCloseToTrayChange"
           />
-          <div class="hint">{{ t('settings.closeToTrayHint') }}</div>
         </div>
+        </section>
+        <section class="settings-group appearance-group">
+        <div class="appearance-row">
+          <div class="appearance-copy">
+            <label>{{ t('settings.desktopPet') }}</label>
+            <div class="hint">{{ t('settings.desktopPetHint') }}</div>
+          </div>
+          <NSwitch :value="desktopPet" :disabled="desktopPetSaving" :aria-label="t('settings.desktopPet')" @update:value="onDesktopPetChange" />
+        </div>
+        <div class="appearance-row">
+          <div class="appearance-copy">
+            <label>{{ t('settings.desktopPetSnap') }}</label>
+            <div class="hint">{{ t('settings.desktopPetSnapHint') }}</div>
+          </div>
+          <NSwitch :value="desktopPetSnap" :aria-label="t('settings.desktopPetSnap')" @update:value="onDesktopPetSnapChange" />
+        </div>
+        <div class="appearance-actions">
+          <NButton size="small" secondary :disabled="!desktopPet" @click="onDesktopPetReset">{{ t('settings.desktopPetReset') }}</NButton>
+        </div>
+        </section>
       </div>
     </section>
 
@@ -4778,6 +4840,52 @@ watch(() => route.params.section, (section) => {
 }
 .settings-section-content {
   padding: 18px 20px 24px;
+}
+.appearance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 14px 0;
+}
+.appearance-row > :last-child:not(.appearance-copy) {
+  flex-shrink: 0;
+}
+.appearance-copy {
+  min-width: 0;
+  max-width: 66ch;
+}
+.appearance-settings label {
+  color: var(--fg-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+.appearance-settings .hint {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.appearance-theme-select {
+  width: 180px;
+  max-width: 45%;
+}
+.appearance-size-row {
+  padding: 10px 0 14px;
+}
+.appearance-size-heading {
+  padding: 0 0 12px;
+}
+.appearance-scale-value {
+  color: var(--muted);
+  font: 12px var(--mono-font, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.appearance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
 }
 .settings-autosave {
   justify-self: end;

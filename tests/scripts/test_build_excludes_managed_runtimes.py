@@ -164,7 +164,7 @@ def test_windows_nsis_requirement_is_checked_before_compilation(monkeypatch, tmp
 
 
 def populate_payload(path, args):
-    for name in ["argusai/webui/dist/index.html", "argusai/webui/dist/THIRD_PARTY_NOTICES.txt", "argusai/vendor/sqlmap/sqlmap.py", *(f"argusai/core/reverse/ghidra_scripts/{name}" for name in build.GHIDRA_SCRIPTS), *(f"argusai/legal/{name}" for name in build.LEGAL_FILES)]:
+    for name in ["argusai/webui/dist/index.html", "argusai/webui/dist/THIRD_PARTY_NOTICES.txt", "argusai/vendor/sqlmap/sqlmap.py", *(f"argusai/gui/pet_assets/{name}" for name in build.PET_FILES), *(f"argusai/core/reverse/ghidra_scripts/{name}" for name in build.GHIDRA_SCRIPTS), *(f"argusai/legal/{name}" for name in build.LEGAL_FILES)]:
         target = path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture")

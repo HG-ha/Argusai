@@ -339,6 +339,10 @@ export const api = {
   ),
   closeWindow: () => call("close_window"),
   quitApplication: () => call("quit_application"),
+  setDesktopPetEnabled: (enabled) => call("set_desktop_pet_enabled", !!enabled),
+  setDesktopPetSnap: (enabled) => call("set_desktop_pet_snap", !!enabled),
+  resetDesktopPetPosition: () => call("reset_desktop_pet_position"),
+  setDesktopPetScale: (scale) => call("set_desktop_pet_scale", Number(scale)),
   setGuiCloseToTray: (enabled) => call("set_gui_close_to_tray", !!enabled),
 
   // External

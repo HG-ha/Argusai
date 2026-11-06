@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import json
+import math
 import os
 import re
 import hashlib
@@ -362,6 +363,14 @@ def _clamp_int(value: Any, *, default: int, lo: int, hi: int) -> int:
     return max(int(lo), min(int(hi), n))
 
 
+def normalise_pet_scale(value: Any) -> float:
+    try:
+        scale = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return 1.0
+    return max(.5, min(1.5, scale)) if math.isfinite(scale) else 1.0
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
@@ -495,6 +504,11 @@ class AppSettings:
     gui_window_height: int = 0
     gui_window_maximized: bool = False
     gui_close_to_tray: bool = True
+    gui_desktop_pet: bool = False
+    gui_pet_snap: bool = False
+    gui_pet_scale: float = 1.0
+    gui_pet_x: int | None = None
+    gui_pet_y: int | None = None
 
     # ------------------------------------------------------------------
     # Derived subdirectories. These are exposed as attributes so the rest
@@ -626,6 +640,11 @@ class AppSettings:
             "logging": self.logging.normalised().to_dict(),
             "gui": {
                 "close_to_tray": bool(self.gui_close_to_tray),
+                "desktop_pet": bool(self.gui_desktop_pet),
+                "pet_snap": bool(self.gui_pet_snap),
+                "pet_scale": normalise_pet_scale(self.gui_pet_scale),
+                "pet_x": self.gui_pet_x,
+                "pet_y": self.gui_pet_y,
                 "window": {
                     "x": self.gui_window_x,
                     "y": self.gui_window_y,
@@ -902,6 +921,11 @@ def _parse(raw: dict[str, Any]) -> AppSettings:
         gui_window_width=max(0, _clamp_int(gui_window.get("width"), default=0, lo=0, hi=10000)),
         gui_window_height=max(0, _clamp_int(gui_window.get("height"), default=0, lo=0, hi=10000)),
         gui_window_maximized=bool(gui_window.get("maximized", False)),
+        gui_desktop_pet=bool(gui.get("desktop_pet", False)),
+        gui_pet_snap=bool(gui.get("pet_snap", False)),
+        gui_pet_scale=normalise_pet_scale(gui.get("pet_scale", 1)),
+        gui_pet_x=_optional_int(gui.get("pet_x")),
+        gui_pet_y=_optional_int(gui.get("pet_y")),
         gui_close_to_tray=True if "close_to_tray" not in gui else bool(gui.get("close_to_tray")),
     )
 

@@ -263,6 +263,8 @@ def main() -> None:
         url = f"http://127.0.0.1:{port}/index.html"
         log.info("gui.boot frontend=static dir=%s url=%s", serve_dir, url)
 
+    from .desktop_pet import prepare_pet_display_backend
+    prepare_pet_display_backend()
     geom = resolve_startup_geometry(api.settings_mgr.get())
     window = webview.create_window(
         title="ArgusAI",
@@ -287,6 +289,8 @@ def main() -> None:
         # See webui/src/assets/theme.css ``--bg``.
         background_color="#1e1e1e",
     )
+    from .desktop_pet import DesktopPet
+    api._desktop_pet = DesktopPet(api)
     api._window = window
     api._window_maximized = geom.maximized
 
@@ -393,6 +397,7 @@ def main() -> None:
                 log.debug("gui.close-to-tray hide failed", exc_info=True)
             return False
         try:
+            api._desktop_pet.close()
             api.persist_window_geometry()
         except Exception:
             pass
@@ -440,6 +445,11 @@ def main() -> None:
     debug_webview = os.environ.get("ARGUSAI_WEBVIEW_DEBUG", "0").lower() not in {"0", "false", "no", ""}
 
     def _on_webview_start(w: webview.Window) -> None:
+        if getattr(api.settings_mgr.get(), "gui_desktop_pet", False):
+            try:
+                api._desktop_pet.set_enabled(True)
+            except Exception:
+                log.exception("gui.desktop_pet start failed")
         try:
             from argusai.gui.macos_titlebar import apply_unified_titlebar
 
@@ -475,6 +485,10 @@ def main() -> None:
     try:
         webview.start(_on_webview_start, window, debug=debug_webview)
     finally:
+        try:
+            api._desktop_pet.close()
+        except Exception:
+            pass
         try:
             tray.stop()
         except Exception:
