@@ -153,7 +153,7 @@ def test_main_builds_artifacts_but_only_version_tag_pushes_publish():
     assert build["strategy"]["fail-fast"] == "false"
     assert {(row["runtime"], row["os"], row["architecture"]) for row in build["strategy"]["matrix"]["include"]} == {
         ("win-x64", "windows-2022", "x64"), ("win-arm64", "windows-11-arm", "arm64"),
-        ("macos-arm64", "macos-14", "arm64"), ("linux-x64", "ubuntu-24.04", "x64"),
+        ("macos-arm64", "macos-15", "arm64"), ("linux-x64", "ubuntu-24.04", "x64"),
         ("linux-arm64", "ubuntu-24.04-arm", "arm64"),
     }
     for action in ("actions/setup-python@", "actions/setup-node@"):
@@ -173,11 +173,14 @@ def test_main_builds_artifacts_but_only_version_tag_pushes_publish():
         "ArgusAI-${{ needs.validate.outputs.version }}-source${{ needs.validate.outputs.artifact_suffix }}"
     )
     assert upload["with"]["if-no-files-found"] == "error"
-    native_upload = next(step for step in build["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
-    assert native_upload["with"]["name"] == (
-        "ArgusAI-${{ needs.validate.outputs.version }}-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}"
-    )
-    assert native_upload["with"]["if-no-files-found"] == "error"
+    native_uploads = [step for step in build["steps"] if step.get("uses", "").startswith("actions/upload-artifact@")]
+    assert [step["with"]["name"] for step in native_uploads] == [
+        "ArgusAI-${{ needs.validate.outputs.version }}-desktop-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}",
+        "ArgusAI-${{ needs.validate.outputs.version }}-shell-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}",
+    ]
+    assert all(step["with"]["if-no-files-found"] == "error" for step in native_uploads)
+    assert "dist-shell" not in native_uploads[0]["with"]["path"]
+    assert "${{ env.PACKAGE_PATH }}" not in native_uploads[1]["with"]["path"]
     for job in config["jobs"].values():
         for step in job["steps"]:
             if step.get("shell") == "python":
@@ -590,7 +593,7 @@ def test_packaged_gui_probe_loads_each_supported_clr_before_upload(monkeypatch, 
     probe_name = "Smoke-test packaged Windows GUI backends"
     probe = next(step for step in steps if step.get("name") == probe_name)
     assert probe["if"] == "runner.os == 'Windows'"
-    assert names.index("Build native package") < names.index(probe_name) < names.index("Upload package and checksum")
+    assert names.index("Build native package") < names.index(probe_name) < names.index("Upload desktop package and checksum")
     installer = next(step for step in steps if step.get("name") == "Install Windows x64 Desktop runtime for GUI verification")
     assert installer["if"] == "matrix.runtime == 'win-x64'"
     assert "-Runtime dotnet -Channel 10.0 -Architecture x64" in installer["run"]
@@ -641,7 +644,7 @@ def test_unix_gui_smoke_loads_real_platform_backend_before_publication(monkeypat
     probe = next(step for step in steps if step.get("name") == step_name)
     assert probe["if"] == "runner.os != 'Windows'"
     if packaged:
-        assert names.index("Build native package") < names.index(step_name) < names.index("Upload package and checksum")
+        assert names.index("Build native package") < names.index(step_name) < names.index("Upload desktop package and checksum")
     else:
         assert names.index("Install locked Python dependencies") < names.index(step_name) < names.index("Build native package")
     info = tmp_path / "dist/ArgusAI.app/Contents/Info.plist"

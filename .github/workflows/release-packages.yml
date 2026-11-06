@@ -194,7 +194,7 @@ jobs:
             runtime: win-arm64
             build_args: --nsis
             suffix: -setup.exe
-          - os: macos-14
+          - os: macos-15
             architecture: arm64
             runtime: macos-arm64
             build_args: --dmg
@@ -633,13 +633,21 @@ jobs:
           Path(str(package) + ".sha256").write_text(f"{digest}  {package.name}\n", encoding="utf-8")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write(f"## {package.name}\n\nSHA-256: `{digest}`\n")
-      - name: Upload package and checksum
+      - name: Upload desktop package and checksum
         uses: actions/upload-artifact@v7
         with:
-          name: ArgusAI-${{ needs.validate.outputs.version }}-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}
+          name: ArgusAI-${{ needs.validate.outputs.version }}-desktop-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}
           path: |
             ${{ env.PACKAGE_PATH }}
             ${{ env.PACKAGE_PATH }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload Shell package and checksum
+        uses: actions/upload-artifact@v7
+        with:
+          name: ArgusAI-${{ needs.validate.outputs.version }}-shell-${{ matrix.runtime }}${{ needs.validate.outputs.artifact_suffix }}
+          path: |
             dist-shell/ArgusAI-${{ needs.validate.outputs.version }}-shell-${{ matrix.runtime }}.*
           if-no-files-found: error
           compression-level: 0
