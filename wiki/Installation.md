@@ -195,3 +195,29 @@ CLI 提供 `ai providers`、`ai list`、`ai add` 等命令；涉及密钥时建�
 | 设备列表为空 | 在外部先验证 adb 连接；软件不会自动启动模拟器 |
 
 更多问题见[故障排查](Troubleshooting.md)。
+
+
+## 桌面版与 Shell 版
+
+桌面版同时提供 GUI 和命令行；Shell 版保留命令行服务，不包含图形工作台和桌宠。服务器和 SSH 环境可选择名称中带 `shell` 的便携包，按操作系统和 CPU 架构下载。不要用桌面安装器覆盖 Shell 目录。
+
+Windows 解压 ZIP，macOS/Linux 解压 tar.gz 后，在解压目录运行：
+
+```powershell
+# Windows
+.\ArgusAI-shell.exe chat
+.\ArgusAI-shell.exe ai --help
+.\ArgusAI-shell.exe update --check
+.\ArgusAI-shell.exe update --download
+```
+
+```bash
+# macOS / Linux
+./ArgusAI-shell chat
+./ArgusAI-shell channels --help
+./ArgusAI-shell update --download
+```
+
+`update --download` 从官网读取正式版本信息，从 GitHub 下载对应 Shell 包并校验 SHA-256。下载完成后会显示文件路径；停止旧进程，将新包解压到新目录后运行。用户数据沿用原数据目录，不要把个人配置放入安装目录。预发布包用于测试，不会成为正式更新源的最新版本。
+
+Shell 包仍需按功能准备外部运行时，例如浏览器、Node.js、逆向工具和 ACP Agent。移除 GUI 不会把这些依赖打进便携包；诊断方法见命令行手册中的 `doctor`。

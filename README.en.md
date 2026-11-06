@@ -334,6 +334,8 @@ Alerts and remote state come from materials supplied by the user or configured t
 
 ## Quick start
 
+**Two editions:** Desktop includes the GUI and full CLI. Shell provides command-line access for servers and SSH sessions, retaining Agent, channel, task, proxy and reverse-analysis capabilities. Shell archives contain `shell` in their names and do not require desktop WebView components; external runtimes such as browsers are still needed for the features that use them. See [Releases](https://github.com/HG-ha/Argusai/releases) for stable and preview packages, and [installation](wiki/Installation.md) for instructions.
+
 The current version is `0.1.9`. Download the prebuilt package for your platform and its `.sha256` from [Releases](https://github.com/HG-ha/Argusai/releases), then follow [installation](wiki/Installation.md) to verify and install it. The terminal examples use an `argusai` command entry. Without one, use `.\ArgusAI.exe` from the Windows installation directory or `./ArgusAI` from the extracted Linux directory; see the [CLI reference](wiki/CLI-Reference.md) for the macOS entry.
 
 ```sh

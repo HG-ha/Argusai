@@ -16,6 +16,8 @@ LaunchMode = Literal["gui", "cli"]
 
 log = logging.getLogger("argusai.host")
 
+BUILD_EDITION = "desktop"  # Set by the compiled Shell entry point, never by user environment.
+
 _VALID_KINDS: frozenset[str] = frozenset({"gui", "headless", "cli"})
 
 
@@ -104,6 +106,8 @@ def resolve_launch_mode(
     5. Non-interactive / no TTY → GUI when a desktop is available
     6. No desktop surface → CLI
     """
+    if BUILD_EDITION == "shell":
+        return "cli"
     explicit = str(force or "").strip().lower()
     if explicit in {"gui", "desktop", "webview"}:
         return "gui"

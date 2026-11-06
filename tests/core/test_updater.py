@@ -558,3 +558,39 @@ def test_hdiutil_retries_only_transient_errors_and_preserves_stderr(monkeypatch,
         _run_hdiutil(["attach", "-readonly", "fixture.dmg"], timeout=120)
     assert len(calls) == expected_calls
     assert len(sleeps) == expected_calls - 1
+
+def test_shell_cannot_download_or_install_desktop_update(tmp_path, monkeypatch):
+    from argusai.core import host
+    monkeypatch.setattr(host, 'BUILD_EDITION', 'shell')
+    mgr, record, calls = manager(tmp_path)
+    assert mgr.check(force=True)['version'] == record['version']
+    assert mgr.status()['install_mode'] == 'manual'
+    assert mgr.cache_dir.name == 'shell'
+    assert mgr.start_download()['error_code'] == 'shell_package_unavailable'
+    assert mgr.prepare_install()['error_code'] == 'shell_package_unavailable'
+    assert calls == [MANIFEST_URL]
+    assert mgr._worker is None
+
+
+def test_shell_download_uses_only_shell_asset_and_restores(tmp_path, monkeypatch):
+    from argusai.core import host
+    monkeypatch.setattr(host, 'BUILD_EDITION', 'shell')
+    mgr, record, calls = manager(tmp_path)
+    asset = dict(record['assets']['win-x64'])
+    asset['url'] = asset['url'].replace('win-x64-setup.exe', 'shell-win-x64.zip')
+    record['shell_assets'] = {'win-x64': asset}
+    assert mgr.check(force=True)['status'] == 'available'
+    mgr.start_download()
+    assert wait_download(mgr)['status'] == 'downloaded'
+    assert calls[-1] == asset['url']
+    assert mgr._package.name.endswith('shell-win-x64.zip')
+    mgr._restore_ready()
+    assert mgr.status()['status'] == 'downloaded'
+    assert mgr.prepare_install()['status'] == 'unsupported'
+
+
+def test_shell_manifest_rejects_desktop_asset():
+    data = manifest()
+    data['shell_assets'] = data['assets']
+    with pytest.raises(ValueError):
+        validate_manifest(data, edition='shell')

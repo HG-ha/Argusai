@@ -271,3 +271,20 @@ def test_chat_team_use_is_one_opening_line(monkeypatch) -> None:
     assert "unexpected extra argument" not in plain.output.lower()
     assert entered.exit_code == 0
     assert plain.exit_code == 0
+
+@pytest.mark.parametrize('flag', ['--gui', '--tray', '--self-check-gui'])
+def test_shell_rejects_gui_before_import(monkeypatch, capsys, flag):
+    from argusai.core import host
+    from argusai.__main__ import main
+    monkeypatch.setattr(host, 'BUILD_EDITION', 'shell')
+    monkeypatch.setattr(sys, 'argv', ['ArgusAI-shell', flag])
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert 'Shell edition' in capsys.readouterr().err
+
+
+def test_shell_bare_launch_never_opens_gui(monkeypatch):
+    from argusai.core import host
+    monkeypatch.setattr(host, 'BUILD_EDITION', 'shell')
+    assert host.resolve_launch_mode(environ={'ARGUSAI_HOST': 'gui'}, interactive=False, gui_available=True) == 'cli'

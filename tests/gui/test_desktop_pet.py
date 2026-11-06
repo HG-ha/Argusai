@@ -86,3 +86,18 @@ def test_hidden_window_is_reused_and_close_destroys_once():
 
 def test_headless_host_cannot_create_companion():
     assert not WindowMixin().set_desktop_pet_enabled(True)['ok']
+
+
+def test_windows_pet_disables_backdrop_again_after_theme_change(monkeypatch):
+    from argusai.gui import desktop_pet_windows as native
+    calls = []
+    original = lambda: calls.append('backend-mica')
+    form = SimpleNamespace(update_title_bar_theme=original)
+    other_form = SimpleNamespace(update_title_bar_theme=original)
+    monkeypatch.setattr(native, '_disable_system_backdrop', lambda target: calls.append(('none', target)))
+    assert native._install_transparent_theme(form) is original
+    assert calls == [('none', form)]
+    calls.clear()
+    form.update_title_bar_theme()
+    assert calls == ['backend-mica', ('none', form)]
+    assert other_form.update_title_bar_theme is original

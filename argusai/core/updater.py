@@ -37,6 +37,9 @@ SUFFIXES = {
 }
 
 
+SHELL_SUFFIXES = {key: f"shell-{key}" + (".zip" if key.startswith("win-") else ".tar.gz")
+                  for key in SUFFIXES}
+
 def _run_hdiutil(arguments: list[str], *, timeout: float) -> None:
     """Retry Disk Arbitration contention, preserving actionable diagnostics."""
     deadline = time.monotonic() + timeout
@@ -99,7 +102,7 @@ def _release_url(value: str, expected: str) -> str:
     return value
 
 
-def validate_manifest(data: Any) -> dict[str, Any]:
+def validate_manifest(data: Any, *, edition: str = "desktop") -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ValueError("Unsupported update manifest")
     version = str(data.get("version", ""))
@@ -110,11 +113,13 @@ def validate_manifest(data: Any) -> dict[str, Any]:
     if not isinstance(notes, str) or len(notes.encode("utf-8")) > 64 * 1024:
         raise ValueError("Invalid update release notes")
     release = _release_url(str(data.get("release_url", "")), f"/HG-ha/Argusai/releases/tag/v{version}")
-    assets = data.get("assets")
+    if edition not in {"desktop", "shell"}:
+        raise ValueError("Unknown package edition")
+    assets = data.get("shell_assets", {}) if edition == "shell" else data.get("assets")
     if not isinstance(assets, dict):
         raise ValueError("Missing update assets")
     validated = {}
-    for key, suffix in SUFFIXES.items():
+    for key, suffix in (SHELL_SUFFIXES if edition == "shell" else SUFFIXES).items():
         if key not in assets:
             continue
         asset = assets[key]
@@ -237,6 +242,10 @@ class UpdateManager:
                  executable: Path | None = None, packaged: bool | None = None,
                  protected_paths: Iterable[Path | str] = ()) -> None:
         _version(current_version)
+        from argusai.core.host import BUILD_EDITION
+        self.edition = BUILD_EDITION
+        if self.edition == "shell":
+            cache_dir = Path(cache_dir) / "shell"
         self._cache_cleanup_root = Path(cache_dir).absolute()
         self.cache_dir = Path(cache_dir).resolve()
         self.current_version = current_version
@@ -269,6 +278,9 @@ class UpdateManager:
                 _target(self.executable, self.platform_key)
             except ValueError:
                 self._state["install_mode"] = "manual"
+        if self.edition == "shell":
+            self._state["install_mode"] = "manual"
+            self._state["edition"] = "shell"
         self._cleanup_installed_cache()
         self._restore_ready()
 
@@ -284,7 +296,7 @@ class UpdateManager:
         import stat
 
         version_pattern = r"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
-        suffixes = "|".join(re.escape(value) for value in SUFFIXES.values())
+        suffixes = "|".join(re.escape(value) for value in (SHELL_SUFFIXES if self.edition == "shell" else SUFFIXES).values())
         patterns = (
             rf"ArgusAI-{version_pattern}-(?:{suffixes})",
             rf"install-{version_pattern}\.(?:ps1|sh)",
@@ -339,7 +351,7 @@ class UpdateManager:
             saved = self.cache_dir / "verified-update.json"
             if not self.packaged or not saved.is_file() or saved.stat().st_size > MAX_MANIFEST_BYTES:
                 return
-            manifest = validate_manifest(json.loads(saved.read_text(encoding="utf-8")))
+            manifest = validate_manifest(json.loads(saved.read_text(encoding="utf-8")), edition=self.edition)
             if _version(manifest["version"]) <= _version(self.current_version):
                 return
             asset = manifest["assets"][self.platform_key]
@@ -364,6 +376,8 @@ class UpdateManager:
         saved = self.cache_dir / "verified-update.json"
         temporary = self.cache_dir / "verified-update.json.tmp"
         record = {"schema_version": 1, **self._manifest}
+        if self.edition == "shell":
+            record["shell_assets"] = record.pop("assets")
         temporary.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, saved)
 
@@ -402,7 +416,7 @@ class UpdateManager:
                     body.extend(chunk)
                     if len(body) > MAX_MANIFEST_BYTES:
                         raise ValueError("Update manifest is too large")
-                manifest = validate_manifest(json.loads(body))
+                manifest = validate_manifest(json.loads(body), edition=self.edition)
             with self._lock:
                 self._last_check = time.monotonic()
                 newer = _version(manifest["version"]) > _version(self.current_version)
@@ -451,7 +465,7 @@ class UpdateManager:
                 return self._set(error="Check for a newer update first")
             asset = self._manifest["assets"].get(self.platform_key)
             if not asset:
-                return self._set(status="unsupported", error="No package is available for this platform")
+                return self._set(status="unsupported", error="No matching package is available for this platform and edition", error_code="shell_package_unavailable" if self.edition == "shell" else "package_unavailable")
             if self._state["status"] == "installing":
                 return dict(self._state)
             self._cancel.clear()
@@ -532,6 +546,8 @@ class UpdateManager:
 
     def prepare_install(self) -> dict[str, Any]:
         """Stage a verified payload and return a helper command; never run it."""
+        if self.edition == "shell":
+            return self._set(status="unsupported", error="Install the matching Shell archive manually.", error_code="shell_package_unavailable")
         with self._lock:
             if self._state["status"] != "downloaded" or not self._manifest or not self._package:
                 return {"ok": False, "error": "Download and verify an update before installing"}

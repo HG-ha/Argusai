@@ -257,3 +257,31 @@ uv run --locked --group build python build.py --dry-run --jobs 2
 | macOS 签名身份不唯一或不存在 | 显式传有效 Developer ID Application 名称，或仅做临时签名构建 |
 
 更多运行期问题见[故障排查](Troubleshooting.md)。
+
+
+## 纯 Shell 构建
+
+桌面版保留 GUI 和命令行。`--edition shell` 生成仅供命令行使用的便携包，保留 Agent、ACP、通信渠道、代理、扫描、逆向和定时任务使用的业务模块；不包含 pywebview、桌面前端和桌宠素材。浏览器自动化仍按原有方式配置浏览器及运行时。
+
+```powershell
+uv run --locked --group build python build.py --edition shell --output-dir build/shell --jobs 6
+```
+
+在目标系统上运行：Windows 输出 ZIP，macOS 和 Linux 输出 tar.gz，并附带 SHA-256 文件。可执行文件为 `ArgusAI-shell.exe`（Windows）或 `ArgusAI-shell`（macOS/Linux）。Shell 构建不运行前端构建；当前构建环境仍使用项目共用依赖。默认不启用 UPX。
+
+```powershell
+.\ArgusAI-shell.exe version --json
+.\ArgusAI-shell.exe chat
+.\ArgusAI-shell.exe ai --help
+.\ArgusAI-shell.exe channels --help
+```
+
+Shell 版不支持 `--gui`、桌面安装器和 app bundle。`update --check` 查询正式版本；`update --download` 只下载并校验同平台 Shell 包。下载后停止运行中的 Shell 进程，将归档解压到新目录，继续使用原数据目录。它使用独立更新缓存，不会复用桌面安装器。正式 tag 和 main 预发布流水线均构建桌面版与 Shell 版；预发布包不会进入正式更新源。
+
+打包后可运行本地功能自检。工作目录必须是新目录，自检在其中保存隔离配置和结果，不读取个人端点：
+
+```powershell
+uv run --locked --group build python scripts/packaging/smoke_shell.py build/shell/ArgusAI-shell.dist/ArgusAI-shell.exe --work-dir build/shell-smoke-01
+```
+
+该自检使用回环 HTTP 服务和模拟 AI 端点，覆盖对话、扫描报告与任务管理；不能替代真实模型、通信平台账号和外部 ACP 程序的联调。

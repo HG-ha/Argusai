@@ -19,6 +19,8 @@ import sys
 import sysconfig
 import tarfile
 import tempfile
+import zipfile
+import hashlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -88,6 +90,7 @@ arch -x86_64 .venv-x64/bin/python build.py --arch x86_64 --dmg.
 No Developer ID certificate is required for default ad-hoc macOS builds.
 For notarization, first store credentials with xcrun notarytool store-credentials.
 """)
+    parser.add_argument("--edition", choices=("desktop", "shell"), default="desktop", help="Shell omits desktop windows and assets; retains all CLI services")
     parser.add_argument("--mode", type=str.lower, choices=("folder", "onefile", "app"))
     parser.add_argument("--onefile", action="store_true", help="Alias for --mode onefile")
     parser.add_argument("--output-dir", default="dist")
@@ -110,7 +113,14 @@ For notarization, first store credentials with xcrun notarytool store-credential
     args.system = system
     if system not in {"Windows", "Darwin", "Linux"}:
         parser.error(f"Unsupported system: {system}")
-    args.mode = "onefile" if args.onefile else args.mode or ("app" if system == "Darwin" else "folder")
+    args.mode = "onefile" if args.onefile else args.mode or ("app" if system == "Darwin" and args.edition == "desktop" else "folder")
+    if args.edition == "shell":
+        if args.mode != "folder" or args.nsis or args.dmg or args.notarize:
+            parser.error("Shell builds use portable folders; omit --onefile, --mode app, --nsis, --dmg and --notarize")
+        args.console = True
+        args.skip_webui = True
+        if args.app_name == "ArgusAI":
+            args.app_name = "ArgusAI-shell"
     if args.jobs < 0:
         parser.error("--jobs must be >= 0")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.app_name):
@@ -259,6 +269,20 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
         flags.append(f"--{option}={icon}")
     elif args.icon:
         raise ValueError(f"Icon does not exist: {icon}")
+    if args.edition == "shell":
+        desktop_flags = ("--include-package=clr_loader", "--include-package=pythonnet",
+                         "--include-package=gi", "--include-package=cairo", "--enable-plugin=gi",
+                         "--include-module=webview.", "--user-package-configuration-file=",
+                         "--include-data-dir=argusai/gui/pet_assets", "--include-data-dir=argusai/webui/dist",
+                         "--include-data-files=" + WINDOWS_ARM_RUNTIME_CONFIG)
+        flags = [flag for flag in flags if not flag.startswith(desktop_flags)]
+        if args.system == "Darwin":
+            flags = [flag for flag in flags if not flag.startswith(("--macos-app-mode=", "--macos-app-icon="))]
+            flags.append(f"--output-filename={args.app_name}")
+        for module in ("webview", "clr", "clr_loader", "pythonnet", "gi", "cairo",
+                       "argusai.gui.launch", "argusai.gui.desktop_pet", "argusai.gui.desktop_pet_windows",
+                       "argusai.gui.desktop_pet_chat", "argusai.gui.macos_titlebar", "argusai.gui.tray"):
+            flags.append(f"--nofollow-import-to={module}")
     if args.jobs:
         flags.append(f"--jobs={args.jobs}")
     return flags
@@ -346,7 +370,7 @@ def prepare(args: argparse.Namespace) -> Path | None:
     # requested installer cannot be produced on this machine.
     if args.nsis:
         resolve_nsis_compiler(args)
-    if args.system == "Windows" and args.target_arch == "arm64":
+    if args.system == "Windows" and args.target_arch == "arm64" and args.edition == "desktop":
         runtime_config = ROOT / WINDOWS_ARM_RUNTIME_CONFIG
         if not runtime_config.is_file():
             raise ValueError(f"Missing Windows ARM64 .NET runtime configuration: {runtime_config}")
@@ -359,26 +383,27 @@ def prepare(args: argparse.Namespace) -> Path | None:
         for tool in tools:
             if not shutil.which(tool):
                 raise ValueError(f"Missing macOS build tool: {tool}")
-    webui = ROOT / "argusai/webui"
-    if not args.skip_webui:
-        npm = shutil.which("npm.cmd" if args.system == "Windows" else "npm")
-        if not npm:
-            raise ValueError("Node.js/npm is required to build the frontend")
-        run([npm, "ci"], cwd=webui)
-        run([npm, "run", "build"], cwd=webui)
-    if not (webui / "dist/index.html").is_file():
-        raise ValueError("Missing webui/dist/index.html; build without --skip-webui")
-    from scripts.frontend_notices import check_notices, generate_notices
-    if args.skip_webui:
-        check_notices(webui)
-    else:
-        generate_notices(webui)
+    if args.edition == "desktop":
+        webui = ROOT / "argusai/webui"
+        if not args.skip_webui:
+            npm = shutil.which("npm.cmd" if args.system == "Windows" else "npm")
+            if not npm:
+                raise ValueError("Node.js/npm is required to build the frontend")
+            run([npm, "ci"], cwd=webui)
+            run([npm, "run", "build"], cwd=webui)
+        if not (webui / "dist/index.html").is_file():
+            raise ValueError("Missing webui/dist/index.html; build without --skip-webui")
+        from scripts.frontend_notices import check_notices, generate_notices
+        if args.skip_webui:
+            check_notices(webui)
+        else:
+            generate_notices(webui)
     for package in ("nuitka", "zstandard"):
         if importlib.util.find_spec(package) is None:
             raise ValueError("Install build dependencies: uv sync --group build; then uv run --group build python build.py")
     if args.system == "Linux" and not shutil.which("patchelf"):
         raise ValueError("Install patchelf using your system package manager")
-    if args.system == "Linux":
+    if args.system == "Linux" and args.edition == "desktop":
         check_linux_gui_backend()
     prepare_legal(args)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch
@@ -391,7 +416,7 @@ def prepare(args: argparse.Namespace) -> Path | None:
         print(f"innoextract is not bundled for {args.runtime_arch}: no official portable ARM64 archive. "
               "Installer unpacking requires a separately configured compatible tool.", flush=True)
     helper = None
-    if args.system == "Windows":
+    if args.system == "Windows" and args.edition == "desktop":
         import webview
         webview_root = Path(webview.__file__).resolve().parent
         missing = [name for name in WINDOWS_WEBVIEW_RESOURCES
@@ -417,11 +442,13 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
     required = ["argusai/webui/dist/index.html", "argusai/webui/dist/THIRD_PARTY_NOTICES.txt",
                 "argusai/vendor/runners", "argusai/vendor/sqlmap/sqlmap.py"]
     required += [f"argusai/gui/pet_assets/{name}" for name in PET_FILES]
+    if args.edition == "shell":
+        required = ["argusai/vendor/runners", "argusai/vendor/sqlmap/sqlmap.py", "argusai/skills", "argusai/report/templates"]
     required += [f"argusai/core/reverse/ghidra_scripts/{name}" for name in GHIDRA_SCRIPTS]
     required += [f"argusai/legal/{name}" for name in LEGAL_FILES]
-    if args.system == "Windows":
+    if args.system == "Windows" and args.edition == "desktop":
         required += ["WebView2Loader.dll", *WINDOWS_WEBVIEW_RESOURCES]
-    if args.system == "Windows" and args.target_arch == "arm64":
+    if args.system == "Windows" and args.target_arch == "arm64" and args.edition == "desktop":
         required.append(WINDOWS_ARM_RUNTIME_CONFIG)
     vendor = ROOT / "argusai/vendor/innoextract" / args.runtime_arch
     if vendor.is_dir():
@@ -430,7 +457,7 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
     missing = [name for name in required
                if not any(nonempty_file(root / name) if name in windows_files else (root / name).exists()
                           for root in roots)]
-    if args.system == "Linux":
+    if args.system == "Linux" and args.edition == "desktop":
         missing += [f"girepository/{name}.typelib" for name in LINUX_GTK_TYPELIBS
                     if not any(nonempty_file(root / "girepository" / f"{name}.typelib") for root in roots)]
         # Native extension suffixes can include the target CPython ABI tag.
@@ -441,6 +468,8 @@ def verify_payload(path: Path, args: argparse.Namespace, *other_roots: Path) -> 
     if missing:
         raise ValueError(f"Missing packaged resources: {missing}")
     forbidden = [f"argusai/vendor/{name}" for name in REMOVED_RUNTIMES]
+    if args.edition == "shell":
+        forbidden += ["webview", "pythonnet", "clr_loader", "gi", "cairo", "argusai/gui/pet_assets", "argusai/webui"]
     forbidden += ["argusai/webui/src", "argusai/webui/node_modules", "playwright/driver/node", "playwright/driver/node.exe"]
     if any((root / name).exists() for root in roots for name in forbidden) or any(any((root / "argusai").rglob("*.pyc")) for root in roots):
         raise ValueError("Build contains excluded runtimes, frontend sources or bytecode")
@@ -556,8 +585,15 @@ def finish(args: argparse.Namespace) -> Path:
     if args.system == "Darwin":
         sign(payload if args.mode == "onefile" else payload / executable, args)
     result = nsis(payload, args) if args.nsis else payload
-    if args.system == "Linux":
-        archive_stem = f"{stem}-{args.version}-{args.runtime_arch}"
+    if args.edition == "shell" and args.system == "Windows":
+        result = output / f"ArgusAI-{args.version}-shell-{args.runtime_arch}.zip"
+        with zipfile.ZipFile(result, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for item in sorted(payload.rglob("*")):
+                if item.is_file():
+                    archive.write(item, Path(stem) / item.relative_to(payload))
+    if args.system == "Linux" or (args.edition == "shell" and args.system == "Darwin"):
+        archive_stem = (f"ArgusAI-{args.version}-shell-{args.runtime_arch}" if args.edition == "shell"
+                        else f"{stem}-{args.version}-{args.runtime_arch}")
         result = output / f"{archive_stem}.tar.gz"
         def release_metadata(info: tarfile.TarInfo) -> tarfile.TarInfo:
             info.uid = info.gid = 0
@@ -573,6 +609,10 @@ def finish(args: argparse.Namespace) -> Path:
         for base in ("__main__", stem):
             for suffix in (".dist", ".build", ".onefile-build"):
                 remove_output(output / (base + suffix), output)
+    if args.edition == "shell":
+        with result.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        result.with_name(result.name + ".sha256").write_text(f"{digest}  {result.name}\n", encoding="utf-8")
     return result
 
 
@@ -580,9 +620,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         if args.dry_run:
-            print(f"Plan: {args.system} {args.runtime_arch}, {args.mode}, version {args.version}")
-            print("Frontend: " + ("reuse existing dist + verify third-party notices" if args.skip_webui else "npm ci + npm run build + collect third-party notices"))
-            print(shlex.join([sys.executable, "-m", "nuitka", *nuitka_args(args), "argusai/__main__.py"]))
+            print(f"Plan: {args.system} {args.runtime_arch}, {args.edition}, {args.mode}, version {args.version}")
+            print("Frontend: " + ("omitted (Shell edition)" if args.edition == "shell" else ("reuse existing dist + verify third-party notices" if args.skip_webui else "npm ci + npm run build + collect third-party notices")))
+            entry = args.output / "entry/__main__.py" if args.edition == "shell" else ROOT / "argusai/__main__.py"
+            print(shlex.join([sys.executable, "-m", "nuitka", *nuitka_args(args), str(entry)]))
             print(f"Postprocessing: NSIS={args.nsis}, DMG={args.dmg}, notarize={args.notarize}, Linux archive={args.system == 'Linux'}")
             return 0
         if sys.version_info < (3, 12):
@@ -595,7 +636,13 @@ def main(argv: list[str] | None = None) -> int:
                  for suffix in (".dist", ".build", ".onefile-build", ".app", ".exe", ".bin", "")}
         for name in names:
             remove_output(args.output / name, args.output)
-        run([sys.executable, "-m", "nuitka", *nuitka_args(args, win32_helper=helper), "argusai/__main__.py"])
+        entry = ROOT / "argusai/__main__.py"
+        if args.edition == "shell":
+            entry = args.output / "entry/__main__.py"
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text("from argusai.core import host\nhost.BUILD_EDITION = 'shell'\n"
+                             "from argusai.__main__ import main\nmain()\n", encoding="utf-8")
+        run([sys.executable, "-m", "nuitka", *nuitka_args(args, win32_helper=helper), entry])
         print(f"Built: {finish(args)}")
         return 0
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:

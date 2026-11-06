@@ -65,6 +65,11 @@ def _gui_self_check_report() -> dict:
 
 def main() -> None:
     import sys
+    from argusai.core.host import BUILD_EDITION
+
+    if BUILD_EDITION == "shell" and any(arg in {"--gui", "--tray", "--self-check-gui"} for arg in sys.argv[1:]):
+        print("Shell edition has no desktop GUI. Use the desktop edition for --gui.", file=sys.stderr)
+        raise SystemExit(2)
 
     if "--mcp-tool-proxy" in sys.argv[1:]:
         from argusai.core.agent_runtimes.mcp_proxy import main as proxy_main

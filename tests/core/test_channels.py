@@ -822,5 +822,6 @@ def test_channel_agent_session_is_locked_to_a_sandboxed_runtime(tmp_path) -> Non
         "locked": True,
         "acp_config": {},
         "acp_config_options": [],
+        "acp_system_prompt_mode": "append",
     }
     assert stored["name"] == ""

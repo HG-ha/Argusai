@@ -1,5 +1,16 @@
 (() => {
   const pairs = `
+选择适合你的版本|Choose your edition
+桌面版|Desktop edition
+Shell 版|Shell edition
+图形工作台与完整命令行，适合本机交互和可视化分析。|The graphical workspace and full CLI for interactive work and visual analysis.
+保留命令行、Agent、代理和自动化服务，适合服务器与终端工作。不包含桌面界面和桌宠。|CLI, agents, proxy and automation services for servers and terminals. No desktop interface or companion.
+正在读取正式版本…|Loading the stable release…
+全部版本与预发布包 ↗|All releases and preview packages ↗
+当前正式版本尚未提供此版本，请查看预发布包。|This edition is not available in the stable release yet. Check the preview packages.
+版本信息暂时不可用，请从下方 GitHub 发布页下载。|Release information is unavailable. Download from the GitHub releases link below.
+下载来自 GitHub Release|Downloads are hosted on GitHub Releases
+
 在终端里，接着工作。|Keep working in the terminal.
 多轮 Agent 对话、会话与小队、待办和运行监控，都可以在命令行中使用。|Use multi-turn Agent conversations, sessions, teams, todos and runtime monitoring from the command line.
 命令行使用手册 ↗|CLI user guide ↗

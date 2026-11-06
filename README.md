@@ -340,6 +340,8 @@ argusai --gui
 argusai chat
 ```
 
+**两个发行版本：** 桌面版包含 GUI 与完整命令行；Shell 版仅提供命令行，适合服务器和 SSH 环境，保留 Agent、通讯渠道、任务、代理与逆向能力。Shell 包名称带 `shell`，无需桌面 WebView 组件；浏览器等外部运行时仍按功能准备。正式包与测试预发布包见 [Releases](https://github.com/HG-ha/Argusai/releases)，使用步骤见[安装说明](wiki/Installation.md)。
+
 首次启动后，确认数据目录，配置原生 AI 端点与模型，或选择已安装、登录并测试通过的本地 ACP Agent；按需要检查浏览器与外部工具路径。打开完整 Agent 对话或点击悬浮球，把目标、材料和约束交给 Agent，让它建立计划并开展工作。第一次可以提供一份允许分析的 HAR 或 JS，让 Agent 整理接口、标注疑点并归档证据，再到相应功能页核对结果。
 
 | 选择入口 | 如何开始 | 继续阅读 |

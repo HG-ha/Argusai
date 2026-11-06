@@ -26,6 +26,8 @@ PLATFORMS = {
     "linux-arm64": "linux-arm64.tar.gz",
     "macos-arm64": "macos-arm64.dmg",
 }
+SHELL_PLATFORMS = {key: f"shell-{key}" + (".zip" if key.startswith("win-") else ".tar.gz")
+                   for key in PLATFORMS}
 BEGIN = "<!-- BEGIN GENERATED RELEASES -->"
 END = "<!-- END GENERATED RELEASES -->"
 VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\Z")
@@ -63,12 +65,15 @@ def build_manifest(release: dict, checksums: dict[str, bytes], *,
     normalize = lambda text: text.replace("\r\n", "\n").strip()
     if normalize(notes) != normalize(committed_notes):
         raise ValueError("Release notes do not match the tagged source")
-    suffixes = list(PLATFORMS.values()) + ["source.tar.gz"]
+    assets = release.get("assets")
+    if not isinstance(assets, list) or any(not isinstance(asset, dict) for asset in assets):
+        raise ValueError("Invalid release assets")
+    has_shell = any("-shell-" in str(asset.get("name", "")) for asset in assets)
+    suffixes = list(PLATFORMS.values()) + (list(SHELL_PLATFORMS.values()) if has_shell else []) + ["source.tar.gz"]
     names = [f"ArgusAI-{version}-{suffix}" for suffix in suffixes]
     expected = {name for package in names for name in (package, package + ".sha256")}
-    assets = release.get("assets")
-    if not isinstance(assets, list) or len(assets) != len(expected):
-        raise ValueError("The release must contain exactly six packages and six checksums")
+    if len(assets) != len(expected):
+        raise ValueError("The release must contain a complete desktop/source set and, if present, all five Shell packages with checksums")
     indexed = {asset.get("name"): asset for asset in assets}
     if set(indexed) != expected:
         raise ValueError("Missing, duplicate or unexpected release assets")
@@ -90,7 +95,7 @@ def build_manifest(release: dict, checksums: dict[str, bytes], *,
         digest = indexed[name]["digest"][7:]
         if content.decode("utf-8").strip() != f"{digest}  {name}":
             raise ValueError(f"Package SHA-256 mismatch: {name}")
-    return {
+    result = {
         "schema_version": 1,
         "version": version,
         "published_at": published,
@@ -104,6 +109,15 @@ def build_manifest(release: dict, checksums: dict[str, bytes], *,
             } for platform, suffix in PLATFORMS.items()
         },
     }
+
+    if has_shell:
+        result["shell_assets"] = {
+            key: {"url": indexed[f"ArgusAI-{version}-{suffix}"]["browser_download_url"],
+                  "sha256": indexed[f"ArgusAI-{version}-{suffix}"]["digest"][7:],
+                  "size": indexed[f"ArgusAI-{version}-{suffix}"]["size"]}
+            for key, suffix in SHELL_PLATFORMS.items()
+        }
+    return result
 
 
 class _ReleaseRedirect(HTTPRedirectHandler):

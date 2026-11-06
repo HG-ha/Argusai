@@ -148,3 +148,40 @@ taskTabs.forEach((tab,index)=>{
     event.preventDefault();selectTask(taskTabs[next]);taskTabs[next].focus();
   });
 });
+
+// Download choices come only from the verified stable feed, never GitHub API.
+const editionLists = document.querySelectorAll('[data-edition-downloads]');
+if (editionLists.length) {
+  fetch('updates/stable.json').then(response => {
+    if (!response.ok) throw new Error('feed unavailable');
+    return response.json();
+  }).then(feed => {
+    if (!/^\d+\.\d+\.\d+$/.test(feed.version)) throw new Error('invalid version');
+    const platforms = {'win-x64':'Windows x64', 'win-arm64':'Windows ARM64', 'macos-arm64':'macOS ARM64', 'linux-x64':'Linux x64', 'linux-arm64':'Linux ARM64'};
+    for (const list of editionLists) {
+      const shell = list.dataset.editionDownloads === 'shell';
+      const assets = (shell ? feed.shell_assets : feed.assets) || {};
+      for (const [platform, label] of Object.entries(platforms)) {
+        const asset = assets[platform];
+        if (!asset) continue;
+        const suffix = shell ? `shell-${platform}${platform.startsWith('win-') ? '.zip' : '.tar.gz'}` : `${platform}${platform.startsWith('win-') ? '-setup.exe' : platform.startsWith('macos-') ? '.dmg' : '.tar.gz'}`;
+        const expected = `https://github.com/HG-ha/Argusai/releases/download/v${feed.version}/ArgusAI-${feed.version}-${suffix}`;
+        if (asset.url !== expected || !/^[a-f0-9]{64}$/.test(asset.sha256) || !Number.isSafeInteger(asset.size) || asset.size <= 0) throw new Error('invalid asset');
+        const item = document.createElement('li');
+        const link = document.createElement('a');
+        link.href = expected; link.textContent = `${label} · ${(asset.size/1048576).toFixed(1)} MiB`;
+        item.append(link); list.append(item);
+      }
+      if (!list.children.length) {
+        const item = document.createElement('li');
+        item.textContent = '当前正式版本尚未提供此版本，请查看预发布包。'; list.append(item);
+      }
+    }
+    const status = document.querySelector('[data-download-status]');
+    const label = document.createElement('span'); label.textContent = '下载来自 GitHub Release';
+    status.replaceChildren(document.createTextNode(`v${feed.version} · `), label);
+  }).catch(() => {
+    editionLists.forEach(list => list.replaceChildren());
+    document.querySelector('[data-download-status]').textContent = '版本信息暂时不可用，请从下方 GitHub 发布页下载。';
+  });
+}

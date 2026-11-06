@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-NATIVE_SUFFIXES = ("win-x64-setup.exe", "win-arm64-setup.exe", "macos-arm64.dmg", "linux-x64.tar.gz", "linux-arm64.tar.gz")
+NATIVE_SUFFIXES = ("win-x64-setup.exe", "win-arm64-setup.exe", "macos-arm64.dmg", "linux-x64.tar.gz", "linux-arm64.tar.gz", "shell-win-x64.zip", "shell-win-arm64.zip", "shell-macos-arm64.tar.gz", "shell-linux-x64.tar.gz", "shell-linux-arm64.tar.gz")
 SOURCE_FILES = {
     "LICENSE": b"GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n",
     "THIRD_PARTY_NOTICES.md": b"Third-party notices fixture\n",
@@ -162,7 +162,7 @@ def test_main_builds_artifacts_but_only_version_tag_pushes_publish():
     assert publish["steps"][0]["with"]["ref"] == "${{ needs.validate.outputs.commit }}"
     assert publish["steps"][0]["with"]["fetch-depth"] == "0"
     names = [step.get("name") for step in publish["steps"]]
-    assert names.index("Verify source, all five packages and checksums") < names.index("Publish verified release assets")
+    assert names.index("Verify source, desktop and Shell packages and checksums") < names.index("Publish verified release assets")
     source = config["jobs"]["source"]
     assert source["needs"] == "validate"
     assert source["env"]["RELEASE_TAG"] == "${{ needs.validate.outputs.release_tag }}"
@@ -275,9 +275,9 @@ def test_release_verifies_actual_package_bytes(monkeypatch, tmp_path, corrupt):
     if corrupt:
         packages[-1].write_bytes(b"changed-after-checksum")
         with pytest.raises(SystemExit, match="Checksum mismatch"):
-            exec(python_step("publish", "Verify source, all five packages and checksums"), {})
+            exec(python_step("publish", "Verify source, desktop and Shell packages and checksums"), {})
     else:
-        exec(python_step("publish", "Verify source, all five packages and checksums"), {})
+        exec(python_step("publish", "Verify source, desktop and Shell packages and checksums"), {})
 
 
 @pytest.fixture
@@ -415,7 +415,7 @@ def test_source_failures_stop_publish(monkeypatch, tmp_path, failure, message):
     elif failure == "private-runtime":
         write_source_archive(tmp_path, extra={"settings.json": b"private"})
     with pytest.raises(SystemExit, match=message):
-        exec(python_step("publish", "Verify source, all five packages and checksums"), {})
+        exec(python_step("publish", "Verify source, desktop and Shell packages and checksums"), {})
 
 
 def test_missing_package_stops_before_upload(monkeypatch, tmp_path):
@@ -458,7 +458,7 @@ def test_arm_package_failures_stop_publish(monkeypatch, tmp_path, suffix, damage
     monkeypatch.setenv("RELEASE_VERSION", "0.1.0")
     monkeypatch.setenv("SOURCE_COMMIT", "a" * 40)
     with pytest.raises(SystemExit, match="Missing or empty|Checksum mismatch"):
-        exec(python_step("publish", "Verify source, all five packages and checksums"), {})
+        exec(python_step("publish", "Verify source, desktop and Shell packages and checksums"), {})
 
 
 @pytest.mark.parametrize("platform_name, machine, node, succeeds", [
@@ -844,7 +844,7 @@ def test_tag_push_creates_with_tracked_notes_or_uploads_matching_existing_releas
     exec(python_step("publish", "Publish verified release assets"), {})
     mutation = calls[-1]
     assert mutation[1:4] == ["release", "upload" if existing else "create", "v0.1.0"]
-    assert len([value for value in mutation if Path(value).parent.name == "release-assets"]) == 12
+    assert len([value for value in mutation if Path(value).parent.name == "release-assets"]) == 22
     if existing:
         assert "--clobber" in mutation
     else:
@@ -945,7 +945,7 @@ def test_main_preview_never_updates_latest_or_the_stable_feed():
     assert preview["needs"] == ["validate", "build", "source"]
     assert preview["permissions"] == {"contents": "write"}
     assert "publish-preview" not in config["jobs"]["update-website"]["needs"]
-    assert python_step("publish-preview", "Verify source, all five packages and checksums") == python_step("publish", "Verify source, all five packages and checksums")
+    assert python_step("publish-preview", "Verify source, desktop and Shell packages and checksums") == python_step("publish", "Verify source, desktop and Shell packages and checksums")
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -980,7 +980,7 @@ def test_main_preview_marks_prerelease_and_not_latest(source_repository, monkeyp
     assert publication[3] == tag and not tag.startswith("v")
     if not existing:
         assert publication[publication.index("--target")+1] == commit
-    assert len(list(assets.iterdir())) == 12
+    assert len(list(assets.iterdir())) == 22
     for package in assets.iterdir():
         assert tag in package.name
         if not package.name.endswith(".sha256"):
@@ -1005,11 +1005,11 @@ def test_preview_verification_still_checks_source_without_formal_notes(monkeypat
     monkeypatch.setenv("RELEASE_VERSION", "0.1.0")
     monkeypatch.setenv("SOURCE_COMMIT", "a"*40)
     monkeypatch.setenv("PREVIEW_BUILD", "1")
-    exec(python_step("publish-preview", "Verify source, all five packages and checksums"), {})
+    exec(python_step("publish-preview", "Verify source, desktop and Shell packages and checksums"), {})
     package = tmp_path/"ArgusAI-0.1.0-win-arm64-setup.exe"
     package.write_bytes(b"corrupted")
     with pytest.raises(SystemExit, match="Checksum mismatch"):
-        exec(python_step("publish-preview", "Verify source, all five packages and checksums"), {})
+        exec(python_step("publish-preview", "Verify source, desktop and Shell packages and checksums"), {})
 
 
 @pytest.mark.parametrize("damage", ["formal-release", "wrong-tag-target", "tag-lookup-failed"])

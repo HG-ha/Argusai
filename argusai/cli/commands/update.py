@@ -24,7 +24,14 @@ def _manager():
 def _payload(manager, state: dict[str, Any]) -> dict[str, Any]:
     result = dict(state)
     result["ok"] = state.get("status") not in {"error", "unsupported"} and not state.get("error")
-    if state.get("install_mode") == "source":
+    if state.get("edition") == "shell":
+        result["guidance"] = "Shell edition: stop running instances and extract the verified archive to a new directory; keep your existing data directory."
+        if state.get("status") == "downloaded":
+            from argusai.core.updater import SHELL_SUFFIXES
+            suffix = SHELL_SUFFIXES.get(state.get("platform", ""))
+            if suffix:
+                result["package_path"] = str(Path(manager.cache_dir) / f"ArgusAI-{state['version']}-{suffix}")
+    elif state.get("install_mode") == "source":
         result["guidance"] = label("update_source")
     elif state.get("status") == "downloaded":
         from argusai.core.updater import SUFFIXES

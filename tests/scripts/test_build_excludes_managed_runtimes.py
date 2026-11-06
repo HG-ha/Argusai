@@ -542,3 +542,20 @@ def test_runtime_assets_and_version_stay_consistent():
     assert package["version"] == build.version()
     for path in ("scripts/macos/argusai.entitlements", "scripts/macos/make_dmg.sh", "scripts/windows/argusai.nsi", "scripts/windows/launch-gui.vbs"):
         assert (REPO / path).is_file()
+
+@pytest.mark.parametrize('system', ['Windows', 'Linux', 'Darwin'])
+def test_shell_build_keeps_services_without_desktop(monkeypatch, system):
+    args = options(monkeypatch, system, '--edition', 'shell')
+    assert args.mode == 'folder' and args.console and args.skip_webui
+    flags = build.nuitka_args(args)
+    assert '--include-package=argusai' in flags
+    assert '--include-package=qqbot_agent_sdk' in flags
+    assert '--nofollow-import-to=webview' in flags
+    if system == 'Darwin':
+        assert not any(flag.startswith('--macos-app-mode=') for flag in flags)
+    assert not any(x.startswith(('--include-module=webview.', '--include-package=pythonnet', '--include-package=gi', '--include-data-dir=argusai/webui', '--include-data-dir=argusai/gui/pet_assets')) for x in flags)
+
+@pytest.mark.parametrize('flag', ['--onefile', '--nsis', '--dmg'])
+def test_shell_rejects_desktop_installers(monkeypatch, flag):
+    with pytest.raises(SystemExit):
+        options(monkeypatch, 'Windows', '--edition', 'shell', flag)

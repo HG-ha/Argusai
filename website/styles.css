@@ -489,3 +489,5 @@ main>* { min-width:0; }
 .cli-gallery-item .gallery-zoom { opacity:1; }
 .cli-gallery-item figcaption { margin-top:12px; color:var(--muted); font-size:12px; line-height:1.7; }
 @media(max-width:760px) { .cli-showcase{padding-block:8px 42px;} .cli-heading{align-items:flex-start;flex-direction:column;gap:14px;} .cli-heading h2{font-size:25px;} }
+
+.edition-downloads{padding-block:64px}.edition-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:32px}.edition-grid article{border-top:1px solid currentColor;padding-top:20px}.edition-grid ul{padding-left:20px;line-height:2}.edition-grid p{max-width:48ch}@media(max-width:760px){.edition-grid{grid-template-columns:1fr}}

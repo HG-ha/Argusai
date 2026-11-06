@@ -178,3 +178,20 @@ def test_native_update_regressions_run_after_tools_and_before_compilation():
     for test in ("tests/core/test_updater.py", "tests/core/test_updater_native.py",
                  "tests/gui/test_updates.py", "tests/scripts/test_release_feed.py"):
         assert test in command
+
+
+def test_complete_shell_set_is_verified_and_partial_set_rejected(evidence):
+    release, checksums = evidence
+    for suffix in feed.SHELL_PLATFORMS.values():
+        name = f'ArgusAI-0.1.3-{suffix}'
+        data = b'shell-package'
+        checksum = f'{hashlib.sha256(data).hexdigest()}  {name}\n'.encode()
+        checksums[name + '.sha256'] = checksum
+        for filename, body in ((name, data), (name + '.sha256', checksum)):
+            release['assets'].append({'name': filename, 'size': len(body), 'state': 'uploaded',
+                'digest': 'sha256:' + hashlib.sha256(body).hexdigest(),
+                'browser_download_url': f'{feed.RELEASE_ROOT}/download/v0.1.3/{filename}'})
+    assert set(build(evidence)['shell_assets']) == set(feed.PLATFORMS)
+    release['assets'].pop()
+    with pytest.raises(ValueError):
+        build(evidence)

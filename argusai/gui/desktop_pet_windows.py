@@ -12,6 +12,29 @@ from ctypes import wintypes as wt
 from PIL import Image, ImageChops
 
 
+def _disable_system_backdrop(form):
+    """Keep DWM material out of the per-pixel transparent companion surface."""
+    setter = ct.windll.dwmapi.DwmSetWindowAttribute
+    setter.argtypes = [wt.HWND, wt.DWORD, ct.c_void_p, wt.DWORD]
+    setter.restype = ct.c_long
+    value = ct.c_int(1)  # DWMSBT_NONE; unsupported Windows versions ignore it.
+    setter(form.Handle.ToInt64(), 38, ct.byref(value), ct.sizeof(value))
+
+
+def _install_transparent_theme(form):
+    # pywebview reapplies Mica on every OS theme change, even for transparent
+    # windows. Override only this form's theme callback, not the backend class.
+    original = form.update_title_bar_theme
+
+    def update_theme():
+        original()
+        _disable_system_backdrop(form)
+
+    form.update_title_bar_theme = update_theme
+    _disable_system_backdrop(form)
+    return original
+
+
 class WindowsPetAnimation:
     def __init__(self, controller):
         from System.Windows.Forms import Timer, MouseButtons
@@ -34,6 +57,7 @@ class WindowsPetAnimation:
         self.user = ct.windll.user32
         self.gdi = ct.windll.gdi32
         self.hwnd = self.form.Handle.ToInt64()
+        self._original_theme = _install_transparent_theme(self.form)
         from .desktop_pet import WINDOW_SIZE
         self.width, self.height = WINDOW_SIZE
         self.label = '点击小龙，开始聊天'
@@ -336,6 +360,7 @@ class WindowsPetAnimation:
         if self.closed:
             return
         self.closed = True
+        self.form.update_title_bar_theme = self._original_theme
         self.timer.Stop()
         self.timer.Dispose()
         if self.snap_timer is not None:

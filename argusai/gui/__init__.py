@@ -82,6 +82,9 @@ class Api(
 
 def main() -> None:
     """Bootstrap the GUI. Lazy-imported to keep ``Api`` importable in tests."""
+    from argusai.core.host import BUILD_EDITION
+    if BUILD_EDITION == "shell":
+        raise RuntimeError("Desktop GUI is unavailable in the Shell edition")
     from .launch import main as _main
 
     _main()

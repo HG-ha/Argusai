@@ -480,7 +480,7 @@ jobs:
       - name: Test update verification, native installer helpers and GUI handoff
         env:
           PYTEST_ADDOPTS: --timeout=240
-        run: uv run --locked --group build python -m pytest tests/core/test_updater.py tests/core/test_updater_native.py tests/gui/test_updates.py tests/scripts/test_release_feed.py -q --tb=short
+        run: uv run --locked --group build python -m pytest tests/core/test_updater.py tests/core/test_updater_native.py tests/gui/test_updates.py tests/scripts/test_release_feed.py tests/scripts/test_build_excludes_managed_runtimes.py tests/cli/test_cli_update.py -q --tb=short
       - name: Build frontend
         working-directory: argusai/webui
         run: |
@@ -606,6 +606,18 @@ jobs:
           print(json.dumps(report, ensure_ascii=False))
           if report.get("ok") is not True or report.get("platform") != expected_platform or report.get("backend") != expected_backend:
               raise SystemExit("Packaged GUI did not load its expected platform backend")
+      - name: Build Shell portable package
+        env:
+          LDFLAGS: ${{ matrix.runtime == 'linux-arm64' && '-fuse-ld=lld' || '' }}
+        run: uv run --locked --group build python build.py --edition shell --output-dir dist-shell
+      - name: Smoke-test packaged Shell services
+        shell: python
+        run: |
+          import os, subprocess
+          from pathlib import Path
+          executable = Path("dist-shell/ArgusAI-shell.dist") / ("ArgusAI-shell.exe" if os.name == "nt" else "ArgusAI-shell")
+          subprocess.run(["uv", "run", "--locked", "--group", "build", "python", "scripts/packaging/smoke_shell.py",
+                          str(executable.resolve()), "--work-dir", "build/shell-ci-smoke"], check=True)
       - name: Verify package and create SHA-256 checksum
         shell: python
         run: |
@@ -628,6 +640,7 @@ jobs:
           path: |
             ${{ env.PACKAGE_PATH }}
             ${{ env.PACKAGE_PATH }}.sha256
+            dist-shell/ArgusAI-${{ needs.validate.outputs.version }}-shell-${{ matrix.runtime }}.*
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -659,7 +672,7 @@ jobs:
           merge-multiple: true
           path: release-assets
       - &verify_release_assets
-        name: Verify source, all five packages and checksums
+        name: Verify source, desktop and Shell packages and checksums
         working-directory: release-assets
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
@@ -673,7 +686,9 @@ jobs:
 
           version = os.environ["RELEASE_VERSION"]
           suffixes = ("win-x64-setup.exe", "win-arm64-setup.exe", "macos-arm64.dmg",
-                      "linux-x64.tar.gz", "linux-arm64.tar.gz", "source.tar.gz")
+                      "linux-x64.tar.gz", "linux-arm64.tar.gz",
+                      "shell-win-x64.zip", "shell-win-arm64.zip", "shell-macos-arm64.tar.gz",
+                      "shell-linux-x64.tar.gz", "shell-linux-arm64.tar.gz", "source.tar.gz")
           packages = [Path(f"ArgusAI-{version}-{suffix}") for suffix in suffixes]
           for package in packages:
               if not package.is_file() or not package.stat().st_size:
