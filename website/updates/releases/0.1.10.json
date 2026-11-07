@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "version": "0.1.10",
+  "published_at": "2026-11-07T07:51:32Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.10",
+  "notes": "# ArgusAI v0.1.10\n\n- 新增独立桌面宠物，支持状态动画、拖动贴边与快捷对话入口。\n- 新增纯 Shell 发行版，保留 Agent、任务、通讯渠道、代理与逆向等命令行能力。\n- 桌面版与 Shell 版按平台独立打包、校验和下载，并分别适配更新检查。\n- 修复 Windows 桌宠透明背景及跨平台打包兼容问题。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-win-x64-setup.exe",
+      "sha256": "84fdbe5bd8e79439d75645e19e3f80a95b07afb4d1fcd97637498dfa437a9c2e",
+      "size": 89818544
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-win-arm64-setup.exe",
+      "sha256": "7e23d274c654e8486d4d4741a5209498ac21b334e543ae4a97a4d4c1e6a99d60",
+      "size": 78765835
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-linux-x64.tar.gz",
+      "sha256": "d93c630dd1f0509bda999fc77e82846a8e540817e99d2ea07224a212c75cc0fe",
+      "size": 133178884
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-linux-arm64.tar.gz",
+      "sha256": "4c7d1b53be26e3d7aa56328191dc81da58e306f685777e804bc9dd7b0d514415",
+      "size": 124538431
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-macos-arm64.dmg",
+      "sha256": "5424d2d9c5b8a87b1e47d422719f408b54b427355311b7fcc6642d640ab4e6a1",
+      "size": 121643976
+    }
+  },
+  "shell_assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-shell-win-x64.zip",
+      "sha256": "00122ec2f5e5f130804a1dfdac320b570b3bc7e61808d32b56e8333428715923",
+      "size": 98545620
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-shell-win-arm64.zip",
+      "sha256": "c12f270a8fda6a748c0cdc7c699d00ff5de2d78538a04862627d5b5d5e1cb0ee",
+      "size": 87058542
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-shell-linux-x64.tar.gz",
+      "sha256": "b16c251d722c488b63603d55e993953a284972840e60b05d92f5cd7dfc959c38",
+      "size": 149652104
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-shell-linux-arm64.tar.gz",
+      "sha256": "7185fcadcdaa3762ece8830169a8cf4956450e667f035f11d208f582b7ce22fb",
+      "size": 138074670
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.10/ArgusAI-0.1.10-shell-macos-arm64.tar.gz",
+      "sha256": "098e21deebb395f3fdc3d01948be249de0c64b42ae3885299fa9df5ac2c1d1a7",
+      "size": 95864637
+    }
+  }
+}
