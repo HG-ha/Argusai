@@ -84,6 +84,40 @@ def test_hidden_window_is_reused_and_close_destroys_once():
     assert calls == ['hide', 'show', 'destroy']
 
 
+def test_programmatic_pet_destroy_does_not_veto_delayed_native_close():
+    api = SimpleNamespace(_quit_requested=False)
+    pet = DesktopPet(api)
+    pet.window = SimpleNamespace(destroy=lambda: None)
+
+    pet.close()
+
+    assert pet.window is None
+    assert pet._closing is True
+    assert pet._on_closing() is True
+
+
+def test_programmatic_chat_destroy_does_not_veto_application_quit():
+    api = SimpleNamespace(_quit_requested=False)
+    pet = DesktopPet(api)
+    pet.chat_window = SimpleNamespace(destroy=lambda: None)
+
+    pet.close()
+
+    assert pet.chat_window is None
+    assert pet._closing is True
+    assert pet._on_chat_closing() is True
+
+
+def test_application_quit_allows_auxiliary_windows_to_close():
+    api = SimpleNamespace(_quit_requested=True)
+    pet = DesktopPet(api)
+    pet.window = SimpleNamespace()
+    pet.chat_window = SimpleNamespace()
+
+    assert pet._on_closing() is True
+    assert pet._on_chat_closing() is True
+
+
 def test_headless_host_cannot_create_companion():
     assert not WindowMixin().set_desktop_pet_enabled(True)['ok']
 

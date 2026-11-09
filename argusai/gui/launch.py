@@ -396,6 +396,11 @@ def main() -> None:
             except Exception:
                 log.debug("gui.close-to-tray hide failed", exc_info=True)
             return False
+        # From here the master window is taking the process down, whether the
+        # request came from Dock/Menu Quit or from an ordinary close on a
+        # platform without close-to-tray. Auxiliary windows must not interpret
+        # their ensuing Cocoa closing callbacks as user requests to hide.
+        api._quit_requested = True
         try:
             api._desktop_pet.close()
             api.persist_window_geometry()

@@ -317,6 +317,18 @@ class AssistantCronMixin:
             "high_risk_ack": high_risk_ack,
         }
 
+    @staticmethod
+    def _cron_session_name(job: dict[str, Any]) -> str:
+        """Name only conversations owned by the scheduled job.
+
+        ``destination=session`` wakes a user-owned existing conversation, so
+        its title is metadata outside the cron job's authority. Passing an
+        empty name lets ``_save_session`` preserve that title atomically.
+        """
+        if str(job.get("destination") or "new_session") == "session":
+            return ""
+        return f"Cron · {str(job.get('name') or job.get('id') or 'job')[:40]}"
+
     def _persist_cron_permission_event(
         self,
         job: dict[str, Any],
@@ -345,8 +357,7 @@ class AssistantCronMixin:
         if len(target_session.events) > 2000:
             del target_session.events[:-2000]
         path = self._session_path(target_session_id)
-        name = f"Cron · {str(job.get('name') or job.get('id') or 'job')[:40]}"
-        self._save_session(path, target_session, name)
+        self._save_session(path, target_session, self._cron_session_name(job))
 
     def _persist_cron_wakeup_event(
         self,
@@ -535,6 +546,7 @@ class AssistantCronMixin:
 
         job_id = str(job.get("id") or "")
         destination = str(job.get("destination") or "new_session")
+        preserve_session_name = destination == "session"
         session_id = str(job.get("session_id") or "").strip()
         if destination == "new_session":
             # A standalone scheduled run owns a distinct conversation. Run
@@ -557,9 +569,8 @@ class AssistantCronMixin:
                 self._inherit_cron_runtime(job, session_id, session)
             self._sync_cron_session_permissions(job, session_id, session)
             path = self._session_path(session_id)
-            name = f"Cron · {str(job.get('name') or job_id)[:40]}"
             if session is not None:
-                self._save_session(path, session, name)
+                self._save_session(path, session, self._cron_session_name(job))
         except Exception as exc:
             return {"ok": False, "status": "failed", "error": str(exc), "session_id": session_id}
         blocked_reason = self._assistant_cron_is_busy(session_id, job)
@@ -620,6 +631,7 @@ class AssistantCronMixin:
                     "cron_job_id": job_id,
                     "message_source": "cron",
                     "message_source_ref": job_id,
+                    "preserve_session_name": preserve_session_name,
                 })
             else:
                 event_context = (
@@ -647,6 +659,7 @@ class AssistantCronMixin:
                     "hide_user_message": True,
                     "message_source": "cron",
                     "message_source_ref": job_id,
+                    "preserve_session_name": preserve_session_name,
                 })
         except Exception as exc:
             return {"ok": False, "status": "failed", "error": str(exc), "session_id": session_id}
@@ -769,6 +782,7 @@ class AssistantCronMixin:
                                     "cron_job_id": job_id,
                                     "message_source": "cron",
                                     "message_source_ref": job_id,
+                                    "preserve_session_name": preserve_session_name,
                                 })
                                 if resumed.get("ok"):
                                     run_id = str(resumed.get("run_id") or run_id)
@@ -798,6 +812,7 @@ class AssistantCronMixin:
                                 "hide_user_message": True,
                                 "message_source": "cron",
                                 "message_source_ref": job_id,
+                                "preserve_session_name": preserve_session_name,
                             })
                             if resumed.get("ok"):
                                 run_id = str(resumed.get("run_id") or run_id)
@@ -979,6 +994,7 @@ class AssistantCronMixin:
                     "hide_user_message": True,
                     "message_source": "cron_result",
                     "message_source_ref": job_id,
+                    "preserve_session_name": True,
                     # Runtime callbacks only need a concise user-facing
                     # summary. Disabling extended thinking also avoids
                     # provider replay requirements from unrelated old turns.

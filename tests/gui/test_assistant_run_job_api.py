@@ -46,6 +46,61 @@ class _Api(AssistantRunMixin, AssistantStreamMixin):
         return {"ok": True, "reply": "resumed"}
 
 
+@pytest.mark.parametrize("title", ["新会话", "用户命名的巡检会话"])
+def test_native_cron_wake_preserves_exact_session_title(tmp_path, title) -> None:
+    from argusai.core.assistant import AssistantSession
+
+    api = _Api(tmp_path)
+    settings = api.settings_mgr.get()
+    settings.ai_enabled = False
+    settings.ai_endpoints = []
+    settings.data_root = str(tmp_path)
+    session = AssistantSession()
+
+    async def _chat(_message, **_kwargs):
+        return SimpleNamespace(
+            text="巡检完成",
+            tool_calls=[],
+            options=[],
+            pending_tool=None,
+            pending_tools=[],
+            blocks=[],
+            tool_trace=[],
+            plan=None,
+            status="done",
+        )
+
+    session.chat = _chat
+    api._assistant_sessions["sess-a"] = session
+    session_path = tmp_path / "sess-a.json"
+    session_path.write_text(
+        json.dumps({"name": title}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    api._session_path = lambda _session_id: session_path
+    api._apply_session_auto_approve_policy = lambda *_args: None
+    saved_names: list[str] = []
+    api._save_session = lambda _path, _session, name: saved_names.append(name)
+    api._session_prompt_context = lambda _session: {}
+
+    result = AssistantRunMixin._run_assistant_chat(
+        api,
+        {
+            "session_id": "sess-a",
+            "message": "定时任务隐藏唤醒提示",
+            "hide_user_message": True,
+            "message_source": "cron",
+            "preserve_session_name": True,
+        },
+        _routed=True,
+    )
+
+    assert result["ok"] is True
+    assert result["session_name"] == title
+    assert saved_names
+    assert set(saved_names) == {title}
+
+
 def test_list_and_get_recover_interrupted_jobs(tmp_path) -> None:
     api = _Api(tmp_path)
     store = AssistantRunJobStore(tmp_path)

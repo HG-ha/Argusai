@@ -11,6 +11,17 @@ from .assistant_common import *
 _CANCEL_BUSY_RELEASE_SECONDS = 20.0
 
 
+def _persisted_session_name(path: Path) -> tuple[bool, str]:
+    """Return whether session metadata exists and its exact persisted title."""
+    if not path.exists():
+        return False, ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return True, str(data.get("name") or "")
+    except Exception:
+        return False, ""
+
+
 class AssistantRunMixin:
     def _live_assistant_job_ids(self, session_id: str) -> set[str]:
         """Job ids still owned by an unfinished in-memory stream."""
@@ -685,6 +696,7 @@ class AssistantRunMixin:
                 + "\n\n[Current user request]\n" + prompt_message
             )
             stateless_message = prompt_message
+        preserve_session_name = bool(params.get("preserve_session_name"))
         session_name = message[:30] + ("..." if len(message) > 30 else "")
         if not session_name and history_attachments:
             session_name = str(
@@ -694,13 +706,16 @@ class AssistantRunMixin:
             )[:30]
         if not session_name and stored_voice:
             session_name = "语音消息"
-        if session_path.exists():
-            try:
-                saved_name = str(json.loads(session_path.read_text(encoding="utf-8")).get("name") or "").strip()
-                if saved_name and saved_name not in _DEFAULT_ASSISTANT_SESSION_NAMES:
-                    session_name = saved_name
-            except Exception:
-                pass
+        has_saved_name, saved_name = _persisted_session_name(session_path)
+        if preserve_session_name:
+            # Scheduled wakes of an existing conversation do not own its
+            # title. Preserve even default/empty titles so the hidden cron
+            # prompt cannot rename the tab in either storage or the live UI.
+            session_name = saved_name if has_saved_name else "新会话"
+        elif has_saved_name:
+            normalized_saved_name = saved_name.strip()
+            if normalized_saved_name and normalized_saved_name not in _DEFAULT_ASSISTANT_SESSION_NAMES:
+                session_name = normalized_saved_name
         if on_status:
             on_status(f"正在连接本地 Agent：{runtime.name}")
         if on_segment:
@@ -1289,15 +1304,13 @@ class AssistantRunMixin:
             *latest* user message). Falls back to a snippet of the
             current user message for brand-new sessions.
             """
-            sp = session_path
-            if sp.exists():
-                try:
-                    data = json.loads(sp.read_text(encoding="utf-8"))
-                    nm = str(data.get("name") or "").strip()
-                    if nm and nm not in _DEFAULT_ASSISTANT_SESSION_NAMES:
-                        return nm
-                except Exception:
-                    pass
+            has_saved_name, saved_name = _persisted_session_name(session_path)
+            if params.get("preserve_session_name"):
+                return saved_name if has_saved_name else "新会话"
+            if has_saved_name:
+                normalized_saved_name = saved_name.strip()
+                if normalized_saved_name and normalized_saved_name not in _DEFAULT_ASSISTANT_SESSION_NAMES:
+                    return normalized_saved_name
             if message:
                 return message[:30] + ("..." if len(message) > 30 else "")
             voice = params.get("voice")

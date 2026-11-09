@@ -197,6 +197,75 @@ def test_cron_fire_injects_explicit_context_snapshot(tmp_path: Path) -> None:
     }
 
 
+def test_cron_waking_existing_session_preserves_user_title(tmp_path: Path) -> None:
+    class _RealSaveApi(_Api):
+        _save_session = AssistantSessionsMixin._save_session
+
+    api = _RealSaveApi(tmp_path)
+    session = api._ensure_session("existing-chat")
+    path = api._session_path("existing-chat")
+    api._save_session(path, session, "用户命名的巡检会话")
+
+    result = api._fire_assistant_cron_job({
+        "id": "cron-existing-title",
+        "name": "每十分钟巡检",
+        "prompt": "继续检查",
+        "destination": "session",
+        "session_id": "existing-chat",
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "completed"
+    assert api.last_stream_params is not None
+    assert api.last_stream_params["preserve_session_name"] is True
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["name"] == "用户命名的巡检会话"
+
+
+def test_cron_waking_default_named_session_preserves_default_title(tmp_path: Path) -> None:
+    class _RealSaveApi(_Api):
+        _save_session = AssistantSessionsMixin._save_session
+
+    api = _RealSaveApi(tmp_path)
+    session = api._ensure_session("default-title-chat")
+    path = api._session_path("default-title-chat")
+    api._save_session(path, session, "新会话")
+
+    result = api._fire_assistant_cron_job({
+        "id": "cron-default-title",
+        "name": "后台巡检",
+        "prompt": "继续检查",
+        "destination": "session",
+        "session_id": "default-title-chat",
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "completed"
+    assert api.last_stream_params["preserve_session_name"] is True
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["name"] == "新会话"
+
+
+@pytest.mark.parametrize("destination", ["new_session", "dedicated_session"])
+def test_cron_owned_sessions_keep_cron_title(tmp_path: Path, destination: str) -> None:
+    class _RealSaveApi(_Api):
+        _save_session = AssistantSessionsMixin._save_session
+
+    api = _RealSaveApi(tmp_path)
+    result = api._fire_assistant_cron_job({
+        "id": f"cron-owned-{destination}",
+        "name": "资产巡检",
+        "prompt": "开始检查",
+        "destination": destination,
+        "notify": {"report_to_origin": False},
+    })
+
+    assert result["status"] == "completed"
+    assert api.last_stream_params["preserve_session_name"] is False
+    stored = json.loads(api._session_path(result["session_id"]).read_text(encoding="utf-8"))
+    assert stored["name"] == "Cron · 资产巡检"
+
+
 def test_cron_report_is_typed_and_excluded_from_model_context(tmp_path: Path) -> None:
     api = _Api(tmp_path)
     assert api._report_cron_result_to_origin(

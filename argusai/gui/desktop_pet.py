@@ -533,17 +533,28 @@ class DesktopPet:
             self.chat_window.events.loaded += reveal_chat
             if self.chat_window.events.loaded.is_set():
                 reveal_chat()
-            def close_chat():
-                if self._closing:
-                    return True
-                def hide_chat():
-                    self.chat_visible = False
-                    if self.chat_window is not None:
-                        self.chat_window.run_js('window.petChatVisibility && window.petChatVisibility(false)')
-                        self.chat_window.hide()
-                threading.Thread(target=hide_chat, daemon=True).start()
-                return False
-            self.chat_window.events.closing += close_chat
+            self.chat_window.events.closing += self._on_chat_closing
+
+    def _on_chat_closing(self) -> bool:
+        # ``destroy`` is dispatched asynchronously by Cocoa. The controller
+        # clears ``chat_window`` before scheduling it, so a later native close
+        # callback must be allowed through. Otherwise this auxiliary window
+        # vetoes the whole application Quit.
+        if (
+            self._closing
+            or self.chat_window is None
+            or getattr(self.api, '_quit_requested', False)
+        ):
+            return True
+
+        def hide_chat():
+            self.chat_visible = False
+            if self.chat_window is not None:
+                self.chat_window.run_js('window.petChatVisibility && window.petChatVisibility(false)')
+                self.chat_window.hide()
+
+        threading.Thread(target=hide_chat, daemon=True).start()
+        return False
 
     def position_chat(self) -> None:
         if self.chat_window is None or self.window is None:
@@ -568,7 +579,16 @@ class DesktopPet:
                               round(max(ay, min(ay + max(0, ah - height), y))))
 
     def _on_closing(self) -> bool:
-        if self._closing:
+        # On Cocoa, ``Window.destroy`` schedules ``NSWindow.close`` for the
+        # next main-loop turn. ``close`` has already cleared ``self.window``
+        # by then, which identifies this as programmatic teardown. Let it
+        # close instead of vetoing application termination and merely hiding
+        # the companion.
+        if (
+            self._closing
+            or self.window is None
+            or getattr(self.api, '_quit_requested', False)
+        ):
             return True
         threading.Thread(target=lambda: self.api.set_desktop_pet_enabled(False), daemon=True).start()
         return False
@@ -615,18 +635,18 @@ class DesktopPet:
     def close(self) -> None:
         with self.lock:
             self.snap_generation += 1
+            # Terminal lifecycle latch. Cocoa dispatches ``destroy`` to the
+            # main loop and may ask every auxiliary window for permission
+            # only after this method returns. Resetting the flag here lets a
+            # pet/chat window veto the parent application's Quit.
+            self._closing = True
             if self.chat_window is not None:
-                self._closing = True
                 chat, self.chat_window = self.chat_window, None
                 chat.destroy()
             if self.window is not None:
-                self._closing = True
                 if self._native_animation is not None:
                     from .tray import run_on_winforms_ui
                     animation, self._native_animation = self._native_animation, None
                     run_on_winforms_ui(animation.close)
                 window, self.window = self.window, None
-                try:
-                    window.destroy()
-                finally:
-                    self._closing = False
+                window.destroy()
