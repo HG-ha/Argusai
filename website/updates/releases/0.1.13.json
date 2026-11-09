@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "version": "0.1.13",
+  "published_at": "2026-11-09T20:29:46Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.13",
+  "notes": "# ArgusAI v0.1.13\n\n- 修复 Windows 桌面宠物透明背景偶发失效的问题。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-win-x64-setup.exe",
+      "sha256": "1fe3d0fe0439e2a8f5eab071f6361bd75558ca0a686d35b4a9b5b0f5e8ea7220",
+      "size": 89837799
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-win-arm64-setup.exe",
+      "sha256": "206893eca3a332af87173d04daf2eef292afb854b5e3d5bf7482c8fc70577ba3",
+      "size": 78772384
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-linux-x64.tar.gz",
+      "sha256": "6835cc2585f8c97818d7be4d79edb7cdc6292f4955168eca7e3ae708620c1528",
+      "size": 133179670
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-linux-arm64.tar.gz",
+      "sha256": "7e619cb3da2179b028af76aac6e2053e69fb4280623bde2fea2bd6f4bb4320bd",
+      "size": 124544709
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-macos-arm64.dmg",
+      "sha256": "d337ebc8075794153c866f4f2c996781c91995619303e334c6cef551a9dbbef5",
+      "size": 121642554
+    }
+  },
+  "shell_assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-shell-win-x64.zip",
+      "sha256": "2f8dc9260cdde7a126591f71adb2fd1380e2db68edd52f92f0936e96264fc3ce",
+      "size": 98545945
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-shell-win-arm64.zip",
+      "sha256": "ad67122d9509a5da0e0f194e75b0687baab6ac40b2c5f393ff833982a82926c6",
+      "size": 87061131
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-shell-linux-x64.tar.gz",
+      "sha256": "d0ca9cd7f818491bc117a3ff7ba4f9ea02a582f77e1e952bffbf69308dc0f034",
+      "size": 149653995
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-shell-linux-arm64.tar.gz",
+      "sha256": "709b605cc9fec911020bde5ecda256a7302b07647bf3027ce90589054f42d631",
+      "size": 138071257
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.13/ArgusAI-0.1.13-shell-macos-arm64.tar.gz",
+      "sha256": "d24a0b40c0706475e8fb054c0d068028358385708932cc5e1782f7353d009fb3",
+      "size": 95864881
+    }
+  }
+}
