@@ -43,7 +43,8 @@ SHELL_SUFFIXES = {key: f"shell-{key}" + (".zip" if key.startswith("win-") else "
 def _run_hdiutil(arguments: list[str], *, timeout: float) -> None:
     """Retry Disk Arbitration contention, preserving actionable diagnostics."""
     deadline = time.monotonic() + timeout
-    for attempt in range(3):
+    max_attempts = 6
+    for attempt in range(max_attempts):
         try:
             subprocess.run(["/usr/bin/hdiutil", *arguments], check=True,
                            capture_output=True, timeout=max(0.1, deadline - time.monotonic()))
@@ -55,8 +56,11 @@ def _run_hdiutil(arguments: list[str], *, timeout: float) -> None:
             transient = any(word in detail.lower() for word in (
                 "resource busy", "device busy", "temporarily unavailable", "resource temporarily",
             ))
-            delay = 0.5 * (attempt + 1)
-            if not transient or attempt == 2 or time.monotonic() + delay >= deadline:
+            # Disk Arbitration can retain a freshly created or detached image
+            # for several seconds on busy runners. Keep retries bounded by the
+            # caller's deadline while allowing that short contention to clear.
+            delay = min(0.5 * (2 ** attempt), 8.0)
+            if not transient or attempt == max_attempts - 1 or time.monotonic() + delay >= deadline:
                 raise RuntimeError(f"hdiutil {arguments[0]} failed: {detail.strip()}") from exc
             time.sleep(delay)
 

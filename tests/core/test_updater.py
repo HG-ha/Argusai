@@ -532,7 +532,9 @@ def test_download_failure_and_cancel_allow_retry(tmp_path):
 
 @pytest.mark.parametrize("diagnostic,failures,expected_calls", [
     (b"hdiutil: attach failed - Resource busy", 1, 2),
-    (b"hdiutil: attach failed - Resource temporarily unavailable", 3, 3),
+    (b"hdiutil: attach failed - Resource temporarily unavailable", 3, 4),
+    (b"hdiutil: attach failed - Resource temporarily unavailable", 5, 6),
+    (b"hdiutil: attach failed - Resource temporarily unavailable", 6, 6),
     (b"hdiutil: attach failed - no mountable file systems", 1, 1),
 ])
 def test_hdiutil_retries_only_transient_errors_and_preserves_stderr(monkeypatch, diagnostic, failures, expected_calls):
@@ -558,6 +560,7 @@ def test_hdiutil_retries_only_transient_errors_and_preserves_stderr(monkeypatch,
         _run_hdiutil(["attach", "-readonly", "fixture.dmg"], timeout=120)
     assert len(calls) == expected_calls
     assert len(sleeps) == expected_calls - 1
+    assert sleeps == [0.5, 1.0, 2.0, 4.0, 8.0][:expected_calls - 1]
 
 def test_shell_cannot_download_or_install_desktop_update(tmp_path, monkeypatch):
     from argusai.core import host
