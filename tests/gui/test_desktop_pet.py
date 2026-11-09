@@ -135,3 +135,51 @@ def test_windows_pet_disables_backdrop_again_after_theme_change(monkeypatch):
     form.update_title_bar_theme()
     assert calls == ['backend-mica', ('none', form)]
     assert other_form.update_title_bar_theme is original
+
+
+def test_windows_pet_repairs_layered_surface_and_hides_webview(monkeypatch):
+    from argusai.gui import desktop_pet_windows as native
+
+    class Function:
+        def __init__(self, callback):
+            self.callback = callback
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    calls = []
+    user = SimpleNamespace(
+        GetWindowLongW=Function(lambda hwnd, index: 0x08000000),
+        SetWindowLongW=Function(lambda hwnd, index, style: calls.append(('style', hwnd, index, style)) or 0),
+        SetWindowPos=Function(lambda *args: calls.append(('position', *args)) or 1),
+    )
+    form = SimpleNamespace(
+        Handle=SimpleNamespace(ToInt64=lambda: 123),
+        webview=SimpleNamespace(Visible=True),
+        ShowInTaskbar=True,
+    )
+    monkeypatch.setattr(native, '_disable_system_backdrop', lambda target: calls.append(('backdrop', target)))
+
+    assert native._ensure_transparent_surface(form, user) == 123
+    assert form.webview.Visible is False
+    assert form.ShowInTaskbar is False
+    assert ('style', 123, -20, 0x08080000) in calls
+    assert any(call[0] == 'position' and call[-1] == 0x27 for call in calls)
+    assert ('backdrop', form) in calls
+
+
+def test_windows_pet_repairs_transparency_after_theme_change(monkeypatch):
+    from argusai.gui import desktop_pet_windows as native
+
+    calls = []
+    form = SimpleNamespace(update_title_bar_theme=lambda: calls.append('backend-theme'))
+    repair = lambda target: calls.append(('repair', target))
+    monkeypatch.setattr(native, '_disable_system_backdrop', lambda target: calls.append(('backdrop', target)))
+
+    native._install_transparent_theme(form, repair)
+    assert calls == [('repair', form)]
+    calls.clear()
+    form.update_title_bar_theme()
+    assert calls == ['backend-theme', ('repair', form)]

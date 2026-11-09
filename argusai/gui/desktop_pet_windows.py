@@ -21,17 +21,46 @@ def _disable_system_backdrop(form):
     setter(form.Handle.ToInt64(), 38, ct.byref(value), ct.sizeof(value))
 
 
-def _install_transparent_theme(form):
+def _ensure_transparent_surface(form, user=None):
+    """Restore the native flags pywebview/DWM may reapply after creation."""
+    user = user or ct.windll.user32
+    hwnd = form.Handle.ToInt64()
+    get_style = user.GetWindowLongW
+    get_style.argtypes = [wt.HWND, ct.c_int]
+    get_style.restype = wt.LONG
+    set_style = user.SetWindowLongW
+    set_style.argtypes = [wt.HWND, ct.c_int, wt.LONG]
+    set_style.restype = wt.LONG
+    style = get_style(hwnd, -20)
+    layered = style | 0x80000  # WS_EX_LAYERED
+    if layered != style:
+        set_style(hwnd, -20, layered)
+        set_position = user.SetWindowPos
+        set_position.argtypes = [wt.HWND, wt.HWND, ct.c_int, ct.c_int,
+                                 ct.c_int, ct.c_int, wt.UINT]
+        set_position.restype = wt.BOOL
+        # Make the changed extended style effective without moving, sizing,
+        # activating or changing the companion's top-most order.
+        set_position(hwnd, None, 0, 0, 0, 0, 0x27)
+    webview = getattr(form, 'webview', None)
+    if webview is not None:
+        webview.Visible = False
+    form.ShowInTaskbar = False
+    _disable_system_backdrop(form)
+    return hwnd
+
+
+def _install_transparent_theme(form, repair=None):
     # pywebview reapplies Mica on every OS theme change, even for transparent
     # windows. Override only this form's theme callback, not the backend class.
     original = form.update_title_bar_theme
 
     def update_theme():
         original()
-        _disable_system_backdrop(form)
+        (repair or _disable_system_backdrop)(form)
 
     form.update_title_bar_theme = update_theme
-    _disable_system_backdrop(form)
+    (repair or _disable_system_backdrop)(form)
     return original
 
 
@@ -57,7 +86,9 @@ class WindowsPetAnimation:
         self.user = ct.windll.user32
         self.gdi = ct.windll.gdi32
         self.hwnd = self.form.Handle.ToInt64()
-        self._original_theme = _install_transparent_theme(self.form)
+        self._original_theme = _install_transparent_theme(
+            self.form, lambda _form: self._repair_surface()
+        )
         from .desktop_pet import WINDOW_SIZE
         self.width, self.height = WINDOW_SIZE
         self.label = '点击小龙，开始聊天'
@@ -165,12 +196,20 @@ class WindowsPetAnimation:
         self.form.MouseDown += down
         self.form.MouseMove += move
         self.form.MouseUp += up
+        self.form.VisibleChanged += self._on_visibility_changed
         self.timer = Timer()
         self.timer.Interval = 16
         self.timer.Tick += self._tick
         self.timer.Start()
         self._tick(None, None)
         self._contain()
+
+    def _repair_surface(self):
+        self.hwnd = _ensure_transparent_surface(self.form, self.user)
+
+    def _on_visibility_changed(self, *_):
+        if not self.closed and self.form.Visible:
+            self._repair_surface()
 
     def _update_size(self):
         from System.Windows.Forms import Screen
@@ -309,6 +348,11 @@ class WindowsPetAnimation:
             return
         now = time.monotonic()
         if now >= self.next_status:
+            # WinForms, WebView2 and DWM can restore their own background or
+            # extended style after theme, DPI, monitor and show/hide changes.
+            # Reassert the per-pixel alpha surface before painting the next
+            # status frame so a stale opaque host rectangle cannot persist.
+            self._repair_surface()
             self._update_size()
             from .desktop_pet import _PetBridge, ASSET_DIR
             status = _PetBridge(self.controller).status()
