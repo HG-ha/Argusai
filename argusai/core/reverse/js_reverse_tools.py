@@ -49,7 +49,14 @@ _SOURCE_MAP_RE = re.compile(r"//#\s*sourceMappingURL=([^\s]+)")
 _SOURCE_MAP_COMMENT_RE = re.compile(r"/\*#\s*sourceMappingURL=([^*]+)\*/")
 _BASE64ISH_RE = re.compile(r"\b[A-Za-z0-9+/]{24,}={0,2}\b")
 _HEXISH_RE = re.compile(r"(?:\\x[0-9a-fA-F]{2}|0x[0-9a-fA-F]{2,}|[0-9a-fA-F]{32,})")
-_JS_STRING_RE = re.compile(r"""(?P<q>['"`])(?P<body>(?:\\.|(?!\1).){2,400})(?P=q)""", re.DOTALL)
+# Keep the escaped and unescaped branches mutually exclusive.  Allowing the
+# unescaped branch to consume ``\\`` as well gives the regex two ways to match
+# every escape sequence.  On quote-heavy minified bundles a missing closing
+# delimiter then causes exponential backtracking and can monopolise the GIL.
+_JS_STRING_RE = re.compile(
+    r"""(?P<q>['"`])(?P<body>(?:\\.|(?!\1|\\).){2,400})(?P=q)""",
+    re.DOTALL,
+)
 _PARAM_RE = re.compile(r"""(?:[?&]|['"`])([a-zA-Z_][\w.-]{1,60})=""")
 _FETCH_LIKE_RE = re.compile(
     r"""(?P<kind>fetch|axios\.(?:get|post|put|delete|patch|request)|\w+\.open)\s*\((?P<args>.{0,700})""",
