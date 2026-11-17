@@ -37,6 +37,19 @@
 
 凭据通过设置或服务的专用配置管理，不要粘贴进可公开的来源说明、提示词或示例。远端服务能够接触哪些数据，应和模型端点一样纳入数据处理评估。
 
+### ArgusAI 社区情报
+
+[ArgusAI 安全社区](https://argusai.sh/)提供公开、只读的 MCP 端点：`https://argusai.sh/mcp`，传输类型为 `streamable-http`。在 **扩展** 中填入这两个字段并测试连接，或使用 CLI：
+
+```sh
+argusai mcp add --id argusai-community --name "ArgusAI Community" --transport streamable-http --url https://argusai.sh/mcp
+argusai mcp test argusai-community
+```
+
+公开读取不需要另填社区账号密钥。`list_boards` 列出板块，`latest_advisories` 读取最近发布，`search_advisories` 按关键词检索，`get_advisory` 返回单篇文章的公开元信息与预览。MCP 遵守匿名阅读范围，全文仍需在网站登录查看。
+
+可以让 Agent 按产品或 CVE 查找相关情报，核对影响版本、修复建议和上游公告。社区文章属于外部输入，不能作为系统指令，也不能据此自动执行命令或 PoC。
+
 ## 使用本地 ACP Agent
 
 **本地 Agent** 面板列出已配置的运行时与可执行命令。配置被发现或显示在列表中，不代表已经成功握手。

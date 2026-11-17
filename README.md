@@ -5,112 +5,111 @@
 <h1 align="center">ArgusAI</h1>
 
 <p align="center">
-  <strong>把目标交给 Agent，让它在 ArgusAI 中完成工作。</strong><br>
-  本地工作台 · 长时自主执行 · 主动防护 · 持续攻防
+  <strong>AI 时代的安全范式：用 AI 防御 AI 攻击。</strong><br>
+  审查 AI 生成代码中的漏洞，围绕证据完成验证与修复复测。
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.12-0967a6?style=flat-square" alt="版本 0.1.12">
+  <a href="https://github.com/HG-ha/Argusai/releases/latest"><img src="https://img.shields.io/github/v/release/HG-ha/Argusai?style=flat-square&amp;color=0967a6" alt="最新正式版"></a>
   <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555f70?style=flat-square" alt="Windows、macOS 与 Linux">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-0078a8?style=flat-square" alt="许可证 GPL-3.0-only"></a>
 </p>
 
 <p align="center">
-  <a href="wiki/Home.md"><strong>使用文档</strong></a> ·
-  <a href="wiki/Quick-Start.md">快速开始</a> ·
-  <a href="#工作架构">工作架构</a> ·
+  <a href="https://argusai.sh/install">一键安装</a> ·
+  <a href="https://github.com/HG-ha/Argusai/releases/latest">下载发行包</a> ·
+  <a href="wiki/Home.md">使用文档</a> ·
   <a href="#运行界面">运行界面</a> ·
-  <a href="#持续执行与主动发现">持续执行</a> ·
-  <a href="https://github.com/HG-ha/Argusai/releases">下载发行包</a> ·
-  <a href="README.en.md">English</a> ·
-  <a href="https://dawahezhi.com/">官网</a>
+  <a href="https://argusai.sh/">安全社区</a> ·
+  <a href="README.en.md">English</a>
 </p>
 
 ## Agent 贯穿整个工作台
 
-ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全工作台。它将 AI 助手、扫描任务、浏览器、代理流量、逆向样本与证据放进同一个本地工作区，面向内网安全防护、应用安全防护、攻击溯源与持续攻防，支持从目标与材料整理，一直推进到受控验证、报告和整改复测。
+ArgusAI 是由[达瓦科技](https://dawahezhi.com/)开源的 Agent 原生安全工作台，用于代码审查、Web 安全验证和逆向分析。它把 AI 助手、浏览器、代理流量、扫描任务和证据放在同一个本地工作区，帮助安全研究人员、开发者与防守团队检查 AI 生成代码和现有应用中的漏洞。
 
-把目标、材料和授权范围交给 Agent，由它组织扫描、浏览器、代理、逆向、知识管理与定时任务，连续推进分析、验证和交付。Agent 是开展工作的默认入口；各功能页面用于观察进度、查看证据，并在需要时介入。GUI、CLI 与 Python 内核连接同一套工作能力。
+把代码、HAR、JS 样本或测试目标连同授权范围交给 Agent，由它组织工具、推进分析、保存证据并复核修复结果。GUI 便于观察过程和检查材料，CLI 适合终端、SSH 与自动化，两者使用同一套内核；模型可使用你配置的端点，也可连接已安装的本地 ACP Agent。
 
-侧栏的完整对话与可拖动悬浮球都是任务入口，进入的是同一个 Agent 工作区。Agent 能理解当前应用页面、正在查看的任务或逆向作业，以及相关工作状态；引用具体材料后，它可以接着你正在做的工作继续执行。功能页与对话之间共享任务、样本和证据。
+## 快速开始
 
-项目面向企业安全团队、应用安全工程师、安全研究人员和明确授权的测试人员。底层 Agent 运行时也支持文件处理、日常信息整理和桌面协作，当前内置工具与工作流重点覆盖安全分析和逆向研究。
+访问[安装页](https://argusai.sh/install)选择版本，或从 [GitHub Releases](https://github.com/HG-ha/Argusai/releases/latest)直接下载。GUI 和 CLI 分别打包。
 
-## 工作架构
+| 版本 | 包含能力 | 安装参数 |
+| --- | --- | --- |
+| GUI 桌面版 | 桌面工作台与完整 CLI | `gui` |
+| CLI / Shell 版 | Agent、扫描、代理、逆向、通讯渠道与后台任务；无桌面界面 | `cli` |
 
-主 Agent 围绕目标建立计划，按需读取 Skills、发现工具，委派子 Agent 或组织持久小队，联动工作台各项能力。工具围绕有状态的工作对象组织，Agent 可以查询当前状态、沿同一对象继续操作，记录步骤与产物，再复核、调整计划，交付报告或进入下一阶段。
+下面默认安装 CLI；需要桌面版时，将命令中的 `cli` 改成 `gui`。
 
-```mermaid
-flowchart TB
-    Input["桌面 / 悬浮球 / CLI<br/>手机等设备的配对通讯渠道"] --> Session["会话执行控制<br/>session_id / 运行锁 / runtime 绑定"]
-    Events["间隔 / Cron<br/>Webhook / 文件变化"] --> Session
-    Session --> Native["AssistantSession<br/>原生端点 / 流式 Provider<br/>工具循环 / 进展守卫"]
-    Session --> ACP["本地 Agent（ACP）<br/>Codex / Cursor<br/>Claude Code"]
-    Native --> Main["主 Agent / 任务编排<br/>计划、委派、工具调用<br/>状态与结果复核"]
-    ACP --> Main
+Windows PowerShell：
 
-    Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>独立历史 / 工作台工具范围<br/>原生或 ACP 子 Agent"]
-    Main -->|组织 / 复核| Team["持久 Agent Team<br/>群聊序号 / 阅读游标<br/>成员执行邮箱"]
-    Main -->|按需读取| Skills["Skills<br/>任务方法与工作流"]
-    Main --> Tools["固定核心 tools[] / 工具目录<br/>按需取 schema / 调用工具<br/>读状态 / 操作工作对象"]
-    Sub --> Tools
-    Team --> Tools
-    Skills -.->|方法指导| Tools
-
-    Tools --> Web["浏览器 / MITM 代理<br/>标签页 / 流量 / 暂停请求<br/>断点 / 重放 / HAR"]
-    Tools --> Analysis["扫描 / 全域逆向<br/>Task / ReverseJob<br/>样本 / 派生产物 / 分析记录"]
-    Tools --> Execution["沙盒 / 主机 / 桌面<br/>Shell 会话 / 文件 / 环境<br/>脚本、SSH 与设备"]
-    Tools --> Knowledge["知识 / 证据 / 报告<br/>Case、Artifact、Evidence"]
-    Tools --> Recall["长期与跨会话记忆<br/>检索 → 会话 / 消息定位<br/>按页回读原文与归档引用"]
-    Tools -.-> Extensions["可选扩展与工具链<br/>MCP / 外部扫描器<br/>Ghidra / Frida / JADX"]
-    Web --> Review["主 Agent 复核<br/>状态 / 步骤 / 证据"]
-    Analysis --> Review
-    Execution --> Review
-    Knowledge --> Review
-    Recall -->|查证旧工作与关联任务| Review
-    Extensions -.-> Review
-    Review --> Delivery["交付报告 / PoC<br/>摘要与会话沙盒产物"]
-    Delivery -.->|按任务约定远程交付| Outbox["配对身份 / 持久 Outbox<br/>Adapter 发送<br/>投递状态核验"]
-    Review -->|更新计划 / 继续 / 复测| Main
-    Sub -.->|完成通知 / 条件唤醒| Main
-    Team -->|公开消息入队，成员处理或跳过| Team
-    Team -.->|查询群聊与产物| Review
+```powershell
+& ([scriptblock]::Create((irm https://argusai.sh/install.ps1))) -Edition cli
 ```
 
-内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。单轮循环与跨轮唤醒见[持续执行与主动发现](#持续执行与主动发现)，模块入口见[架构与开发](wiki/Architecture-and-Development.md)。
+macOS / Linux：
 
-### 运行时设计
+```sh
+curl -fsSL https://argusai.sh/install.sh | sh -s -- cli
+```
 
-会话历史、执行状态、流式事件和领域产物分别管理，再通过运行身份与材料引用连接。长任务与多 Agent 协作依赖以下机制：
+脚本自动识别系统与架构，从正式发行清单选包，并在安装前校验 SHA-256。[PowerShell 脚本](https://argusai.sh/install.ps1)与 [Shell 脚本](https://argusai.sh/install.sh)可直接查看。当前预编译包支持 Windows / Linux x64、ARM64 和 macOS Apple Silicon；Intel Mac 请参考[源码安装](wiki/Installation.md#从源码运行)。
 
-| 设计点 | 实际实现 |
-| --- | --- |
-| [运行身份与执行所有权](argusai/core/assistant/run_jobs.py) | `session_id` 标识会话，持久 `job_id` 标识任务运行，临时 `run_id` 标识增量事件流。恢复运行可以创建新流；真正的 worker 退出后才释放会话运行锁。运行状态以原子快照和单调 JSONL 事件保存。 |
-| [稳定控制面与能力目录](argusai/core/assistant/session_chat_loop.py) | 原生会话核心 `tools[]` 和 system 工具目录冻结；`tool_search` 返回领域 schema，`invoke_catalogue_tool` 执行真实工具，发现新能力不反复扩展常驻数组。Skills 先给短名单，再按需读取正文。 |
-| [有状态工具与连续操作](wiki/Architecture-and-Development.md#有状态工具与连续操作) | 模型使用对象 ID、步骤和材料引用，宿主管理实际资源与生命周期。浏览器标签、代理流量与暂停请求、交互式 Shell、Task、ReverseJob 各有状态查询及后续操作；Todo 记录阶段、完成条件、阻塞与证据，支持按当前状态推进。 |
-| [上下文预算与协议修复](argusai/core/assistant/session_budget.py) | 原生模型请求前压缩旧工具结果、提炼早期对话，并修复 tool-call/result 邻接关系。选定高值输出保留完整 Artifact，模型使用摘要与 `artifact_ref` 续接，按需重新读取原文。 |
-| [长期与跨会话记忆召回](argusai/core/assistant/session_memory.py) | 摘要、关键词索引与会话历史分开：索引保留全部可见用户消息摘要及最近 600 条消息中的细节。`search_memory` / `search_all_memory` 定位旧会话和消息，再由 `list_session_messages` / `read_session_message` 或 `read_assistant_session` 分页、按条回读；有归档引用时，沿 `case_id` / `artifact_ref` 读取原始产物。 |
-| [按资源分批执行](argusai/core/assistant/session_loop_control.py) | 原生工具循环将连续只读调用按允许的并行度和 resource keys 组成无冲突波次；修改、控制和待确认调用保留各自执行边界。并行完成后仍按原调用顺序写入历史。 |
-| [调用授权与能力投影](argusai/core/assistant/confirmation_broker.py) | 先展开真实工具名，再进入策略、确认与执行。Todo 计划批准、具体工具确认、子 Agent 的 readonly/scoped 工具范围分别处理，委派能力与确认模式一起决定子任务权限。 |
-| [ACP 会话与工具桥](argusai/core/agent_runtimes/tool_broker.py) | ACP 按 `initialize → session/new 或 load → prompt` 协商与运行。工作台工具经随机会话 token 绑定的回环 MCP broker 接入，每个绑定以执行锁串行确认和调用；外部 Agent 自有工具仍由其运行时管理。 |
-| [协作消息与条件唤醒](argusai/core/assistant/agent_threads.py) | 子 Agent 保存独立历史和能力范围；Team Room 的消息序号、阅读游标与成员执行邮箱分开。成员忙时保留输入，可合批、去重和静默跳过；完成通知先记录，再合批尝试唤醒可运行的父会话。 |
-| [持久调度控制](argusai/core/assistant/cron.py) | 用数据目录级宿主租约和执行锁协调调度；计划、运行记录、事件队列与文件基线原子落盘。签名 Webhook、文件变化及时间规则可投递到指定、专属或新会话，按检查点与任务材料接续。 |
-| [材料引用与派生关系](argusai/core/workspace/cases.py) | Case Artifact 保存原始内容、SHA-256 与大小，Evidence 关联材料、交互和 Finding；ReverseJob 记录样本与派生物。扫描报告、`artifact_ref` 和 `rev://` 各有存储及读取路径，可显式关联。 |
-| [流式事件与界面协议](argusai/core/assistant/ui_protocol.py) | 正文增量形成 `text_chunk`，工具结果与确认形成 `block_upsert`；UI 协议规范 block 身份、版本和 action，再投影到各入口。`StreamHub` 按 offset 消费内存事件，与持久 RunJob 日志分开。 |
-| [渠道出站与投递回执](argusai/core/channels/store.py) | 文件由执行会话沙盒按配对 identity 路由进入持久 Outbox；发送 worker 领取租约，由 Adapter 投递，记录分段进度并有限重试。`channel_delivery_status` 区分 `pending`、`processing`、`sent`、`failed`，保留平台错误原因。 |
+安装 CLI 后重新打开终端，检查版本并开始对话：
 
-执行线程、事件流和存储之间的关系、关键函数及设计边界，见 [Agent 运行时与数据流](wiki/Architecture-and-Development.md#agent-运行时与数据流)。
+```sh
+argusai version --json
+argusai chat
+```
 
-**Agent 围绕有状态工具连续工作。** 它可以继续操作同一浏览器标签页，检查代理中的既有流量和暂停请求，向同一个交互式 Shell 发送后续命令，或沿 ReverseJob 中的样本、分析结果和派生产物继续研究。Todo 记录步骤，任务与作业提供状态，证据引用连接阶段产物；Agent 根据这些信息决定下一步。实时连接、运行进程与持久记录分别管理，接续工作时先查询状态，再决定继续操作或重建环境。示例见[有状态工具与连续操作](wiki/Agent-and-Sessions.md#有状态工具与连续操作)。
+若 macOS / Linux 提示找不到命令，将 `~/.local/bin` 加入 `PATH`。GUI 版从应用菜单启动；Linux 也可运行 `argusai --gui`。首次使用先确认数据目录，配置模型端点或本地 ACP Agent，再按功能准备浏览器及外部工具。Linux GUI 需要 GTK / WebKitGTK；各平台依赖和手动安装步骤见[安装与环境](wiki/Installation.md)，首次任务见[快速入门](wiki/Quick-Start.md)。
 
-**旧工作可以主动找回。** Agent 根据目标生成检索词，必要时换词重查，从命中记录定位旧会话、消息与任务线索，回读原文和证据，再核验关联任务的当前状态继续工作。可检索的长期记录能够远超单次模型请求的上下文窗口，本轮只取需要的材料。检索覆盖本机当前数据环境中保存的会话；普通渠道入站消息发起的查询还受配对身份可访问会话的范围限制。用法与承接旧任务的示例见[跨会话长期记忆](wiki/Agent-and-Sessions.md#跨会话长期记忆与材料承接)。
+<details>
+<summary><strong>源码开发、构建与发布</strong></summary>
 
-**模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
+源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm。在项目根目录准备依赖并构建前端：
 
-**一部手机，也能接续电脑与服务器上的工作。** 在 QQ、飞书、Telegram 等渠道完成配对后，手机、平板或另一台电脑都能成为任务入口，用于下达任务、查看进度、接收报告和文件。Agent 通过工作宿主上已配置的 SSH、MCP 或其他连接处理可达电脑与服务器上的任务，桌面控制操作运行工具的宿主桌面，结果可回传到当前配对渠道。接入方式见[扩展与通讯渠道](wiki/Integrations.md)。
+```sh
+uv sync --locked
+npm --prefix argusai/webui ci
+npm --prefix argusai/webui run build
+uv run argusai --gui
+```
 
-需要任务完成后远程交付时，把“将摘要与报告文件发回当前配对渠道，并核验投递结果”写入交付条件。普通渠道回答可用 `channel_reply` 回复本次入站身份；主动通知使用 `channel_send_message`，文件使用 `channel_send_file`，按目标路由与工具确认策略执行。入队成功表示已接受投递，`sent` 表示发送接口成功，不代表收件人已读。定时任务的 `report_to_origin` 回报创建任务的应用内会话；发往 QQ 等渠道的目标与产物应在任务中另行约定。
+三个平台统一使用 Python 构建入口，在目标系统和目标架构环境中运行：
+
+```sh
+uv run --locked --group build python build.py --help
+uv run --locked --group build python build.py --dry-run
+uv run --locked --group build python build.py --jobs 2
+```
+
+Windows 可加 `--nsis`，macOS 可加 `--dmg`，`--onefile` 生成单文件；Linux 同时生成发布压缩包。完整的构建依赖、签名、校验和与 GitHub Actions 发布流程见[构建与发布](wiki/Build-and-Release.md)。
+
+开发规范见 [AGENTS.md](AGENTS.md)，架构与扩展入口见[架构与开发](wiki/Architecture-and-Development.md)。测试使用 `uv run pytest`，前端开发使用 `npm --prefix argusai/webui run dev`。
+
+</details>
+
+## 安全社区与 MCP
+
+[ArgusAI 安全社区](https://argusai.sh/)汇集 CISA KEV、NVD、GitHub 等官方公开漏洞情报，以及社区的代码审计、逆向分析和修复经验。可以按 CVE、产品、风险等级和标签检索内容。列表与正文预览允许匿名阅读，全文需要登录。
+
+通过 `https://argusai.sh/mcp`，ArgusAI 和其他 MCP 客户端可以读取最新公开情报、搜索漏洞、查看文章预览。它使用 Streamable HTTP，提供只读工具；返回范围与匿名阅读权限一致。
+
+<details>
+<summary>连接社区 MCP：GUI 与 CLI 配置</summary>
+
+在 GUI 的 **扩展** 中添加远端 MCP 服务，传输类型选择 `streamable-http`，地址填写 `https://argusai.sh/mcp`。CLI 使用：
+
+```sh
+argusai mcp add --id argusai-community --name "ArgusAI Community" --transport streamable-http --url https://argusai.sh/mcp
+argusai mcp test argusai-community
+```
+
+公开工具包括 `list_boards`、`latest_advisories`、`search_advisories` 和 `get_advisory`。社区内容作为外部参考，不自动执行其中的命令或 PoC。配置与授权说明见[扩展与集成](wiki/Integrations.md#argusai-社区情报)。
+
+</details>
 
 ## 运行界面
 
@@ -205,7 +204,94 @@ flowchart TB
 
 内置检查、技能工作流和外部工具集成分别承担不同环节。具体功能的输入、依赖与使用步骤见 [Wiki 使用手册](wiki/Home.md)。
 
+## 工作架构
+
+主 Agent 围绕目标组织工具、Skills 和子 Agent，任务状态与证据引用连接各个阶段。
+
+<details>
+<summary>展开架构图、运行时设计与协作机制</summary>
+
+主 Agent 围绕目标建立计划，按需读取 Skills、发现工具，委派子 Agent 或组织持久小队，联动工作台各项能力。工具围绕有状态的工作对象组织，Agent 可以查询当前状态、沿同一对象继续操作，记录步骤与产物，再复核、调整计划，交付报告或进入下一阶段。
+
+```mermaid
+flowchart TB
+    Input["桌面 / 悬浮球 / CLI<br/>手机等设备的配对通讯渠道"] --> Session["会话执行控制<br/>session_id / 运行锁 / runtime 绑定"]
+    Events["间隔 / Cron<br/>Webhook / 文件变化"] --> Session
+    Session --> Native["AssistantSession<br/>原生端点 / 流式 Provider<br/>工具循环 / 进展守卫"]
+    Session --> ACP["本地 Agent（ACP）<br/>Codex / Cursor<br/>Claude Code"]
+    Native --> Main["主 Agent / 任务编排<br/>计划、委派、工具调用<br/>状态与结果复核"]
+    ACP --> Main
+
+    Main -->|并行委派 / 汇总| Sub["临时子 Agent<br/>独立历史 / 工作台工具范围<br/>原生或 ACP 子 Agent"]
+    Main -->|组织 / 复核| Team["持久 Agent Team<br/>群聊序号 / 阅读游标<br/>成员执行邮箱"]
+    Main -->|按需读取| Skills["Skills<br/>任务方法与工作流"]
+    Main --> Tools["固定核心 tools[] / 工具目录<br/>按需取 schema / 调用工具<br/>读状态 / 操作工作对象"]
+    Sub --> Tools
+    Team --> Tools
+    Skills -.->|方法指导| Tools
+
+    Tools --> Web["浏览器 / MITM 代理<br/>标签页 / 流量 / 暂停请求<br/>断点 / 重放 / HAR"]
+    Tools --> Analysis["扫描 / 全域逆向<br/>Task / ReverseJob<br/>样本 / 派生产物 / 分析记录"]
+    Tools --> Execution["沙盒 / 主机 / 桌面<br/>Shell 会话 / 文件 / 环境<br/>脚本、SSH 与设备"]
+    Tools --> Knowledge["知识 / 证据 / 报告<br/>Case、Artifact、Evidence"]
+    Tools --> Recall["长期与跨会话记忆<br/>检索 → 会话 / 消息定位<br/>按页回读原文与归档引用"]
+    Tools -.-> Extensions["可选扩展与工具链<br/>MCP / 外部扫描器<br/>Ghidra / Frida / JADX"]
+    Web --> Review["主 Agent 复核<br/>状态 / 步骤 / 证据"]
+    Analysis --> Review
+    Execution --> Review
+    Knowledge --> Review
+    Recall -->|查证旧工作与关联任务| Review
+    Extensions -.-> Review
+    Review --> Delivery["交付报告 / PoC<br/>摘要与会话沙盒产物"]
+    Delivery -.->|按任务约定远程交付| Outbox["配对身份 / 持久 Outbox<br/>Adapter 发送<br/>投递状态核验"]
+    Review -->|更新计划 / 继续 / 复测| Main
+    Sub -.->|完成通知 / 条件唤醒| Main
+    Team -->|公开消息入队，成员处理或跳过| Team
+    Team -.->|查询群聊与产物| Review
+```
+
+内置领域工具与 Skills 按需发现和使用。会话沙盒提供文件与脚本环境，浏览器、代理、扫描服务及外部 Agent 使用各自的运行环境。单轮循环与跨轮唤醒见[持续执行与主动发现](#持续执行与主动发现)，模块入口见[架构与开发](wiki/Architecture-and-Development.md)。
+
+### 运行时设计
+
+会话历史、执行状态、流式事件和领域产物分别管理，再通过运行身份与材料引用连接。长任务与多 Agent 协作依赖以下机制：
+
+| 设计点 | 实际实现 |
+| --- | --- |
+| [运行身份与执行所有权](argusai/core/assistant/run_jobs.py) | `session_id` 标识会话，持久 `job_id` 标识任务运行，临时 `run_id` 标识增量事件流。恢复运行可以创建新流；真正的 worker 退出后才释放会话运行锁。运行状态以原子快照和单调 JSONL 事件保存。 |
+| [稳定控制面与能力目录](argusai/core/assistant/session_chat_loop.py) | 原生会话核心 `tools[]` 和 system 工具目录冻结；`tool_search` 返回领域 schema，`invoke_catalogue_tool` 执行真实工具，发现新能力不反复扩展常驻数组。Skills 先给短名单，再按需读取正文。 |
+| [有状态工具与连续操作](wiki/Architecture-and-Development.md#有状态工具与连续操作) | 模型使用对象 ID、步骤和材料引用，宿主管理实际资源与生命周期。浏览器标签、代理流量与暂停请求、交互式 Shell、Task、ReverseJob 各有状态查询及后续操作；Todo 记录阶段、完成条件、阻塞与证据，支持按当前状态推进。 |
+| [上下文预算与协议修复](argusai/core/assistant/session_budget.py) | 原生模型请求前压缩旧工具结果、提炼早期对话，并修复 tool-call/result 邻接关系。选定高值输出保留完整 Artifact，模型使用摘要与 `artifact_ref` 续接，按需重新读取原文。 |
+| [长期与跨会话记忆召回](argusai/core/assistant/session_memory.py) | 摘要、关键词索引与会话历史分开：索引保留全部可见用户消息摘要及最近 600 条消息中的细节。`search_memory` / `search_all_memory` 定位旧会话和消息，再由 `list_session_messages` / `read_session_message` 或 `read_assistant_session` 分页、按条回读；有归档引用时，沿 `case_id` / `artifact_ref` 读取原始产物。 |
+| [按资源分批执行](argusai/core/assistant/session_loop_control.py) | 原生工具循环将连续只读调用按允许的并行度和 resource keys 组成无冲突波次；修改、控制和待确认调用保留各自执行边界。并行完成后仍按原调用顺序写入历史。 |
+| [调用授权与能力投影](argusai/core/assistant/confirmation_broker.py) | 先展开真实工具名，再进入策略、确认与执行。Todo 计划批准、具体工具确认、子 Agent 的 readonly/scoped 工具范围分别处理，委派能力与确认模式一起决定子任务权限。 |
+| [ACP 会话与工具桥](argusai/core/agent_runtimes/tool_broker.py) | ACP 按 `initialize → session/new 或 load → prompt` 协商与运行。工作台工具经随机会话 token 绑定的回环 MCP broker 接入，每个绑定以执行锁串行确认和调用；外部 Agent 自有工具仍由其运行时管理。 |
+| [协作消息与条件唤醒](argusai/core/assistant/agent_threads.py) | 子 Agent 保存独立历史和能力范围；Team Room 的消息序号、阅读游标与成员执行邮箱分开。成员忙时保留输入，可合批、去重和静默跳过；完成通知先记录，再合批尝试唤醒可运行的父会话。 |
+| [持久调度控制](argusai/core/assistant/cron.py) | 用数据目录级宿主租约和执行锁协调调度；计划、运行记录、事件队列与文件基线原子落盘。签名 Webhook、文件变化及时间规则可投递到指定、专属或新会话，按检查点与任务材料接续。 |
+| [材料引用与派生关系](argusai/core/workspace/cases.py) | Case Artifact 保存原始内容、SHA-256 与大小，Evidence 关联材料、交互和 Finding；ReverseJob 记录样本与派生物。扫描报告、`artifact_ref` 和 `rev://` 各有存储及读取路径，可显式关联。 |
+| [流式事件与界面协议](argusai/core/assistant/ui_protocol.py) | 正文增量形成 `text_chunk`，工具结果与确认形成 `block_upsert`；UI 协议规范 block 身份、版本和 action，再投影到各入口。`StreamHub` 按 offset 消费内存事件，与持久 RunJob 日志分开。 |
+| [渠道出站与投递回执](argusai/core/channels/store.py) | 文件由执行会话沙盒按配对 identity 路由进入持久 Outbox；发送 worker 领取租约，由 Adapter 投递，记录分段进度并有限重试。`channel_delivery_status` 区分 `pending`、`processing`、`sent`、`failed`，保留平台错误原因。 |
+
+执行线程、事件流和存储之间的关系、关键函数及设计边界，见 [Agent 运行时与数据流](wiki/Architecture-and-Development.md#agent-运行时与数据流)。
+
+**Agent 围绕有状态工具连续工作。** 它可以继续操作同一浏览器标签页，检查代理中的既有流量和暂停请求，向同一个交互式 Shell 发送后续命令，或沿 ReverseJob 中的样本、分析结果和派生产物继续研究。Todo 记录步骤，任务与作业提供状态，证据引用连接阶段产物；Agent 根据这些信息决定下一步。实时连接、运行进程与持久记录分别管理，接续工作时先查询状态，再决定继续操作或重建环境。示例见[有状态工具与连续操作](wiki/Agent-and-Sessions.md#有状态工具与连续操作)。
+
+**旧工作可以主动找回。** Agent 根据目标生成检索词，必要时换词重查，从命中记录定位旧会话、消息与任务线索，回读原文和证据，再核验关联任务的当前状态继续工作。可检索的长期记录能够远超单次模型请求的上下文窗口，本轮只取需要的材料。检索覆盖本机当前数据环境中保存的会话；普通渠道入站消息发起的查询还受配对身份可访问会话的范围限制。用法与承接旧任务的示例见[跨会话长期记忆](wiki/Agent-and-Sessions.md#跨会话长期记忆与材料承接)。
+
+**模型端点与本地 Agent 都能驱动工作。** 可以使用自己配置的 AI 端点，也可以通过 ACP 接入已在本机安装、登录的 Codex、Cursor、Claude Code 等 Agent，让它们在 ArgusAI 内工作，并经工具桥调用工作台能力。ACP 主对话无需重复配置 ArgusAI 原生端点；原生子 Agent、小队成员及其他 AI 分析任务使用各自的运行时与模型配置。
+
+**一部手机，也能接续电脑与服务器上的工作。** 在 QQ、飞书、Telegram 等渠道完成配对后，手机、平板或另一台电脑都能成为任务入口，用于下达任务、查看进度、接收报告和文件。Agent 通过工作宿主上已配置的 SSH、MCP 或其他连接处理可达电脑与服务器上的任务，桌面控制操作运行工具的宿主桌面，结果可回传到当前配对渠道。接入方式见[扩展与通讯渠道](wiki/Integrations.md)。
+
+需要任务完成后远程交付时，把“将摘要与报告文件发回当前配对渠道，并核验投递结果”写入交付条件。普通渠道回答可用 `channel_reply` 回复本次入站身份；主动通知使用 `channel_send_message`，文件使用 `channel_send_file`，按目标路由与工具确认策略执行。入队成功表示已接受投递，`sent` 表示发送接口成功，不代表收件人已读。定时任务的 `report_to_origin` 回报创建任务的应用内会话；发往 QQ 等渠道的目标与产物应在任务中另行约定。
+
+</details>
+
 ## 持续执行与主动发现
+
+长任务可在会话中持续推进，也可通过时间规则、Webhook 或文件变化触发后续工作。
+
+<details>
+<summary>展开自主执行、跨轮续跑与事件触发说明</summary>
 
 ### 数十小时级单轮自主执行
 
@@ -319,7 +405,14 @@ flowchart TB
 
 查看 [自动化手册](wiki/Automation.md)，选择触发器、对话目的地、运行次数与通知策略。
 
+</details>
+
 ## 企业中的实际工作流程
+
+围绕授权范围组织内网防护、应用验证与事件调查，并保留交付材料。
+
+<details>
+<summary>展开企业工作流与交付示例</summary>
 
 | 工作方向 | 组织输入与执行过程 | 形成的工作材料 |
 | --- | --- | --- |
@@ -329,54 +422,6 @@ flowchart TB
 | 持续攻防 | 围绕已授权资产与约定靶场，通过长时单轮执行、周期任务和事件触发，串联暴露面发现、单独授权的受控验证、检测证据复核与整改复测 | 演练链路、检测覆盖与差距、变化通知、复盘材料，以及可复用的技能和防护检查步骤 |
 
 告警与远程状态通过使用者提供的材料或已配置工具获取，按授权范围组织检查与验证。漏洞定性、风险接受、生产变更与事件处置由负责团队审核。查看[企业工作流](wiki/Enterprise-Workflows.md)了解任务输入、人工复核点和交付组织。
-
-## 快速开始
-
-当前版本为 `0.1.12`。从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载对应平台的预编译包和 `.sha256`，按[安装与环境](wiki/Installation.md)校验、安装后即可启动桌面。终端示例使用 `argusai` 命令入口；未设置入口时，Windows 在安装目录中使用 `.\ArgusAI.exe`、Linux 在解压目录中使用 `./ArgusAI`，macOS 入口见[CLI 命令参考](wiki/CLI-Reference.md)。
-
-```sh
-argusai version --json
-argusai --gui
-argusai chat
-```
-
-**两个发行版本：** 桌面版包含 GUI 与完整命令行；Shell 版仅提供命令行，适合服务器和 SSH 环境，保留 Agent、通讯渠道、任务、代理与逆向能力。Shell 包名称带 `shell`，无需桌面 WebView 组件；浏览器等外部运行时仍按功能准备。正式包与测试预发布包见 [Releases](https://github.com/HG-ha/Argusai/releases)，使用步骤见[安装说明](wiki/Installation.md)。
-
-首次启动后，确认数据目录，配置原生 AI 端点与模型，或选择已安装、登录并测试通过的本地 ACP Agent；按需要检查浏览器与外部工具路径。打开完整 Agent 对话或点击悬浮球，把目标、材料和约束交给 Agent，让它建立计划并开展工作。第一次可以提供一份允许分析的 HAR 或 JS，让 Agent 整理接口、标注疑点并归档证据，再到相应功能页核对结果。
-
-| 选择入口 | 如何开始 | 继续阅读 |
-| --- | --- | --- |
-| 完整 Agent 对话 | 从侧栏进入或新建对话，直接描述目标并交给 Agent 执行 | [Agent 与会话](wiki/Agent-and-Sessions.md) |
-| Agent 悬浮球 | 在功能页点击浮球接续当前工作；可拖动位置，查看运行和未读提示 | [浮球与工作台协作](wiki/Agent-and-Sessions.md) |
-| 启动桌面 | 安装后的桌面入口，或 `argusai --gui` | [快速开始](wiki/Quick-Start.md) |
-| 交互终端 | `argusai` 或 `argusai chat` | [CLI 命令参考](wiki/CLI-Reference.md) |
-| 发行包 | 从 [Releases](https://github.com/HG-ha/Argusai/releases) 下载发布后对应平台的包与 `.sha256` | [安装与环境](wiki/Installation.md) |
-
-Windows 桌面需要 WebView2 Runtime，Windows ARM64 还需要原生 Microsoft .NET Desktop Runtime；macOS 桌面自动化需要系统权限；Linux 桌面需要 GTK 与 WebKitGTK。外部模型、扫描器、逆向 CLI 和设备按功能准备，详细步骤见[安装说明](wiki/Installation.md)。
-
-<details>
-<summary><strong>源码开发、构建与发布</strong></summary>
-
-源码运行需要 Python 3.12+、uv、Node.js 18+ 和 npm。在项目根目录准备依赖并构建前端：
-
-```sh
-uv sync --locked
-npm --prefix argusai/webui ci
-npm --prefix argusai/webui run build
-uv run argusai --gui
-```
-
-三个平台统一使用 Python 构建入口，在目标系统和目标架构环境中运行：
-
-```sh
-uv run --locked --group build python build.py --help
-uv run --locked --group build python build.py --dry-run
-uv run --locked --group build python build.py --jobs 2
-```
-
-Windows 可加 `--nsis`，macOS 可加 `--dmg`，`--onefile` 生成单文件；Linux 同时生成发布压缩包。完整的构建依赖、签名、校验和与 GitHub Actions 发布流程见[构建与发布](wiki/Build-and-Release.md)。
-
-开发规范见 [AGENTS.md](AGENTS.md)，架构与扩展入口见[架构与开发](wiki/Architecture-and-Development.md)。测试使用 `uv run pytest`，前端开发使用 `npm --prefix argusai/webui run dev`。
 
 </details>
 

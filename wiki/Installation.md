@@ -2,19 +2,39 @@
 
 [文档首页](Home.md) · [快速开始](Quick-Start.md) · [构建发行包](Build-and-Release.md)
 
-发行包适合直接使用桌面工作台；源码环境适合开发、调试和脚本化使用。当前版本为 `0.1.7`。不同功能依赖可以分开准备，不必在第一次启动前装齐全部逆向工具。
+GUI 发行包包含桌面工作台与完整命令行；CLI / Shell 包适合终端、服务器和 SSH 环境。源码环境用于开发与调试。正式版本以[安装页](https://argusai.sh/install)和 [GitHub Releases](https://github.com/HG-ha/Argusai/releases/latest) 为准。
+
+## 一键安装
+
+以下命令安装 CLI；需要桌面版时，将 `cli` 改成 `gui`。
+
+Windows PowerShell：
+
+```powershell
+& ([scriptblock]::Create((irm https://argusai.sh/install.ps1))) -Edition cli
+```
+
+macOS / Linux：
+
+```sh
+curl -fsSL https://argusai.sh/install.sh | sh -s -- cli
+```
+
+脚本识别本机系统与架构，读取正式发行清单，下载后校验 SHA-256。可先查看 [install.ps1](https://argusai.sh/install.ps1) 或 [install.sh](https://argusai.sh/install.sh)，也可在[安装页](https://argusai.sh/install)直接下载。
+
+CLI 安装完成后，重新打开终端运行 `argusai --help`。Windows 脚本会添加用户级命令入口；macOS / Linux 将入口放在 `~/.local/bin`，需要在 `PATH` 中包含这个目录。macOS GUI 安装到 `~/Applications/ArgusAI.app`，Windows GUI 打开安装向导，Linux GUI 可通过 `argusai --gui` 启动。
 
 ## 发行包
 
-公开版本发布后，从 [GitHub Releases](https://github.com/HG-ha/Argusai/releases) 下载与你的系统和架构匹配的产物及 `.sha256` 文件。
+从 [GitHub Releases](https://github.com/HG-ha/Argusai/releases) 下载与你的系统、架构和版本形态匹配的产物及 `.sha256` 文件。下文文件名中的 `VERSION` 需替换为选定的正式版本号。
 
-| 平台 | 自动发布产物 | 额外运行环境 |
-| --- | --- | --- |
-| Windows x64 | `ArgusAI-0.1.7-win-x64-setup.exe` | pywebview 使用的 WebView2 Runtime |
-| Windows ARM64 | `ArgusAI-0.1.7-win-arm64-setup.exe` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
-| macOS Apple Silicon | `ArgusAI-0.1.7-macos-arm64.dmg` | 运行于对应 macOS 环境；桌面自动化另需权限 |
-| Linux x64 | `ArgusAI-0.1.7-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
-| Linux ARM64 | `ArgusAI-0.1.7-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
+| 平台 | GUI 桌面版 | CLI / Shell 版 | GUI 额外运行环境 |
+| --- | --- | --- | --- |
+| Windows x64 | `ArgusAI-VERSION-win-x64-setup.exe` | `ArgusAI-VERSION-shell-win-x64.zip` | WebView2 Runtime |
+| Windows ARM64 | `ArgusAI-VERSION-win-arm64-setup.exe` | `ArgusAI-VERSION-shell-win-arm64.zip` | 原生 WebView2 Runtime 与 Microsoft .NET Desktop Runtime |
+| macOS Apple Silicon | `ArgusAI-VERSION-macos-arm64.dmg` | `ArgusAI-VERSION-shell-macos-arm64.tar.gz` | 对应 macOS 环境；桌面自动化另需权限 |
+| Linux x64 | `ArgusAI-VERSION-linux-x64.tar.gz` | `ArgusAI-VERSION-shell-linux-x64.tar.gz` | GTK、WebKitGTK 等桌面运行库 |
+| Linux ARM64 | `ArgusAI-VERSION-linux-arm64.tar.gz` | `ArgusAI-VERSION-shell-linux-arm64.tar.gz` | 对应 ARM64 发行版的 GTK、WebKitGTK 等桌面运行库 |
 
 这些是自动工作流目前配置的发布平台。其他架构应在对应环境中从源码运行或自行构建，不能仅修改文件名来转换架构。
 
@@ -25,8 +45,8 @@
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\ArgusAI-0.1.7-win-x64-setup.exe -Algorithm SHA256
-Get-Content .\ArgusAI-0.1.7-win-x64-setup.exe.sha256
+Get-FileHash .\ArgusAI-VERSION-win-x64-setup.exe -Algorithm SHA256
+Get-Content .\ArgusAI-VERSION-win-x64-setup.exe.sha256
 ```
 
 比较两者的哈希，不要把摘要文件中的文件名也纳入比较。
@@ -34,13 +54,13 @@ Get-Content .\ArgusAI-0.1.7-win-x64-setup.exe.sha256
 Linux：
 
 ```sh
-sha256sum -c ArgusAI-0.1.7-linux-x64.tar.gz.sha256
+sha256sum -c ArgusAI-VERSION-linux-x64.tar.gz.sha256
 ```
 
 macOS：
 
 ```sh
-shasum -a 256 -c ArgusAI-0.1.7-macos-arm64.dmg.sha256
+shasum -a 256 -c ArgusAI-VERSION-macos-arm64.dmg.sha256
 ```
 
 ### Windows
@@ -60,8 +80,8 @@ shasum -a 256 -c ArgusAI-0.1.7-macos-arm64.dmg.sha256
 解压 tar.gz 后进入版本目录，启动桌面：
 
 ```sh
-tar -xzf ArgusAI-0.1.7-linux-x64.tar.gz
-cd ArgusAI-0.1.7-linux-x64
+tar -xzf ArgusAI-VERSION-linux-x64.tar.gz
+cd ArgusAI-VERSION-linux-x64
 ./ArgusAI --gui
 ```
 
@@ -201,7 +221,7 @@ CLI 提供 `ai providers`、`ai list`、`ai add` 等命令；涉及密钥时建�
 
 桌面版同时提供 GUI 和命令行；Shell 版保留命令行服务，不包含图形工作台和桌宠。服务器和 SSH 环境可选择名称中带 `shell` 的便携包，按操作系统和 CPU 架构下载。不要用桌面安装器覆盖 Shell 目录。
 
-Windows 解压 ZIP，macOS/Linux 解压 tar.gz 后，在解压目录运行：
+Windows 解压 ZIP，macOS/Linux 解压 tar.gz 后，进入包含 `ArgusAI-shell.exe` 或 `ArgusAI-shell` 的目录运行：
 
 ```powershell
 # Windows
