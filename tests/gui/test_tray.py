@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import sys
 from types import SimpleNamespace
 
@@ -91,6 +92,51 @@ def test_show_window_from_tray_unhides() -> None:
     result = api.show_window_from_tray()
     assert result["ok"] is True
     assert api._window.hidden is False
+
+
+def test_windows_reveal_restores_click_activation_after_hidden_start(monkeypatch) -> None:
+    api = _Api()
+    api._window.uid = "main"
+    api._window.hidden = True
+    api._window.focus = False
+    no_activate = 0x08000000
+    app_window = 0x00040000
+    style = no_activate | app_window
+    style_changes = []
+
+    def set_style(hwnd, index, new_style):
+        nonlocal style
+        assert hwnd.value == 42
+        assert index == -20
+        previous, style = style, new_style
+        style_changes.append(new_style)
+        return previous
+
+    def activate():
+        # Like WinForms, reapply NOACTIVATE if the window still opts out.
+        if not api._window.focus:
+            set_style(ctypes.c_void_p(42), -20, style | no_activate)
+
+    form = SimpleNamespace(Handle=SimpleNamespace(ToInt64=lambda: 42), Activate=activate)
+    user32 = SimpleNamespace(
+        GetWindowLongW=lambda hwnd, index: style,
+        SetWindowLongW=set_style,
+        SetWindowPos=lambda *args: True,
+        ShowWindow=lambda *args: True,
+        SetForegroundWindow=lambda hwnd: True,
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=user32), raising=False)
+    monkeypatch.setitem(
+        sys.modules, "webview.platforms.winforms", SimpleNamespace(BrowserView=SimpleNamespace(instances={"main": form}))
+    )
+
+    assert api.show_window_from_tray()["ok"] is True
+    assert api._window.hidden is False
+    assert api._window.focus is True
+    assert style == app_window
+    assert api.show_window_from_tray()["ok"] is True
+    assert style_changes == [app_window]
 
 
 def test_close_window_hides_when_tray_enabled(monkeypatch) -> None:

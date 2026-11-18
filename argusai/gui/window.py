@@ -207,7 +207,7 @@ class WindowMixin:
         """Bring the WinForms host back after Hide() — pywebview show() is not enough."""
         try:
             import sys
-            from ctypes import windll
+            from ctypes import windll, wintypes
 
             if sys.platform != "win32":
                 return
@@ -220,17 +220,33 @@ class WindowMixin:
             show = getattr(instance, "Show", None)
             if callable(show):
                 show()
-            activate = getattr(instance, "Activate", None)
-            if callable(activate):
-                activate()
             handle = getattr(instance, "Handle", None)
             if handle is None:
                 return
             to64 = getattr(handle, "ToInt64", None)
-            hwnd = int(to64()) if callable(to64) else int(handle.ToInt32())
-            if hwnd:
-                windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                windll.user32.SetForegroundWindow(hwnd)
+            hwnd = wintypes.HWND(int(to64()) if callable(to64) else int(handle.ToInt32()))
+            if not hwnd:
+                return
+
+            user32 = windll.user32
+            if not getattr(self._window, "focus", True):
+                # Hidden startup uses focus=False. WinForms keeps NOACTIVATE
+                # after Show() and reapplies it on activation while focus is false.
+                ex_style_index = -20  # GWL_EXSTYLE
+                no_activate = 0x08000000  # WS_EX_NOACTIVATE
+                style = user32.GetWindowLongW(hwnd, ex_style_index)
+                if not style & no_activate:
+                    self._window.focus = True
+                elif user32.SetWindowLongW(hwnd, ex_style_index, style & ~no_activate):
+                    self._window.focus = True
+                    # FRAMECHANGED | NOACTIVATE | NOZORDER | NOMOVE | NOSIZE
+                    user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0037)
+
+            activate = getattr(instance, "Activate", None)
+            if callable(activate):
+                activate()
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
         except Exception:
             log.debug("gui.tray reveal form failed", exc_info=True)
 
