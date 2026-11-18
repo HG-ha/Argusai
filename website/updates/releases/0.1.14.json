@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "version": "0.1.14",
+  "published_at": "2026-11-18T12:59:49Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.14",
+  "notes": "# ArgusAI v0.1.14\n\n- 修复 Windows 从托盘启动后，点击主窗口无法切到前台、输入框无法接收键盘输入的问题。\n- 修复 JS 静态分析偶发长时间占用 CPU、导致界面无响应的问题。",
+  "assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-win-x64-setup.exe",
+      "sha256": "5542541768cd9307cdce0e5ef2f1c59bee8094cac518892198eeb787480d1b62",
+      "size": 89864077
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-win-arm64-setup.exe",
+      "sha256": "cff9e0859bd7482bcd82a32e6ca0da9db088754284b441f51710d988d50095a9",
+      "size": 78509505
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-linux-x64.tar.gz",
+      "sha256": "d2828d45746720074c1aeb5ee0355d2669abb535f00c6602639b55afd3931107",
+      "size": 133183569
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-linux-arm64.tar.gz",
+      "sha256": "50dbb0ca0ae8a48dca6b1f0dcc70c898613bd055dd01da5a39164e3512cebe85",
+      "size": 124543069
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-macos-arm64.dmg",
+      "sha256": "838257755a2b1731f1ffae5e3e0056977c3a9ff06275ecdd5e66a4bc516a203d",
+      "size": 121643576
+    }
+  },
+  "shell_assets": {
+    "win-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-win-x64.zip",
+      "sha256": "bf7de4c069522ff232333843c82028b63c0ad936f6e00cb6cbb665b57177b2bb",
+      "size": 98547069
+    },
+    "win-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-win-arm64.zip",
+      "sha256": "e891421cdec7a00870b84b0cd2e42dca058e2d97907097ebc4f573c043b7251d",
+      "size": 86437116
+    },
+    "linux-x64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-linux-x64.tar.gz",
+      "sha256": "ecb66f545320c30c70c37e1da92399d792d13ca923109271bb7af85c0c739aa2",
+      "size": 149657860
+    },
+    "linux-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-linux-arm64.tar.gz",
+      "sha256": "7e79317e65bc8dc8a6483031cb2cea7a92e9b41103f65d77c92354d89a542631",
+      "size": 138074941
+    },
+    "macos-arm64": {
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-macos-arm64.tar.gz",
+      "sha256": "83f6fbe40eb448282af7cc56f1b1ca1f97736bf018f6403cc16f1197d44d0438",
+      "size": 95866183
+    }
+  }
+}
