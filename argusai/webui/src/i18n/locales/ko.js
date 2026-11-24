@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "스트리밍 답변",
+    "streamingReplyHint": "기본으로 켜져 있습니다. 끄면 완성된 답변을 보냅니다. Agent가 여러 메시지로 나누어 보내는 기능은 유지되며 스트리밍 지원은 플랫폼에 따라 다릅니다.",
     "add": "채널 추가",
     "addTitle": "채널 추가",
     "apiBase": "Bot API 기본 URL",
@@ -810,7 +812,7 @@ export default {
       "discord3": "OAuth2 → URL Generator에서 bot을 선택하고 View Channels, Send Messages, Read Message History, Attach Files를 부여한 뒤 생성된 URL로 초대하세요.",
       "discord4": "아래에 Bot Token을 붙여 넣고 저장·테스트한 뒤, 봇과의 1:1 메시지로 /pair를 보내세요. 서버 채널과 그룹 메시지는 무시됩니다.",
       "feishu1": "Feishu Open Platform에서 사용자 지정 엔터프라이즈 앱을 만들고 Bot 기능을 추가하세요.",
-      "feishu2": "권한에서 im:message(메시지 수신), im:message:send_as_bot(봇으로 전송), im:resource(이미지/파일 리소스 읽기·업로드)를 부여하세요. im:resource가 없으면 텍스트는 가지만 이미지와 파일은 거절됩니다.",
+      "feishu2": "권한에서 im:message(메시지 수신), im:message:send_as_bot(봇으로 전송), im:resource(이미지/파일 리소스 읽기·업로드)를 부여하세요. im:resource가 없으면 텍스트는 가지만 이미지와 파일은 거절됩니다. 기본 스트리밍 카드에는 cardkit:card:write도 필요합니다. 권한을 부여한 후 새 앱 버전을 게시하세요. 권한이 없으면 일반 카드 업데이트를 사용합니다.",
       "feishu3": "이벤트 구독에서 롱 커넥션을 선택하고 im.message.receive_v1과 카드 액션 이벤트를 추가한 뒤 사용 가능한 버전을 게시하세요.",
       "feishu4": "App ID, App Secret, 이벤트 구독 Verification Token을 복사하세요. 저장하고 테스트한 뒤 봇과의 1:1 메시지로 /pair를 보내세요. 그룹 채팅은 무시됩니다.",
       "slack1": "Slack API 콘솔에서 From scratch 앱을 만들고 대상 워크스페이스에 설치하세요.",

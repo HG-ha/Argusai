@@ -6,6 +6,7 @@ previews never enter the durable outbox; callers keep their final reply if final
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
@@ -15,6 +16,8 @@ from urllib.parse import quote
 import httpx
 
 from .models import ChannelDeliveryError, ChannelReply
+
+log = logging.getLogger(__name__)
 
 
 def _utf16_chunks(text: str, limit: int) -> list[str]:
@@ -228,11 +231,26 @@ class OutputStreams:
                 text: str, final: bool) -> None:
         base = "https://open.feishu.cn/open-apis"
         headers = {"Authorization": f"Bearer {self._feishu_token()}"}
+        if state.get("message_card"):
+            self._feishu_message_card(state, chat, source, thread, text, headers)
+            return
         if not state.get("card_id"):
             card = {"schema": "2.0", "config": {"streaming_mode": True, "update_multi": True},
                     "body": {"elements": [{"tag": "markdown", "element_id": "answer", "content": text}]}}
-            payload = self.request("POST", f"{base}/cardkit/v1/cards", headers=headers,
-                                   json={"type": "card_json", "data": json.dumps(card, ensure_ascii=False)})
+            try:
+                payload = self.request("POST", f"{base}/cardkit/v1/cards", headers=headers,
+                                       json={"type": "card_json", "data": json.dumps(card, ensure_ascii=False)})
+            except ChannelDeliveryError as exc:
+                # Normal IM cards require no CardKit scope. Keep live progress
+                # by editing one message if the app has not granted that scope.
+                # Authentication, send failures and timeouts still propagate.
+                if not exc.permanent or "cardkit:card:write" not in str(exc):
+                    raise
+                log.warning("Feishu CardKit scope missing; using message card updates. "
+                            "Grant cardkit:card:write and publish the app for native streaming.")
+                state["message_card"] = True
+                self._feishu_message_card(state, chat, source, thread, text, headers)
+                return
             state["card_id"] = payload["data"]["card_id"]
             message = {"msg_type": "interactive", "content": json.dumps(
                 {"type": "card", "data": {"card_id": state["card_id"]}})}
@@ -255,8 +273,29 @@ class OutputStreams:
         state["sequence"] += 1
         self.request("PATCH", f"https://open.feishu.cn/open-apis/cardkit/v1/cards/{quote(state['card_id'], safe='')}/settings",
                      headers={"Authorization": f"Bearer {self._feishu_token()}"},
-                     json={"settings": json.dumps({"streaming_mode": False}),
+                     json={"settings": json.dumps({"config": {"streaming_mode": False}}),
                            "sequence": state["sequence"], "uuid": uuid.uuid4().hex})
+
+    def _feishu_message_card(self, state: dict, chat: str, source: str, thread: str,
+                             text: str, headers: dict[str, str]) -> None:
+        from .cards import render_channel_reply
+
+        base = "https://open.feishu.cn/open-apis/im/v1/messages"
+        card = render_channel_reply("feishu", ChannelReply(text=text, external_chat_id=chat))["content"]
+        content = json.dumps(card, ensure_ascii=False)
+        if state.get("message_id"):
+            self.request("PATCH", f"{base}/{quote(state['message_id'], safe='')}",
+                         headers=headers, json={"content": content})
+            return
+        message = {"msg_type": "interactive", "content": content}
+        if thread:
+            result = self.request("POST", f"{base}/{quote(source, safe='')}/reply",
+                                  headers=headers, json={**message, "reply_in_thread": True})
+        else:
+            result = self.request("POST", base, headers=headers,
+                                  params={"receive_id_type": "chat_id"},
+                                  json={**message, "receive_id": chat})
+        state["message_id"] = result["data"]["message_id"]
 
     def _dingtalk(self, state: dict, chat: str, source: str, thread: str,
                   text: str, final: bool) -> None:

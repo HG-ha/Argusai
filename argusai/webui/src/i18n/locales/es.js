@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "Respuestas en streaming",
+    "streamingReplyHint": "Activado por defecto. Al desactivarlo se envían respuestas completas. Los mensajes separados del Agent siguen funcionando; el streaming depende de la plataforma.",
     "add": "Agregar canal",
     "addTitle": "Agregar canal",
     "apiBase": "Base de la Bot API",
@@ -810,7 +812,7 @@ export default {
       "discord3": "En OAuth2 → URL Generator selecciona bot y otorga View Channels, Send Messages, Read Message History y Attach Files; usa la URL generada para invitarlo.",
       "discord4": "Pega el Bot Token abajo, guarda y prueba, luego envía /pair en un mensaje directo con el bot. Los canales de servidor y los mensajes de grupo se ignoran.",
       "feishu1": "Crea una app empresarial personalizada en Feishu Open Platform y agrega la capacidad Bot.",
-      "feishu2": "En Permissions, otorga im:message (recibir mensajes), im:message:send_as_bot (enviar como el bot) e im:resource (leer y subir imágenes o archivos). Sin im:resource, el texto se envía pero las imágenes y archivos se rechazan.",
+      "feishu2": "En Permissions, otorga im:message (recibir mensajes), im:message:send_as_bot (enviar como el bot) e im:resource (leer y subir imágenes o archivos). Sin im:resource, el texto se envía pero las imágenes y archivos se rechazan. Las tarjetas con streaming nativo también requieren cardkit:card:write. Publica una nueva versión tras concederlo. Sin este permiso, se actualizan tarjetas normales.",
       "feishu3": "En Event Subscriptions elige long connection, agrega im.message.receive_v1 y el evento de acción de tarjeta, y publica una versión disponible.",
       "feishu4": "Copia el App ID, App Secret y el Verification Token de suscripción de eventos. Guarda y prueba, luego envía /pair en un mensaje directo con el bot. Los chats de grupo se ignoran.",
       "slack1": "Crea una app From scratch en la consola Slack API e instálala en el workspace de destino.",

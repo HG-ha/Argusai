@@ -18,6 +18,7 @@ const query = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const testing = reactive({})
+const streamingSaving = reactive({})
 const showEditor = ref(false)
 const showPairing = ref(false)
 const pairing = ref(null)
@@ -186,6 +187,7 @@ function emptyForm() {
     provider: 'telegram',
     name: '',
     enabled: false,
+    streaming: true,
     host: '127.0.0.1',
     port: '',
     path: '',
@@ -261,6 +263,7 @@ function openEdit(channel) {
     provider: channel.provider,
     name: channel.name,
     enabled: channel.enabled !== false,
+    streaming: channel.settings?.streaming !== false,
     host: channel.settings?.host || '127.0.0.1',
     port: channel.settings?.port || '',
     path: channel.settings?.path || '',
@@ -287,7 +290,7 @@ async function saveChannel() {
     const secrets = Object.fromEntries(
       Object.entries(form.secrets || {}).filter(([, value]) => String(value || '').trim()),
     )
-    let settings = { ...form.extra_settings }
+    let settings = { ...form.extra_settings, streaming: !!form.streaming }
     if (['webhook', 'wecom'].includes(form.provider)) {
       settings = {
         ...settings,
@@ -337,6 +340,26 @@ async function toggleChannel(channel) {
     return
   }
   await loadAll()
+}
+
+async function toggleStreaming(channel) {
+  if (streamingSaving[channel.id]) return
+  streamingSaving[channel.id] = true
+  try {
+    const result = await api.saveChannel({
+      id: channel.id,
+      provider: channel.provider,
+      settings: { ...(channel.settings || {}), streaming: channel.settings?.streaming === false },
+    })
+    if (!result?.ok) throw new Error(result?.error || t('channels.saveFailed'))
+    channels.value = channels.value.map(item => item.id === channel.id
+      ? { ...item, ...result.channel, status: item.status } : item)
+    showToast(t('channels.saved'), 'ok')
+  } catch (error) {
+    showToast(String(error?.message || error), 'error')
+  } finally {
+    streamingSaving[channel.id] = false
+  }
 }
 
 async function testChannel(channel) {
@@ -673,6 +696,12 @@ onUnmounted(() => {
             <div><dt>{{ t('channels.transport') }}</dt><dd><code>{{ selected.transport }}</code></dd></div>
             <div><dt>{{ t('channels.callback') }}</dt><dd><code>{{ selected.status?.listen || selected.settings?.path || '—' }}</code></dd></div>
             <div><dt>{{ t('channels.credentials') }}</dt><dd>{{ Object.keys(selected.configured_secrets || {}).length }} {{ t('channels.configured') }}</dd></div>
+            <div><dt>{{ t('channels.streamingReply') }}</dt><dd class="streaming-control">
+              <button type="button" class="switch" role="switch" :aria-checked="selected.settings?.streaming !== false"
+                :aria-label="t('channels.streamingReply')" :class="{ on: selected.settings?.streaming !== false }"
+                :disabled="streamingSaving[selected.id]" @click="toggleStreaming(selected)"><span></span></button>
+              <small>{{ t('channels.streamingReplyHint') }}</small>
+            </dd></div>
             <div v-if="selected.provider === 'telegram' && selected.settings?.proxy"><dt>{{ t('channels.proxy') }}</dt><dd><code>{{ selected.settings.proxy }}</code></dd></div>
             <div v-if="selected.provider === 'telegram' && selected.settings?.api_base"><dt>{{ t('channels.apiBase') }}</dt><dd><code>{{ selected.settings.api_base }}</code></dd></div>
             <div v-if="selected.status?.last_error"><dt>{{ t('channels.lastError') }}</dt><dd class="error-text">{{ selected.status.last_error }}</dd></div>
@@ -780,6 +809,8 @@ onUnmounted(() => {
           <small>{{ t(`channels.cardModeHints.${cardMode(form.provider)}`) }}</small>
         </div>
         <label><span>{{ t('channels.name') }}</span><input v-model="form.name" required /></label>
+        <label class="check-row"><input v-model="form.streaming" type="checkbox" /><span>{{ t('channels.streamingReply') }}</span></label>
+        <p class="qr-notice">{{ t('channels.streamingReplyHint') }}</p>
         <div v-if="['webhook','wecom'].includes(form.provider)" class="form-grid two">
           <label><span>{{ t('channels.listenHost') }}</span><input v-model="form.host" /></label>
           <label><span>{{ t('channels.listenPort') }}</span><input v-model="form.port" type="number" min="0" max="65535" :placeholder="t('channels.autoPort')" /></label>
@@ -791,7 +822,7 @@ onUnmounted(() => {
           <small>{{ t('channels.callbackPreviewHint') }}</small>
         </div>
         <label v-if="form.provider === 'webhook'"><span>{{ t('channels.outboundUrl') }}</span><input v-model="form.outbound_url" placeholder="https://…" /></label>
-        <label v-if="form.provider === 'webhook'"><span>{{ t('channels.streamProtocol') }}</span><select v-model="form.stream_protocol"><option value="">{{ t('channels.streamStaged') }}</option><option value="v1">ArgusAI stream v1</option></select></label>
+        <label v-if="form.provider === 'webhook' && form.streaming"><span>{{ t('channels.streamProtocol') }}</span><select v-model="form.stream_protocol"><option value="">{{ t('channels.streamStaged') }}</option><option value="v1">ArgusAI stream v1</option></select></label>
         <template v-if="form.provider === 'dingtalk'">
           <label><span>{{ t('channels.cardTemplateId') }}</span><input v-model="form.card_template_id" /></label>
           <label><span>{{ t('channels.cardContentKey') }}</span><input v-model="form.card_content_key" placeholder="content" /></label>
@@ -880,6 +911,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.streaming-control{display:flex;align-items:center;gap:12px}.streaming-control .switch{flex-shrink:0}.streaming-control small{color:var(--text-secondary);line-height:1.6}
 .channel-page{height:100%;min-height:0;display:flex;flex-direction:column;padding:18px 20px;gap:14px;overflow:hidden;background:transparent}.channel-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex:none}.channel-kicker{margin:0 0 7px;font:700 11px/1.2 var(--font-mono);letter-spacing:.14em;color:var(--accent);text-transform:uppercase}.channel-head h1{margin:0;font-size:20px;line-height:1.2;letter-spacing:-.015em}.channel-head p:not(.channel-kicker){margin:5px 0 0;color:var(--text-secondary);font-size:12px}.channel-head-actions{display:flex;align-items:center;gap:8px}.inventory-chip{padding:7px 10px;border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);font-size:12px;background:var(--surface)}
 .channel-shell{display:grid;grid-template-columns:minmax(240px,290px) minmax(0,1fr);min-height:0;flex:1;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:none}.channel-master{min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:color-mix(in srgb,var(--surface) 95%,var(--page-bg))}.channel-search{margin:14px;display:flex;align-items:center;gap:8px;padding:0 10px;height:36px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg)}.channel-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}.channel-search svg{width:15px;fill:none;stroke:var(--text-tertiary);stroke-width:2}.channel-search input{min-width:0;flex:1;border:0;outline:0;background:none;color:var(--text-primary)}.channel-list{min-height:0;overflow:auto;padding:0 8px 12px}.channel-row{width:100%;display:grid;grid-template-columns:36px minmax(0,1fr) 10px;align-items:center;gap:10px;padding:10px;border:0;border-radius:9px;background:transparent;color:inherit;text-align:left;cursor:pointer}.channel-row:hover{background:var(--surface-hover)}.channel-row.active{background:color-mix(in srgb,var(--accent) 11%,var(--surface));box-shadow:inset 2px 0 var(--accent)}
 .provider-mark{width:34px;height:34px;flex:0 0 34px;flex-shrink:0;display:grid;place-items:center;border-radius:9px;color:white;background:#53657d;font:750 10px/1 var(--font-mono);letter-spacing:.02em}.provider-mark.qq{background:#12b7f5}.provider-mark.telegram{background:#168bd2}.provider-mark.discord{background:#5865f2}.provider-mark.slack{background:#6e3a73}.provider-mark.feishu{background:#3370ff}.provider-mark.dingtalk{background:#1888ff}.provider-mark.wecom{background:#1aad19}.provider-mark.wechat{background:#07c160}.provider-mark.webhook{background:#6d7480}.provider-mark.large{width:44px;height:44px;flex:0 0 44px;flex-shrink:0;border-radius:11px;font-size:12px}.channel-copy{min-width:0;display:flex;flex-direction:column;gap:3px}.channel-copy strong,.channel-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.channel-copy strong{font-size:13px}.channel-copy small{color:var(--text-tertiary);font-size:11px}.status-dot{width:7px;height:7px;flex-shrink:0;border-radius:50%;background:var(--text-tertiary);opacity:.45}.status-dot.live{background:#2ba36a;opacity:1;box-shadow:0 0 0 3px color-mix(in srgb,#2ba36a 14%,transparent)}

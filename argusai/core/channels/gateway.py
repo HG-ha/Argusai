@@ -1159,6 +1159,7 @@ class ChannelGateway:
             "channel": {
                 "channel_id": event.channel_id,
                 "provider": event.provider,
+                "streaming": self.store.get_channel(event.channel_id).settings.get("streaming") is not False,
                 "external_user_id": event.external_user_id,
                 "message_id": event.message_id,
             },
@@ -1236,6 +1237,13 @@ class ChannelGateway:
         # sync replies to inbound events, but cannot be pushed proactively.
         if "send" not in identity.permissions:
             return False
+        if self.store.get_channel(identity.channel_id).settings.get("streaming") is False:
+            # A channel-wide preference also covers background/queued turns.
+            # Keep only interactions that require the user's immediate input.
+            clean_text = ""
+            blocks_in = [block for block in blocks_in if self._block_awaits_user(block)]
+            if not blocks_in:
+                return False
         self._use_locale(identity)
 
         def issue(payload: dict[str, Any]) -> str:
@@ -2250,6 +2258,7 @@ class ChannelGateway:
             "channel": {
                 "channel_id": event.channel_id,
                 "provider": event.provider,
+                "streaming": self.store.get_channel(event.channel_id).settings.get("streaming") is not False,
                 "external_user_id": event.external_user_id,
                 "message_id": event.message_id,
             },

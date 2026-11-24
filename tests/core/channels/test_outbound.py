@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from argusai.core.assistant.tools import build_tool_registry
 from argusai.core.channels.cards import card_text
 from argusai.core.channels.gateway import ChannelGateway
 from argusai.core.channels.models import ChannelDeliveryError, ChannelEvent
+from argusai.core.channels.models import CHANNEL_PROVIDERS
 from argusai.core.channels.runtime import ChannelRuntimeManager
 from argusai.core.channels.store import ChannelStore
 from argusai.core.tools.channel_tools import (
@@ -53,6 +55,55 @@ def _paired(tmp_path):
     return store, channel, identity
 
 
+@pytest.mark.parametrize("provider", sorted(CHANNEL_PROVIDERS))
+@pytest.mark.parametrize("streaming", [None, True, False])
+def test_each_channel_streaming_setting_controls_turns_and_native_frames(tmp_path, provider, streaming):
+    store = ChannelStore(tmp_path / "channels")
+    settings = {} if streaming is None else {"streaming": streaming}
+    channel = store.upsert_channel({"id": "channel-one", "provider": provider, "enabled": True, "settings": settings})
+    pairing = store.create_pairing(channel.id, bound_session_id="session-1")
+    identity = store.consume_pairing(channel.id, pairing["code"], external_user_id="user-1", external_chat_id="chat-1")
+    store.set_identity_permissions(identity.id, ["chat", "send"])
+    captured = []
+    gateway = _gateway(store)
+    gateway.turn_handler = lambda params: captured.append(params) or {"ok": True, "text": "complete answer"}
+    reply = gateway.handle(ChannelEvent(channel_id=channel.id, provider=provider, external_user_id="user-1", external_chat_id="chat-1", message_id="message-1", text="hello", raw={"chat_scope": "c2c"} if provider == "qq" else {}))
+    assert captured[0]["channel"]["streaming"] is (streaming is not False)
+    assert reply.text == "complete answer"
+    runtime = ChannelRuntimeManager(store, gateway)
+    frames = []
+    runtime._adapters[channel.id] = SimpleNamespace(stream_mode=lambda: "native", stream_update=lambda **frame: frames.append(frame) or True, stop=lambda: None)
+    try:
+        assert runtime.stream_live_update(identity.id, source_message_id="message-1", text="hello") is (streaming is not False)
+        assert bool(frames) is (streaming is not False)
+        assert runtime.stream_capability(identity.id) == ("staged" if streaming is False else "native")
+    finally:
+        runtime.shutdown()
+
+
+def test_streaming_choice_persists_and_is_independent_between_channel_configs(tmp_path):
+    store, channel, identity = _paired(tmp_path)
+    second = store.upsert_channel({"id": "webhook-second", "provider": channel.provider, "settings": {"stream_protocol": "v1"}})
+    store.upsert_channel({"id": channel.id, "provider": channel.provider, "settings": {"streaming": False, "stream_protocol": "v1"}})
+    loaded = ChannelStore(store.root)
+    assert loaded.get_channel(channel.id).settings["streaming"] is False
+    assert loaded.get_channel(second.id).settings.get("streaming") is not False
+    assert loaded.get_channel(channel.id).settings["stream_protocol"] == "v1"
+    sent = []
+    runtime = ChannelRuntimeManager(loaded, _gateway(loaded))
+    runtime._adapters[channel.id] = SimpleNamespace(
+        send=lambda reply: sent.append(reply.text),
+        send_streamed_reply=lambda *a, **kw: pytest.fail("disabled outbox stream must not run"), stop=lambda: None,
+    )
+    try:
+        runtime.enqueue_outbound(identity_id=identity.id, session_id="session-1", text="first bubble", meta={"channel_reply": True, "native_stream_source_message_id": "message-1"})
+        runtime.enqueue_outbound(identity_id=identity.id, session_id="session-1", text="second bubble", meta={"channel_reply": True, "native_stream_source_message_id": "message-1"})
+        runtime.drain_outbox_once()
+        assert sent == ["first bubble", "second bubble"]
+    finally:
+        runtime.shutdown()
+
+
 def test_runtime_stream_bridge_routes_paired_thread_and_checks_send_permission(tmp_path):
     store, channel, identity = _paired(tmp_path)
     runtime = ChannelRuntimeManager(store, _gateway(store))
@@ -66,10 +117,14 @@ def test_runtime_stream_bridge_routes_paired_thread_and_checks_send_permission(t
     assert frames == [{"chat_id": identity.external_chat_id,
                        "source_message_id": "source", "thread_id": identity.external_thread_id,
                        "text": "answer", "final": True}]
+    assert runtime.stream_live_update(identity.id, source_message_id="source",
+                                      text="next segment", stream_id="segment-2")
+    assert frames[-1]["stream_id"] == "segment-2"
+    assert frames[-1]["source_message_id"] == "source"
     store.set_identity_permissions(identity.id, ["chat"])
     assert runtime.stream_capability(identity.id) == "staged"
     assert runtime.stream_live_update(identity.id, source_message_id="source2", text="blocked") is False
-    assert len(frames) == 1
+    assert len(frames) == 2
 
 
 def test_outbox_is_identity_bound_leased_and_retried(tmp_path) -> None:
@@ -494,6 +549,19 @@ def test_gateway_queues_live_segment_and_card(tmp_path) -> None:
     assert pending[0]["text"] == "step one: scanning"
     assert pending[1]["blocks"][0]["type"] == "user_decision"
     assert pending[1]["blocks"][0]["title"] == "Continue?"
+
+
+def test_streaming_off_blocks_background_progress_but_keeps_required_decisions(tmp_path) -> None:
+    store, channel, identity = _paired(tmp_path)
+    store.upsert_channel({"id": channel.id, "provider": channel.provider, "settings": {"streaming": False}})
+    gateway = _gateway(store)
+    assert gateway.queue_live_update(identity.id, text="partial progress") is False
+    assert gateway.queue_live_update(identity.id, raw_blocks=[{"type": "todo_list", "todos": [{"title": "working"}]}]) is False
+    assert gateway.queue_live_update(identity.id, raw_blocks=[{"type": "user_decision", "question": "Continue?", "options": ["Yes", "No"]}]) is True
+    pending = store.claim_outbound(limit=8)
+    assert len(pending) == 1
+    assert pending[0]["text"] == ""
+    assert pending[0]["blocks"][0]["type"] == "user_decision"
 
 
 def test_agent_tools_list_and_queue_sandbox_file(tmp_path) -> None:

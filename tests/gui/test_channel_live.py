@@ -51,7 +51,8 @@ class _Api(ChannelsMixin):
     def _channels_gateway(self):
         return self.gateway
 
-    def _run_assistant_chat(self, params, on_delta=None, on_block=None, on_segment=None):
+    def _run_assistant_chat(self, params, on_delta=None, on_block=None, on_segment=None, on_status=None):
+        self.on_status = on_status
         return self._script(params, on_delta, on_block, on_segment)
 
 
@@ -62,6 +63,18 @@ def _params() -> dict:
         "message_source": "channel",
         "message_source_ref": "identity-1",
     }
+
+
+@pytest.mark.parametrize("provider", ["qq", "telegram", "discord", "slack", "feishu", "dingtalk", "wecom", "wechat", "webhook"])
+def test_channel_config_can_disable_live_output_even_when_session_live_is_on(provider):
+    def script(_params, on_delta, on_block, on_segment):
+        assert on_delta is None and on_block is None and on_segment is None
+        return {"ok": True, "text": "send this complete answer", "blocks": []}
+
+    api = _Api(script)
+    result = api._run_channel_assistant_chat({**_params(), "channel": {"provider": provider, "message_id": "source", "streaming": False}})
+    assert result["text"] == "send this complete answer"
+    assert not api.gateway.texts and not api.gateway.blocks
 
 
 _PLAN = {
@@ -267,6 +280,155 @@ def test_stream_final_failure_retains_answer_when_outbox_is_offline() -> None:
     result = api._run_channel_assistant_chat(params)
     assert result["text"] == "complete answer"
     assert result["channel_live_delivered"] is False
+
+
+def test_feishu_progress_is_complete_before_tool_execution_and_has_separate_bubbles() -> None:
+    frames = []
+
+    class Runtime:
+        def stream_capability(self, _identity_id):
+            return "native"
+
+        def stream_live_update(self, _identity_id, **frame):
+            frames.append(frame)
+            return True
+
+    def script(_params, on_delta, on_block, on_segment):
+        on_delta("先检查")
+        on_delta("接口和权限。")
+        # A tool may run for minutes before the next model round. Its start
+        # must flush the complete Agent message, without forwarding status text.
+        api.on_status("正在执行工具：scan")
+        assert frames[-1]["text"] == "先检查接口和权限。"
+        assert frames[-1]["final"] is True
+        on_block(dict(_PLAN))
+        on_segment(1)
+        on_delta("检查完成，继续验证。")
+        assert frames[-1]["text"] == "检查完成，继续验证。"
+        assert frames[-1]["final"] is False
+        return {"ok": True, "text": "检查完成，继续验证。", "blocks": [dict(_PLAN)]}
+
+    api = _Api(script)
+    api._channel_runtime_instance = Runtime()
+    result = api._run_channel_assistant_chat({
+        **_params(), "channel": {"provider": "feishu", "message_id": "inbound"},
+    })
+
+    completed = [frame for frame in frames if frame["final"]]
+    assert [frame["text"] for frame in completed] == ["先检查接口和权限。", "检查完成，继续验证。"]
+    assert completed[0]["stream_id"] != completed[1]["stream_id"]
+    assert api.gateway.texts == []
+    assert api.gateway.blocks == [_PLAN]
+    assert result["text"] == ""
+    assert result["blocks"] == []
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_feishu_failed_stream_delivers_progress_before_turn_finishes(raises) -> None:
+    attempts = []
+
+    class Runtime:
+        def stream_capability(self, _identity_id):
+            return "native"
+
+        def stream_live_update(self, _identity_id, **frame):
+            attempts.append(frame)
+            if raises:
+                raise RuntimeError("CardKit unavailable")
+            return False
+
+    def script(_params, on_delta, on_block, on_segment):
+        on_delta("第一步完成。")
+        on_block(dict(_PLAN))
+        assert api.gateway.texts == ["第一步完成。"]
+        on_segment(1)
+        on_delta("正在检查第二步。")
+        api.on_status("正在执行工具：inspect")
+        assert api.gateway.texts == ["第一步完成。", "正在检查第二步。"]
+        return {"ok": True, "text": "正在检查第二步。", "blocks": [dict(_PLAN)]}
+
+    api = _Api(script)
+    api._channel_runtime_instance = Runtime()
+    result = api._run_channel_assistant_chat({
+        **_params(), "channel": {"provider": "feishu", "message_id": "inbound"},
+    })
+
+    assert len(attempts) == 1
+    assert result["text"] == ""
+    assert result["channel_live_delivered"] is True
+
+
+@pytest.mark.parametrize("cardkit_granted", [False, True])
+def test_feishu_progress_reaches_transport_during_autonomous_run(tmp_path, monkeypatch, cardkit_granted):
+    import json
+    import httpx
+    from argusai.core.channels.adapters import StreamSDKAdapter
+    from argusai.core.channels.runtime import ChannelRuntimeManager
+    from argusai.core.channels.store import ChannelStore
+
+    requests = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append((request.method, request.url.path, body))
+        if request.url.path.endswith("/cardkit/v1/cards"):
+            if not cardkit_granted:
+                return httpx.Response(200, json={
+                    "code": 99991672, "msg": "Access denied: cardkit:card:write",
+                })
+            data = {"card_id": f"card-{len(requests)}"}
+        else:
+            data = {"message_id": f"om-{len(requests)}"}
+        return httpx.Response(200, json={"code": 0, "data": data})
+
+    store = ChannelStore(tmp_path / "channels")
+    channel = store.upsert_channel({"id": "feishu-test", "provider": "feishu", "name": "Test"})
+    pairing = store.create_pairing(channel.id, bound_session_id="session-1")
+    identity = store.consume_pairing(channel.id, pairing["code"],
+                                     external_user_id="user", external_chat_id="chat")
+    store.set_identity_permissions(identity.id, ["chat", "send"])
+    adapter = StreamSDKAdapter(channel, {})
+    monkeypatch.setattr(adapter, "_get_feishu_token", lambda: "test-token")
+
+    def assert_complete_before_tool(text):
+        if cardkit_granted:
+            assert requests[-2][0] == "PUT"
+            assert requests[-2][2]["content"] == text
+            assert json.loads(requests[-1][2]["settings"]) == {"config": {"streaming_mode": False}}
+        else:
+            assert requests[-1][0] == "PATCH"
+            card = json.loads(requests[-1][2]["content"])
+            assert any(e.get("content") == text for e in card["body"]["elements"])
+
+    def script(_params, on_delta, on_block, on_segment):
+        on_delta("先检查")
+        on_delta("接口和权限。")
+        api.on_status("正在执行工具")
+        assert_complete_before_tool("先检查接口和权限。")
+        on_block(dict(_PLAN))
+        on_segment(1)
+        on_delta("第一步完成，")
+        on_delta("继续验证。")
+        api.on_status("正在执行下一工具")
+        assert_complete_before_tool("第一步完成，继续验证。")
+        return {"ok": True, "text": "第一步完成，继续验证。", "blocks": [dict(_PLAN)]}
+
+    api = _Api(script)
+    runtime = ChannelRuntimeManager(store, api.gateway)
+    runtime._adapters[channel.id] = adapter
+    api._channel_runtime_instance = runtime
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(httpx, "request", client.request)
+        result = api._run_channel_assistant_chat({
+            **_params(), "message_source_ref": identity.id,
+            "channel": {"provider": "feishu", "message_id": "inbound"},
+        })
+
+    assert len([r for r in requests if r[0] == "POST" and r[1].endswith("/im/v1/messages")]) == 2
+    assert all(state["done"] for state in adapter._output_streams.states.values())
+    assert result["text"] == ""
+    assert api.gateway.texts == []
+    assert api.gateway.blocks == [_PLAN]
 
 
 def test_cancelled_turn_finalizes_remote_stream() -> None:

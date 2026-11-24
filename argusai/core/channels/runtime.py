@@ -351,11 +351,14 @@ class ChannelRuntimeManager:
 
     def stream_capability(self, identity_id: str) -> str:
         identity = self.store.get_identity(identity_id)
-        if "send" not in identity.permissions:
+        if "send" not in identity.permissions or not self._streaming_enabled(identity.channel_id):
             return "staged"
         with self._lock:
             adapter = self._adapters.get(identity.channel_id)
         return adapter.stream_mode() if adapter is not None else "staged"
+
+    def _streaming_enabled(self, channel_id: str) -> bool:
+        return self.store.get_channel(channel_id).settings.get("streaming") is not False
 
     def stream_live_update(
         self,
@@ -364,6 +367,7 @@ class ChannelRuntimeManager:
         source_message_id: str,
         text: str,
         final: bool = False,
+        stream_id: str = "",
     ) -> bool:
         """Use a provider-native in-place stream when the adapter supports it.
 
@@ -374,7 +378,7 @@ class ChannelRuntimeManager:
         """
         try:
             identity = self.store.get_identity(str(identity_id or ""))
-            if "send" not in identity.permissions:
+            if "send" not in identity.permissions or not self._streaming_enabled(identity.channel_id):
                 return False
             with self._lock:
                 adapter = self._adapters.get(identity.channel_id)
@@ -384,6 +388,8 @@ class ChannelRuntimeManager:
             extra = {} if identity.provider == "qq" else {
                 "thread_id": identity.external_thread_id,
             }
+            if stream_id and identity.provider != "qq":
+                extra["stream_id"] = stream_id
             return bool(sender(
                 chat_id=identity.external_chat_id,
                 source_message_id=source_message_id,
@@ -560,6 +566,7 @@ class ChannelRuntimeManager:
                     stream_sender = getattr(adapter, "send_streamed_reply", None)
                     if (
                         source_message_id
+                        and self._streaming_enabled(identity.channel_id)
                         and not reply.blocks
                         and not reply.attachments
                         and callable(stream_sender)

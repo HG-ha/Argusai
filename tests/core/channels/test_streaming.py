@@ -10,7 +10,7 @@ from argusai.core.channels.adapters import (
     DiscordAdapter, SlackAdapter, StreamSDKAdapter, TelegramAdapter,
     WebhookPlatformAdapter, WeChatILinkAdapter,
 )
-from argusai.core.channels.models import ChannelConfig, ChannelReply
+from argusai.core.channels.models import ChannelConfig, ChannelDeliveryError, ChannelReply
 
 
 def adapter(provider, **settings):
@@ -101,7 +101,62 @@ def test_feishu_card_entity_sequence_and_close(wire, monkeypatch):
     assert json.loads(wire[1][2]["content"])["data"]["card_id"] == "card1"
     assert wire[2][2]["content"] == "first second"
     assert wire[2][2]["sequence"] < wire[3][2]["sequence"]
-    assert json.loads(wire[-1][2]["settings"]) == {"streaming_mode": False}
+    assert json.loads(wire[-1][2]["settings"]) == {"config": {"streaming_mode": False}}
+
+
+@pytest.mark.parametrize("thread", ["", "thread-1"])
+def test_feishu_missing_cardkit_scope_keeps_updating_same_message(monkeypatch, thread):
+    calls = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        calls.append((request.method, request.url.path, body))
+        if request.url.path.endswith("/cardkit/v1/cards"):
+            return httpx.Response(200, json={
+                "code": 99991672,
+                "msg": "Access denied. Required scope: cardkit:card:write",
+            })
+        return httpx.Response(200, json={"code": 0, "data": {"message_id": "om-fallback"}})
+
+    a = adapter("feishu")
+    monkeypatch.setattr(a, "_get_feishu_token", lambda: "token")
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(httpx, "request", client.request)
+        assert update(a, "正在分析", thread=thread)
+        assert update(a, "正在分析，第一步完成。", thread=thread)
+        assert update(a, "**完成**", final=True, thread=thread)
+        assert update(a, "**完成**", final=True, thread=thread)
+
+    assert [call[0] for call in calls] == ["POST", "POST", "PATCH", "PATCH"]
+    assert calls[2][1] == calls[3][1] == "/open-apis/im/v1/messages/om-fallback"
+    card = json.loads(calls[-1][2]["content"])
+    assert card["config"]["update_multi"] is True
+    assert "streaming_mode" not in card["config"]
+    assert any(e.get("content") == "**完成**" for e in card["body"]["elements"])
+    if thread:
+        assert calls[1][1].endswith("/messages/inbound/reply")
+        assert calls[1][2]["reply_in_thread"] is True
+    else:
+        assert calls[1][1].endswith("/messages")
+        assert calls[1][2]["receive_id"] == "user"
+
+
+@pytest.mark.parametrize("error", ["Invalid token", "Access denied: im:message:send_as_bot"])
+def test_feishu_other_auth_failures_do_not_start_message_card_fallback(monkeypatch, error):
+    calls = []
+
+    def handle(request):
+        calls.append(request.url.path)
+        return httpx.Response(403, json={"code": 99991672, "msg": error})
+
+    a = adapter("feishu")
+    monkeypatch.setattr(a, "_get_feishu_token", lambda: "token")
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(httpx, "request", client.request)
+        with pytest.raises(ChannelDeliveryError, match=error):
+            update(a, "保留回复")
+        assert update(a, "保留完整回复", final=True) is False
+    assert calls == ["/open-apis/cardkit/v1/cards"]
 
 
 def test_ding_template_delivery_targets_staff_id(wire, monkeypatch):

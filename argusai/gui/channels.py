@@ -394,12 +394,13 @@ class ChannelsMixin:
         """Run a channel turn, optionally pushing live segments/cards mid-turn."""
         session_id = str(params.get("session_id") or "")
         identity_id = str(params.get("message_source_ref") or "")
+        channel = params.get("channel") if isinstance(params.get("channel"), dict) else {}
 
         live = False
         if session_id and identity_id:
             try:
                 status = self.get_assistant_session(session_id)
-                live = bool(status.get("ok") and status.get("channel_live"))
+                live = bool(status.get("ok") and status.get("channel_live") and channel.get("streaming") is not False)
             except Exception:
                 live = False
         if not live:
@@ -410,7 +411,7 @@ class ChannelsMixin:
 
         gateway = self._channels_gateway()
         buffer = {"text": "", "delivered": False}
-        channel = params.get("channel") if isinstance(params.get("channel"), dict) else {}
+        feishu_progress = str(channel.get("provider") or "").lower() == "feishu"
         runtime = getattr(self, "_channel_runtime_instance", None)
         capability = getattr(runtime, "stream_capability", None)
         mode = "native" if str(channel.get("provider") or "").lower() == "qq" else "staged"
@@ -428,6 +429,7 @@ class ChannelsMixin:
             "text": "",
             "last_push": 0.0,
             "attempted": False,
+            "stream_id": uuid.uuid4().hex,
         }
         pushed_keys: set[str] = set()
         _LIVE_CARD_TYPES = {
@@ -468,6 +470,7 @@ class ChannelsMixin:
             runtime = getattr(self, "_channel_runtime_instance", None)
             sender = getattr(runtime, "stream_live_update", None)
             if not callable(sender):
+                native_stream["enabled"] = False
                 return False
             try:
                 sent = bool(sender(
@@ -475,17 +478,40 @@ class ChannelsMixin:
                     source_message_id=str(channel.get("message_id") or ""),
                     text=text,
                     final=final,
+                    **({"stream_id": native_stream["stream_id"]} if feishu_progress else {}),
                 ))
             except Exception as exc:
                 debug_log(
                     f"channel_native_stream_failed identity_id={identity_id} "
                     f"final={final} error={exc}"
                 )
-                return False
+                sent = False
             if sent:
                 native_stream["attempted"] = True
                 native_stream["last_push"] = time.monotonic()
+            else:
+                # A failed provider stream must yield to segment delivery now,
+                # rather than buffering every subsequent round until turn end.
+                native_stream["enabled"] = False
             return sent
+
+        def finish_feishu_segment() -> None:
+            # Status callbacks happen before tools run. Finalization bypasses
+            # frame coalescing so a short message's tail cannot wait for a long
+            # tool. The next model segment gets a fresh card after the TODO.
+            if not feishu_progress or not str(buffer["text"] or "").strip():
+                return
+            if push_native_stream(final=True):
+                buffer["text"] = ""
+                buffer["delivered"] = True
+                native_stream.update(text="", last_push=0.0, attempted=False,
+                                     stream_id=uuid.uuid4().hex)
+            else:
+                flush_text()
+
+        def on_status(_text: str) -> None:
+            # Transport boundary only: framework status text is never posted.
+            finish_feishu_segment()
 
         def on_delta(text: str) -> None:
             if text:
@@ -499,7 +525,9 @@ class ChannelsMixin:
                     push_native_stream()
 
         def on_segment(_round: int) -> None:
-            if not native_stream["enabled"]:
+            if feishu_progress:
+                finish_feishu_segment()
+            elif not native_stream["enabled"]:
                 flush_text()
             elif not native_stream["attempted"]:
                 push_native_stream()
@@ -509,6 +537,7 @@ class ChannelsMixin:
                 return
             if str(block.get("type") or "") not in _LIVE_CARD_TYPES:
                 return
+            finish_feishu_segment()
             # Decision cards are final-only in the assistant runtime; they are
             # force-delivered after the turn via ``_deliver_channel_wait_cards``.
             if str(block.get("type") or "") in {"user_decision", "user_decision_batch"}:
@@ -528,6 +557,7 @@ class ChannelsMixin:
             result = self._run_assistant_chat(
                 params,
                 on_delta=on_delta,
+                on_status=on_status,
                 on_block=on_block,
                 on_segment=on_segment,
             )

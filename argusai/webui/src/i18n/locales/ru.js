@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "Потоковые ответы",
+    "streamingReplyHint": "Включены по умолчанию. При отключении отправляется готовый ответ. Отдельные сообщения Agent сохраняются; потоковый режим зависит от платформы.",
     "add": "Добавить канал",
     "addTitle": "Добавить канал",
     "apiBase": "База Bot API",
@@ -810,7 +812,7 @@ export default {
       "discord3": "В OAuth2 → URL Generator выберите bot и выдайте View Channels, Send Messages, Read Message History и Attach Files; пригласите бота по сгенерированному URL.",
       "discord4": "Вставьте Bot Token ниже, сохраните и проверьте, затем отправьте /pair в личном сообщении боту. Каналы сервера и групповые сообщения игнорируются.",
       "feishu1": "Создайте корпоративное приложение в Feishu Open Platform и добавьте возможность Bot.",
-      "feishu2": "В Permissions выдайте im:message (получение), im:message:send_as_bot (отправка от бота) и im:resource (чтение и загрузка изображений/файлов). Без im:resource текст уходит, а изображения и файлы отклоняются.",
+      "feishu2": "В Permissions выдайте im:message (получение), im:message:send_as_bot (отправка от бота) и im:resource (чтение и загрузка изображений/файлов). Без im:resource текст уходит, а изображения и файлы отклоняются. Для нативных потоковых карточек также требуется cardkit:card:write. После выдачи права опубликуйте новую версию приложения. Без него обновляются обычные карточки.",
       "feishu3": "В Event Subscriptions выберите long connection, добавьте im.message.receive_v1 и событие card-action, затем опубликуйте доступную версию.",
       "feishu4": "Скопируйте App ID, App Secret и Verification Token подписки. Сохраните и проверьте, затем отправьте /pair в личном сообщении боту. Групповые чаты игнорируются.",
       "slack1": "Создайте приложение From scratch в консоли Slack API и установите его в нужный workspace.",

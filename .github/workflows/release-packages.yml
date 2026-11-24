@@ -400,7 +400,20 @@ jobs:
           "DOTNET_ROOT_X64=$desktopRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $desktopRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install locked Python dependencies
-        run: uv sync --locked --group build --group dev --python python
+        shell: python
+        run: |
+          import subprocess
+          import time
+
+          command = "uv sync --locked --group build --group dev --python python".split()
+          for attempt in range(3):
+              result = subprocess.run(command)
+              if result.returncode == 0:
+                  break
+              if attempt == 2:
+                  raise SystemExit(result.returncode)
+              print(f"Dependency installation failed; retrying ({attempt + 2}/3).", flush=True)
+              time.sleep(5 * (attempt + 1))
       - name: Verify native Python and Node architectures
         env:
           EXPECTED_ARCH: ${{ matrix.architecture }}
@@ -477,6 +490,8 @@ jobs:
               raise SystemExit("Source GUI did not load its expected platform backend")
       - name: Test release tooling
         run: uv run --locked --group build pytest tests/scripts/ -q
+      - name: Test per-channel streaming preferences
+        run: uv run --locked --group build python -m pytest tests/core/channels/test_outbound.py tests/core/channels/test_streaming.py tests/gui/test_channel_live.py -q --tb=short
       - name: Test update verification, native installer helpers and GUI handoff
         env:
           PYTEST_ADDOPTS: --timeout=240

@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "Streaming-Antworten",
+    "streamingReplyHint": "Standardmäßig aktiv. Ohne Streaming werden vollständige Antworten gesendet. Einzelne Agent-Nachrichten bleiben möglich; Streaming hängt von der Plattform ab.",
     "add": "Kanal hinzufügen",
     "addTitle": "Kanal hinzufügen",
     "apiBase": "Bot-API-Basis",
@@ -810,7 +812,7 @@ export default {
       "discord3": "Unter OAuth2 → URL Generator bot wählen und View Channels, Send Messages, Read Message History sowie Attach Files gewähren; mit der erzeugten URL einladen.",
       "discord4": "Bot Token unten einfügen, speichern und testen, dann /pair in einer Direktnachricht an den Bot senden. Serverkanäle und Gruppennachrichten werden ignoriert.",
       "feishu1": "In der Feishu Open Platform eine eigene Unternehmens-App anlegen und die Bot-Fähigkeit hinzufügen.",
-      "feishu2": "Unter Permissions im:message (Nachrichten empfangen), im:message:send_as_bot (als Bot senden) und im:resource (Bilder/Dateien lesen und hochladen) gewähren. Ohne im:resource geht Text, Bilder und Dateien werden abgelehnt.",
+      "feishu2": "Unter Permissions im:message (Nachrichten empfangen), im:message:send_as_bot (als Bot senden) und im:resource (Bilder/Dateien lesen und hochladen) gewähren. Ohne im:resource geht Text, Bilder und Dateien werden abgelehnt. Native Streaming-Karten benötigen zusätzlich cardkit:card:write. Nach der Freigabe eine neue App-Version veröffentlichen. Ohne diese Berechtigung werden normale Karten aktualisiert.",
       "feishu3": "Unter Event Subscriptions Long Connection wählen, im.message.receive_v1 und das Card-Action-Event hinzufügen, dann eine verfügbare Version veröffentlichen.",
       "feishu4": "App ID, App Secret und das Event-Abonnement Verification Token kopieren. Speichern und testen, dann /pair in einer Direktnachricht an den Bot senden. Gruppenchats werden ignoriert.",
       "slack1": "In der Slack-API-Konsole eine From-scratch-App anlegen und im Ziel-Workspace installieren.",

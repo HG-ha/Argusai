@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "ストリーミング返信",
+    "streamingReplyHint": "既定で有効です。無効にすると返信を完成後に送信します。Agent が複数のメッセージに分けて送る機能は変わりません。対応状況はプラットフォームによります。",
     "add": "チャネルを追加",
     "addTitle": "チャネルを追加",
     "apiBase": "Bot API ベース",
@@ -810,7 +812,7 @@ export default {
       "discord3": "OAuth2 → URL Generator で bot を選び、View Channels、Send Messages、Read Message History、Attach Files を付与し、生成 URL で招待します。",
       "discord4": "下に Bot Token を貼り、保存してテストしたあと、ボットへのダイレクトメッセージで /pair を送ります。サーバーチャネルとグループは無視されます。",
       "feishu1": "飛書オープンプラットフォームで企業向けカスタムアプリを作成し、Bot 機能を追加します。",
-      "feishu2": "権限で im:message（受信）、im:message:send_as_bot（ボットとして送信）、im:resource（画像・ファイルの読み取りとアップロード）を付与します。im:resource がないとテキストは送れても画像とファイルは拒否されます。",
+      "feishu2": "権限で im:message（受信）、im:message:send_as_bot（ボットとして送信）、im:resource（画像・ファイルの読み取りとアップロード）を付与します。im:resource がないとテキストは送れても画像とファイルは拒否されます。 ネイティブのストリーミングカードには cardkit:card:write も必要です。権限付与後は新しいバージョンを公開してください。未付与の場合は通常のカード更新を使います。",
       "feishu3": "イベント購読で長接続を選び、im.message.receive_v1 とカードアクションイベントを追加し、利用可能なバージョンを公開します。",
       "feishu4": "App ID、App Secret、イベント購読の Verification Token をコピーします。保存してテストしたあと、ボットへのダイレクトメッセージで /pair を送ります。グループは無視されます。",
       "slack1": "Slack API コンソールで From scratch アプリを作成し、対象ワークスペースにインストールします。",

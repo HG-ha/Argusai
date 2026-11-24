@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "Réponses en streaming",
+    "streamingReplyHint": "Activé par défaut. Désactivez pour envoyer des réponses complètes. Les messages séparés de l’Agent restent possibles ; le streaming dépend de la plateforme.",
     "add": "Ajouter un canal",
     "addTitle": "Ajouter un canal",
     "apiBase": "Base de l’API Bot",
@@ -810,7 +812,7 @@ export default {
       "discord3": "Dans OAuth2 → URL Generator, sélectionnez bot et accordez View Channels, Send Messages, Read Message History et Attach Files ; utilisez l’URL générée pour l’inviter.",
       "discord4": "Collez le Bot Token ci-dessous, enregistrez et testez, puis envoyez /pair en message direct avec le bot. Les salons de serveur et les messages de groupe sont ignorés.",
       "feishu1": "Créez une application d’entreprise personnalisée dans Feishu Open Platform et ajoutez la capacité Bot.",
-      "feishu2": "Sous Permissions, accordez im:message (recevoir des messages), im:message:send_as_bot (envoyer en tant que bot) et im:resource (lire et envoyer des images ou fichiers). Sans im:resource, le texte part encore mais images et fichiers sont refusés.",
+      "feishu2": "Sous Permissions, accordez im:message (recevoir des messages), im:message:send_as_bot (envoyer en tant que bot) et im:resource (lire et envoyer des images ou fichiers). Sans im:resource, le texte part encore mais images et fichiers sont refusés. Les cartes en streaming natif nécessitent aussi cardkit:card:write. Publiez une nouvelle version après avoir accordé ce droit. Sinon, des cartes ordinaires sont mises à jour.",
       "feishu3": "Sous Event Subscriptions, choisissez la connexion longue, ajoutez im.message.receive_v1 et l’événement d’action de carte, puis publiez une version disponible.",
       "feishu4": "Copiez l’App ID, l’App Secret et le Verification Token d’abonnement aux événements. Enregistrez et testez, puis envoyez /pair en message direct avec le bot. Les groupes sont ignorés.",
       "slack1": "Créez une application From scratch dans la console Slack API et installez-la dans l’espace de travail cible.",

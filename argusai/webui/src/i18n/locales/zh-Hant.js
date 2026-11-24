@@ -696,6 +696,8 @@ export default {
     }
   },
   "channels": {
+    "streamingReply": "串流回覆",
+    "streamingReplyHint": "預設開啟。關閉後完整傳送回覆，Agent 主動分多則訊息不受影響；串流效果依平台支援而定。",
     "add": "新增渠道",
     "addTitle": "新增通訊渠道",
     "apiBase": "Bot API 地址",
@@ -810,7 +812,7 @@ export default {
       "discord3": "在 OAuth2 → URL Generator 選擇 bot，並授予檢視頻道、傳送訊息、讀取歷史訊息和附加檔案權限；用生成的地址邀請機器人進入伺服器。",
       "discord4": "把 Bot Token 貼上到下方，儲存並測試連線，再在與機器人的私信中傳送 /pair。伺服器頻道和群組訊息會被忽略。",
       "feishu1": "在飛書開放平臺建立企業自建應用，並在“應用能力”中新增機器人。",
-      "feishu2": "在“權限管理”開通 im:message（接收訊息）、im:message:send_as_bot（以機器人身分發訊息）和 im:resource（取得與上傳圖片或檔案資源）。缺少 im:resource 時文字能發、圖片和檔案會被拒絕。",
+      "feishu2": "在“權限管理”開通 im:message（接收訊息）、im:message:send_as_bot（以機器人身分發訊息）和 im:resource（取得與上傳圖片或檔案資源）。缺少 im:resource 時文字能發、圖片和檔案會被拒絕。 原生串流卡片另需 cardkit:card:write；開通後請發佈新版本。未開通時會改用一般卡片更新。",
       "feishu3": "在事件訂閱中選擇“使用長連線接收事件”，新增 im.message.receive_v1 和卡片行為觸發事件，並發行可用版本。",
       "feishu4": "複製 App ID、App Secret 與事件訂閱 Verification Token；儲存測試後向機器人發私聊 /pair。群聊不會回應。",
       "slack1": "在 Slack API 後臺建立 From scratch 應用，並將應用安裝到目標 Workspace。",

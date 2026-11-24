@@ -120,6 +120,28 @@ def python_step(job, name):
     return compile(step["run"], f"workflow:{name}", "exec")
 
 
+@pytest.mark.parametrize("exit_codes", [(128, 0), (128, 128, 128)])
+def test_locked_dependency_install_retries_transient_failures_without_hiding_failure(monkeypatch, exit_codes):
+    import time
+
+    calls = []
+    outcomes = iter(exit_codes)
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=next(outcomes))
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    step = python_step("build", "Install locked Python dependencies")
+    if exit_codes[-1]:
+        with pytest.raises(SystemExit) as exc:
+            exec(step, {})
+        assert exc.value.code == 128
+    else:
+        exec(step, {})
+    assert len(calls) == len(exit_codes)
+    assert all(command == ["uv", "sync", "--locked", "--group", "build", "--group", "dev", "--python", "python"] for command in calls)
+
+
 def test_main_builds_artifacts_but_only_version_tag_pushes_publish():
     config = workflow()
     assert set(config["on"]) == {"push", "workflow_dispatch"}
