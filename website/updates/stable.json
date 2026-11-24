@@ -1,61 +1,61 @@
 {
   "schema_version": 1,
-  "version": "0.1.14",
-  "published_at": "2026-11-18T12:59:49Z",
-  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.14",
-  "notes": "# ArgusAI v0.1.14\n\n- 修复 Windows 从托盘启动后，点击主窗口无法切到前台、输入框无法接收键盘输入的问题。\n- 修复 JS 静态分析偶发长时间占用 CPU、导致界面无响应的问题。",
+  "version": "0.1.15",
+  "published_at": "2026-11-24T11:30:22Z",
+  "release_url": "https://github.com/HG-ha/Argusai/releases/tag/v0.1.15",
+  "notes": "# ArgusAI v0.1.15\n\n- 每个通讯渠道配置新增独立的“流式回复”开关，默认开启，可在渠道详情直接切换或在编辑窗口设置；关闭后完整发送回复，保留 Agent 主动分多条消息的能力。\n- 修复飞书长任务过程中，进展文本未及时推送、卡片更新顺序错乱及流式失败后延迟回退的问题；缺少原生流式卡片权限时使用普通卡片更新。\n- 修复通讯渠道投递记录在多条消息时间戳相同时显示顺序颠倒的问题。\n- 新增统一的 macOS 权限页，可从设置或 Agent 对话顶部打开，查看权限状态、用途说明并跳转对应系统设置。\n- 优化桌面权限提醒：可随时关闭，重启后保留关闭选择；历史工具卡片中的权限说明默认折叠，不影响普通对话。\n- 语音录制改为按需申请麦克风权限，支持等待授权、取消和拒绝后的恢复；仅本地应用页面可使用已授予的麦克风权限。\n- macOS 桌面通知改用 ArgusAI 自身身份，支持权限申请与状态查询；后台任务不会主动弹出授权框。\n- 补充本地网络、自动化、文件与文件夹、完全磁盘访问的按需授权引导，以及安装包中的用途声明和签名权限。\n- 安装版提供可关闭的应用图标拖拽卡片，方便添加桌面操作权限；权限页面适配深浅色、窄窗口及多语言。",
   "assets": {
     "win-x64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-win-x64-setup.exe",
-      "sha256": "5542541768cd9307cdce0e5ef2f1c59bee8094cac518892198eeb787480d1b62",
-      "size": 89864077
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-win-x64-setup.exe",
+      "sha256": "7646a0163dc0349a5cc0824fa5b094e2dacca156b15ad6417e909c0c343b4342",
+      "size": 89872702
     },
     "win-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-win-arm64-setup.exe",
-      "sha256": "cff9e0859bd7482bcd82a32e6ca0da9db088754284b441f51710d988d50095a9",
-      "size": 78509505
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-win-arm64-setup.exe",
+      "sha256": "1f97c09da5b2cda9be51d3038ea699e4306a07b337f8486a9212dc3ecb452baf",
+      "size": 78555257
     },
     "linux-x64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-linux-x64.tar.gz",
-      "sha256": "d2828d45746720074c1aeb5ee0355d2669abb535f00c6602639b55afd3931107",
-      "size": 133183569
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-linux-x64.tar.gz",
+      "sha256": "8cee07fc2c8f222b8f8a72bb9c66f5ea2adb6d8553ed0db4078fac1255de75e8",
+      "size": 133249947
     },
     "linux-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-linux-arm64.tar.gz",
-      "sha256": "50dbb0ca0ae8a48dca6b1f0dcc70c898613bd055dd01da5a39164e3512cebe85",
-      "size": 124543069
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-linux-arm64.tar.gz",
+      "sha256": "a240c0dd51cb4eec100fe8e8c72118b0b932641a3f479f56fbcccfbd2b317909",
+      "size": 124604811
     },
     "macos-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-macos-arm64.dmg",
-      "sha256": "838257755a2b1731f1ffae5e3e0056977c3a9ff06275ecdd5e66a4bc516a203d",
-      "size": 121643576
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-macos-arm64.dmg",
+      "sha256": "7142c039a5373f0fda7253cbe92a303988ae9f9dfc83cd46900c9e9855976158",
+      "size": 121981442
     }
   },
   "shell_assets": {
     "win-x64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-win-x64.zip",
-      "sha256": "bf7de4c069522ff232333843c82028b63c0ad936f6e00cb6cbb665b57177b2bb",
-      "size": 98547069
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-shell-win-x64.zip",
+      "sha256": "457f8e35c4fe98cb43243c0a8824e88acac1ab980c0d3ab2b1a826340519e39c",
+      "size": 98570278
     },
     "win-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-win-arm64.zip",
-      "sha256": "e891421cdec7a00870b84b0cd2e42dca058e2d97907097ebc4f573c043b7251d",
-      "size": 86437116
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-shell-win-arm64.zip",
+      "sha256": "e763af60a8ba70f5b68a2eb7986094ae5cbe4560832139db94e7d7ecaa2a0688",
+      "size": 86462478
     },
     "linux-x64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-linux-x64.tar.gz",
-      "sha256": "ecb66f545320c30c70c37e1da92399d792d13ca923109271bb7af85c0c739aa2",
-      "size": 149657860
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-shell-linux-x64.tar.gz",
+      "sha256": "8760b40f8d2d2cdc04b1e1a5ff7c548863b0f579717a00b0cb6cf02bc6fc82ee",
+      "size": 149679457
     },
     "linux-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-linux-arm64.tar.gz",
-      "sha256": "7e79317e65bc8dc8a6483031cb2cea7a92e9b41103f65d77c92354d89a542631",
-      "size": 138074941
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-shell-linux-arm64.tar.gz",
+      "sha256": "3642e2adb2108ef106816045dba045152ab134a64526f39cdce6bb1bce90c652",
+      "size": 138102463
     },
     "macos-arm64": {
-      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.14/ArgusAI-0.1.14-shell-macos-arm64.tar.gz",
-      "sha256": "83f6fbe40eb448282af7cc56f1b1ca1f97736bf018f6403cc16f1197d44d0438",
-      "size": 95866183
+      "url": "https://github.com/HG-ha/Argusai/releases/download/v0.1.15/ArgusAI-0.1.15-shell-macos-arm64.tar.gz",
+      "sha256": "f23cdffea44bcc40cb3ebc7a07d583f3c42162709e15b33ac6a2199239a2c933",
+      "size": 95903967
     }
   }
 }
