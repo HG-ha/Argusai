@@ -124,6 +124,42 @@
       "version": "0.1.0",
       "source": "https://pypi.org/project/proxy-tools/0.1.0/",
       "limitation": "The locked source archive has no full LICENSE. Package metadata says MIT while source headers say BSD with Werkzeug-related copyright. Preserve the actual source notices and obtain the matching complete upstream text; do not treat the metadata alone as clearance."
+    },
+    "pyobjc-framework-avfoundation": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/cd/42/c026ab308edc2ed5582d8b4b93da6b15d1b6557c0086914a4aabedd1f032/pyobjc_framework_avfoundation-12.1.tar.gz",
+      "archive_sha256": "eda0bb60be380f9ba2344600c4231dd58a3efafa99fdc65d3673ecfbb83f6fcb",
+      "archive_member": "pyobjc_framework_avfoundation-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-coreaudio": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/84/d1/0b884c5564ab952ff5daa949128c64815300556019c1bba0cf2ca752a1a0/pyobjc_framework_coreaudio-12.1.tar.gz",
+      "archive_sha256": "a9e72925fcc1795430496ce0bffd4ddaa92c22460a10308a7283ade830089fe1",
+      "archive_member": "pyobjc_framework_coreaudio-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-coremedia": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/da/7d/5ad600ff7aedfef8ba8f51b11d9aaacdf247b870bd14045d6e6f232e3df9/pyobjc_framework_coremedia-12.1.tar.gz",
+      "archive_sha256": "166c66a9c01e7a70103f3ca44c571431d124b9070612ef63a1511a4e6d9d84a7",
+      "archive_member": "pyobjc_framework_coremedia-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
+    },
+    "pyobjc-framework-usernotifications": {
+      "kind": "upstream-license",
+      "version": "12.1",
+      "source": "https://files.pythonhosted.org/packages/90/cd/e0253072f221fa89a42fe53f1a2650cc9bf415eb94ae455235bd010ee12e/pyobjc_framework_usernotifications-12.1.tar.gz",
+      "archive_sha256": "019ccdf2d400f9a428769df7dba4ea97c02453372bc5f8b75ce7ae54dfe130f9",
+      "archive_member": "pyobjc_framework_usernotifications-12.1/License.txt",
+      "file": "python-pyobjc-12.1.LICENSE.txt",
+      "sha256": "0ca04b07928d4872b9d9bb22187ca0426dd8bfab08f26eada0999a71dc81aaff"
     }
   },
   "binary_supplements": [

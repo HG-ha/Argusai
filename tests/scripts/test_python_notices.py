@@ -215,8 +215,12 @@ def test_installed_summary_cannot_hide_outdated_reviewed_document_set(reviewed_d
     assert not (root / "out").exists()
 
 
-@pytest.mark.parametrize("package,expected_count", [("pycairo", 3), ("pygobject", 1)])
-def test_locked_linux_sdist_fallbacks_cover_wheels_without_license_files(environment, monkeypatch, package, expected_count):
+@pytest.mark.parametrize("package,expected_count", [
+    ("pycairo", 3), ("pygobject", 1),
+    ("pyobjc-framework-avfoundation", 1), ("pyobjc-framework-coreaudio", 1),
+    ("pyobjc-framework-coremedia", 1), ("pyobjc-framework-usernotifications", 1),
+])
+def test_locked_sdist_fallbacks_cover_wheels_without_license_files(environment, monkeypatch, package, expected_count):
     root, dist, _, _, _ = environment
     project = Path(notices.__file__).resolve().parents[1]
     manifest = project / "scripts/packaging/python-licenses.json"
