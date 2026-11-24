@@ -573,8 +573,14 @@ def test_shell_build_keeps_services_without_desktop(monkeypatch, system):
     assert '--include-package=argusai' in flags
     assert '--include-package=qqbot_agent_sdk' in flags
     assert '--nofollow-import-to=webview' in flags
+    for module in ('argusai.gui.macos_permission_card', 'argusai.gui.webview_permissions'):
+        assert f'--nofollow-import-to={module}' in flags
     if system == 'Darwin':
         assert not any(flag.startswith('--macos-app-mode=') for flag in flags)
+        for module in ('Foundation', 'AppKit', 'AVFoundation', 'UserNotifications'):
+            assert f'--nofollow-import-to={module}' in flags
+            desktop_flags = build.nuitka_args(options(monkeypatch, system))
+            assert f'--nofollow-import-to={module}' not in desktop_flags
     assert not any(x.startswith(('--include-module=webview.', '--include-package=pythonnet', '--include-package=gi', '--include-data-dir=argusai/webui', '--include-data-dir=argusai/gui/pet_assets')) for x in flags)
 
 @pytest.mark.parametrize('flag', ['--onefile', '--nsis', '--dmg'])

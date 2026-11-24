@@ -289,9 +289,16 @@ def nuitka_args(args: argparse.Namespace, *, win32_helper: Path | None = None) -
         if args.system == "Darwin":
             flags = [flag for flag in flags if not flag.startswith(("--macos-app-mode=", "--macos-app-icon="))]
             flags.append(f"--output-filename={args.app_name}")
+            # Permission helpers are shared with CLI services, but their
+            # optional PyObjC APIs require an application bundle. Shell uses
+            # ctypes for desktop control and reports bundle-only APIs as
+            # unavailable; do not pull the app frameworks into this executable.
+            for module in ("Foundation", "AppKit", "AVFoundation", "UserNotifications"):
+                flags.append(f"--nofollow-import-to={module}")
         for module in ("webview", "clr", "clr_loader", "pythonnet", "gi", "cairo",
                        "argusai.gui.launch", "argusai.gui.desktop_pet", "argusai.gui.desktop_pet_windows",
-                       "argusai.gui.desktop_pet_chat", "argusai.gui.macos_titlebar", "argusai.gui.tray"):
+                       "argusai.gui.desktop_pet_chat", "argusai.gui.macos_titlebar", "argusai.gui.tray",
+                       "argusai.gui.macos_permission_card", "argusai.gui.webview_permissions"):
             flags.append(f"--nofollow-import-to={module}")
     if args.jobs:
         flags.append(f"--jobs={args.jobs}")
