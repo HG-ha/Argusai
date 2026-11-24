@@ -622,11 +622,14 @@ class ChannelStore:
                     row for row in jobs
                     if str(row.get("state") or "") in {"sent", "failed"}
                 ][-500:]
-                active = [
+                retained_terminal_ids = {row["id"] for row in terminal}
+                # Keep insertion order even as deliveries finish. It is the
+                # durable tie-breaker when the system clock gives equal times.
+                state["jobs"] = [
                     row for row in jobs
                     if str(row.get("state") or "") not in {"sent", "failed"}
+                    or row.get("id") in retained_terminal_ids
                 ]
-                state["jobs"] = active + terminal
                 self._write_outbox(state)
         return result
 
@@ -646,6 +649,8 @@ class ChannelStore:
                         or str(row.get("session_id") or "") == str(session_id)
                     )
                 ]
+        # Newest first, including deliveries created within one clock tick.
+        jobs.reverse()
         jobs.sort(key=lambda row: float(row.get("created_at") or 0), reverse=True)
         return jobs[:max(1, min(int(limit), 500))]
 

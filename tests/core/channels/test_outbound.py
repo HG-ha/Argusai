@@ -151,6 +151,34 @@ def test_outbox_is_identity_bound_leased_and_retried(tmp_path) -> None:
     assert sent["state"] == "sent"
 
 
+def test_outbox_keeps_same_timestamp_order_after_delivery_and_restart(tmp_path, monkeypatch) -> None:
+    store, _channel, identity = _paired(tmp_path)
+    monkeypatch.setattr("argusai.core.channels.store.time.time", lambda: 1_800_000_000.0)
+    jobs = [
+        store.enqueue_outbound(identity_id=identity.id, session_id="session-1", text=text)
+        for text in ["first", "second", "third"]
+    ]
+    assert len({job["created_at"] for job in jobs}) == 1
+
+    def assert_newest_first(current_store):
+        assert [row["id"] for row in current_store.list_outbound()] == [
+            job["id"] for job in reversed(jobs)
+        ]
+
+    assert_newest_first(store)
+    assert store.list_outbound(limit=1)[0]["id"] == jobs[-1]["id"]
+    assert store.claim_outbound(limit=1)[0]["id"] == jobs[0]["id"]
+    store.finish_outbound(jobs[0]["id"])
+    restarted = ChannelStore(store.root)
+    assert_newest_first(restarted)
+    assert [row["id"] for row in restarted.claim_outbound()] == [
+        jobs[1]["id"], jobs[2]["id"]
+    ]
+    restarted.finish_outbound(jobs[1]["id"], error="denied", permanent=True)
+    restarted.finish_outbound(jobs[2]["id"])
+    assert_newest_first(ChannelStore(store.root))
+
+
 def test_outbox_cross_session_delivery_requires_explicit_internal_flag(tmp_path) -> None:
     store, _channel, identity = _paired(tmp_path)
     store.bind_identity(identity.id, "session-channel")
@@ -806,8 +834,9 @@ def test_channel_send_prefers_turn_source_over_fanout(tmp_path) -> None:
     assert fs_identity.id not in {item["identity_id"] for item in result["deliveries"]}
 
 
-def test_channel_reply_queues_ordered_bubbles_only_for_turn_source(tmp_path) -> None:
+def test_channel_reply_queues_ordered_bubbles_only_for_turn_source(tmp_path, monkeypatch) -> None:
     store, channel, identity = _paired(tmp_path)
+    monkeypatch.setattr("argusai.core.channels.store.time.time", lambda: 1_800_000_000.0)
 
     class Runtime:
         def enqueue_outbound(self, **kwargs):
