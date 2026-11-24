@@ -16,6 +16,7 @@ import AssistantCard from './assistant/cards/AssistantCard.vue'
 import SubAgentGroupCard from './assistant/SubAgentGroupCard.vue'
 import TokenUsageDetail from './assistant/TokenUsageDetail.vue'
 import WorkbenchModal from './workbench/WorkbenchModal.vue'
+import MacosPermissions from './settings/MacosPermissions.vue'
 import SandboxContextMenu from './SandboxContextMenu.vue'
 import { ATTACHMENT_ACCEPT_MIMES, ATTACHMENT_AUDIO_ACCEPT_MIMES, ATTACHMENT_FILE_MAX_BYTES, ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENT_TEXT_MAX_BYTES, ATTACHMENT_VIDEO_ACCEPT_MIMES, ATTACHMENT_VIDEO_MAX_BYTES, INPUT_PATH_TOKEN_RE, RENDER_WINDOW_SIZE, RENDER_WINDOW_STEP, RENDER_WINDOW_TRIGGER, bytesToBase64, fileNameExt, formatVoiceMs, formatVoiceSecondsLabel, humanSize, isAudioFile, isImageFile, isTextLikeFile, isVideoFile, looksLikeInputPath, normalizeAudioMime, normalizeVideoMime, pathDisplayName, trimPathToken, voiceBubbleWidth } from './assistant/panelUtils.js'
 import MarkdownText from './assistant/MarkdownText.vue'
@@ -392,10 +393,48 @@ const desktopControlRemainingLabel = computed(() => {
     ? t('assistant.durationMinutesSeconds', { minutes: m, seconds: s })
     : t('assistant.durationSeconds', { seconds: s })
 })
-const macosDesktopPermMissing = computed(() => {
-  if (state.platform !== 'darwin') return []
-  return (desktopControl.value?.macos_permissions?.permissions || []).filter((p) => p && !p.granted)
+const MACOS_PERMISSION_HINT_KEY = 'argusai.macos.desktop-permission-hint.dismissed.v1'
+const macosPermissionHintDismissed = ref(readMacosPermissionHintDismissed())
+const showMacosPermissionPanel = ref(false)
+const macosDesktopPermissions = computed(() => state.platform === 'darwin'
+  ? (desktopControl.value?.macos_permissions?.permissions || []).filter(Boolean)
+  : [])
+const macosDesktopPermMissing = computed(() => macosDesktopPermissions.value.filter(p => !p.granted))
+const showMacosPermissionHint = computed(() => {
+  if (!macosDesktopPermMissing.value.length || macosPermissionHintDismissed.value || showMacosPermissionPanel.value) return false
+  // Restored history and background permission polling are not new requests.
+  const isDesktopTool = name => String(name || '').startsWith('desktop_')
+  if (desktopControlActive.value || pendingTools.value.some(tool => isDesktopTool(tool.name))) return true
+  if (!assistantRunActive.value) return false
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const message = messages.value[i]
+    if (message.role === 'user') break
+    if ((message.blocks || []).some(block =>
+      isDesktopTool(block.name) || isDesktopTool(block.source_tool) ||
+      block.type === 'desktop_observe' || block.type === 'desktop_control'
+    )) {
+      return true
+    }
+  }
+  return false
 })
+
+function readMacosPermissionHintDismissed() {
+  try { return localStorage.getItem(MACOS_PERMISSION_HINT_KEY) === '1' }
+  catch (_) { return false }
+}
+
+function dismissMacosPermissionHint() {
+  macosPermissionHintDismissed.value = true
+  try { localStorage.setItem(MACOS_PERMISSION_HINT_KEY, '1') }
+  catch (_) { /* Keep dismissal effective even when storage is unavailable. */ }
+  void api.dismissMacosPermissionHint().catch(() => {})
+}
+
+function openMacosPermissionPanel() {
+  dismissMacosPermissionHint()
+  showMacosPermissionPanel.value = true
+}
 
 const engagementActive = computed(() => Boolean(engagement.value?.active))
 const greenlightAvailable = computed(() => !activeTab.value?.runtimePending && (
@@ -434,22 +473,13 @@ const tabContextActions = computed(() => [
   { id: 'close-tab', label: t('assistant.tabCloseTitle'), disabled: tabs.length <= 1 },
 ])
 
-async function openMacosPrivacySettings(pane) {
-  try {
-    const r = await api.openMacosPrivacySettings(pane || 'accessibility')
-    if (r?.ok) showToast(t('assistant.macosSettingsOpened'), 'ok')
-    else showToast(r?.error || t('assistant.openSystemSettingsFailed'), 'error')
-  } catch (e) {
-    showToast(String(e?.message || e), 'error')
-  }
-}
-
 async function refreshDesktopControl() {
   const tab = activeTab.value
   if (!tab?.sessionId) return
   try {
     const r = await api.getDesktopActionStatus(tab.sessionId)
     if (r?.ok) {
+      if (r.permission_hint_dismissed) macosPermissionHintDismissed.value = true
       tab.desktopControl = {
         active: Boolean(r.active),
         expires_at: Number(r.expires_at || 0),
@@ -459,7 +489,8 @@ async function refreshDesktopControl() {
         macos_permissions: r.macos_permissions || null,
       }
     }
-  } catch (_) { /* ignore */ }
+    return r
+  } catch (_) { return { ok: false } }
 }
 
 function syncDesktopControlFromMessages(msgs) {
@@ -2305,6 +2336,12 @@ async function onMicClick() {
   }
   const started = await voiceInput.start()
   if (!started.ok) {
+    if (started.error === 'cancelled') return
+    if (started.error === 'macos_permission') {
+      if (started.error_code === 'macos_usage_description_missing') showToast(t('macosPermissions.needsBuild'), 'error')
+      openMacosPermissionPanel()
+      return
+    }
     if (started.error === 'unsupported') showToast(t('assistant.voiceUnsupported'), 'error')
     else showToast(t('assistant.voiceMicDenied'), 'error')
   }
@@ -2353,7 +2390,7 @@ async function finishVoiceRecording() {
 }
 
 function cancelVoiceRecording() {
-  if (voiceState.value !== 'recording') return
+  if (!['recording', 'requesting'].includes(voiceState.value)) return
   voiceInput.cancel()
   showToast(t('assistant.voiceCancelled'), 'info')
 }
@@ -4805,7 +4842,7 @@ async function send(msg, options = {}) {
     void askSideQuestion(sideMatch[1] || '')
     return
   }
-  if (voiceState.value === 'recording') voiceInput.cancel()
+  if (['recording', 'requesting'].includes(voiceState.value)) voiceInput.cancel()
 
   const pendingVoiceSnapshot = queued ? queued.voice : tab.pendingVoice
   const pendingAttachmentSnapshot = [...(queued ? queued.attachments || [] : tab.pendingAttachments || [])]
@@ -6741,6 +6778,11 @@ async function saveSessionMeta(s, event) {
 }
 
 function onKeydown(e) {
+  if (voiceState.value === 'requesting' && e.key === 'Escape') {
+    e.preventDefault()
+    cancelVoiceRecording()
+    return
+  }
   if (voiceState.value === 'recording') {
     if (e.key === 'Escape') {
       e.preventDefault()
@@ -6798,6 +6840,11 @@ function onGlobalKey(e) {
   // While recording, the contenteditable input is replaced by the capsule UI,
   // so per-input @keydown can't catch Esc/Enter. Promote them here so the
   // shortcuts work regardless of where focus lives inside the panel.
+  if (props.visible && voiceState.value === 'requesting' && e.key === 'Escape') {
+    e.preventDefault()
+    cancelVoiceRecording()
+    return
+  }
   if (props.visible && voiceState.value === 'recording') {
     if (e.key === 'Escape') {
       e.preventDefault()
@@ -7035,6 +7082,7 @@ watch(() => props.visible, (v) => {
       document.getElementById('assistant-input')?.focus()
     })
   } else {
+    showMacosPermissionPanel.value = false
     closeMessageContextMenu()
     closeTabContextMenu()
     cancelEditUserMessage()
@@ -7137,6 +7185,21 @@ watch(input, (newVal) => {
           </button>
           <button class="icon-btn" :title="t('assistant.sessionHistory')" @click.stop="toggleSessionList">
             <span class="assistant-icon icon-clock" aria-hidden="true"></span>
+          </button>
+          <button
+            v-if="state.platform === 'darwin'"
+            class="icon-btn"
+            type="button"
+            :title="t('assistant.macosDesktopPermissions')"
+            :aria-label="t('assistant.macosDesktopPermissions')"
+            aria-haspopup="dialog"
+            :aria-expanded="showMacosPermissionPanel"
+            @click.stop="openMacosPermissionPanel"
+          >
+            <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+              <rect x="2.5" y="3" width="15" height="10.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M7 17h6m-3-3.5V17m-3-9 2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </button>
           <button
             class="icon-btn assistant-agent-head-btn"
@@ -7415,17 +7478,22 @@ watch(input, (newVal) => {
         </button>
       </div>
 
-      <div v-if="macosDesktopPermMissing.length" class="macos-perm-banner">
+      <div v-if="showMacosPermissionHint" class="macos-perm-banner" role="status">
         <div class="macos-perm-banner-main">
           <strong>{{ t('assistant.macosDesktopPermissions') }}</strong>
-          <ul class="macos-perm-list">
-            <li v-for="p in macosDesktopPermMissing" :key="p.id">
-              <span>{{ p.label }}：{{ p.hint }}</span>
-              <button class="ghost tiny" type="button" @click="openMacosPrivacySettings(p.id)">
-                {{ t('assistant.openSettings') }}
-              </button>
-            </li>
-          </ul>
+          <span>{{ t('assistant.macosPermissionSummary') }}</span>
+        </div>
+        <div class="macos-perm-banner-actions">
+          <button class="ghost tiny" type="button" @click="openMacosPermissionPanel">{{ t('assistant.openSettings') }}</button>
+          <button
+            class="icon-btn"
+            type="button"
+            :title="t('assistant.macosPermissionDismiss')"
+            :aria-label="t('assistant.macosPermissionDismiss')"
+            @click="dismissMacosPermissionHint"
+          >
+            <span class="assistant-icon icon-close" aria-hidden="true"></span>
+          </button>
         </div>
       </div>
 
@@ -8429,9 +8497,9 @@ watch(input, (newVal) => {
                   type="button"
                   class="composer-control mic-btn"
                   :class="{ processing: voiceState === 'processing' }"
-                  :disabled="sending || voiceState === 'processing'"
-                  :aria-label="voiceState === 'processing' ? t('assistant.voiceProcessing') : t('assistant.voiceStartTitle')"
-                  :title="voiceState === 'processing' ? t('assistant.voiceProcessing') : t('assistant.voiceStartTitle')"
+                  :disabled="sending || voiceState !== 'idle'"
+                  :aria-label="voiceState === 'requesting' ? t('macosPermissions.waiting') : voiceState === 'processing' ? t('assistant.voiceProcessing') : t('assistant.voiceStartTitle')"
+                  :title="voiceState === 'requesting' ? t('macosPermissions.waiting') : voiceState === 'processing' ? t('assistant.voiceProcessing') : t('assistant.voiceStartTitle')"
                   @click="onMicClick"
                 >
                   <span class="assistant-icon icon-mic" aria-hidden="true"></span>
@@ -8463,6 +8531,19 @@ watch(input, (newVal) => {
       <div class="drop-overlay" :class="{ visible: dragOver }" aria-hidden="true">{{ t('assistant.dropOverlay') }}</div>
     </div>
   </Transition>
+
+  <WorkbenchModal
+    :open="showMacosPermissionPanel"
+    size="sm"
+    :title="t('macosPermissions.title')"
+    :close-label="t('common.close')"
+    @close="showMacosPermissionPanel = false"
+  >
+    <MacosPermissions v-if="showMacosPermissionPanel" />
+    <template #footer>
+      <button class="primary" type="button" @click="showMacosPermissionPanel = false">{{ t('common.close') }}</button>
+    </template>
+  </WorkbenchModal>
 
   <WorkbenchModal
     :open="showNewSessionModal"
@@ -9054,6 +9135,10 @@ watch(input, (newVal) => {
 .desktop-control-scope { color: var(--muted); }
 
 .macos-perm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin: 0 12px 8px;
   padding: 8px 12px;
   border-radius: 10px;
@@ -9061,8 +9146,11 @@ watch(input, (newVal) => {
   background: color-mix(in srgb, var(--warning, #e6a23c) 10%, var(--panel-2));
   font-size: 12px;
 }
-.macos-perm-list { margin: 6px 0 0; padding-left: 0; list-style: none; }
-.macos-perm-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--muted); }
+.macos-perm-banner-main { min-width: 0; }
+.macos-perm-banner-main strong { display: block; }
+.macos-perm-banner-main span { color: var(--muted); }
+.macos-perm-banner-actions { display: flex; align-items: center; flex-shrink: 0; gap: 4px; }
+.macos-perm-banner-actions .icon-btn { width: 28px; height: 28px; }
 
 .assistant-panel {
   position: fixed;

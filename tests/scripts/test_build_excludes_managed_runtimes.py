@@ -24,6 +24,24 @@ def options(monkeypatch, system="Linux", *extra, machine="x86_64", python_platfo
     return build.parse_args(list(extra), system=system)
 
 
+def test_macos_bundle_declares_used_resources_and_preserves_identity(tmp_path):
+    bundle = tmp_path / "ArgusAI.app"
+    path = bundle / "Contents/Info.plist"
+    path.parent.mkdir(parents=True)
+    info = {"CFBundleIdentifier": "com.argusai.app", "CFBundleExecutable": "__main__", "CustomKey": True}
+    path.write_bytes(plistlib.dumps(info))
+    build.configure_macos_permissions(bundle)
+    result = plistlib.loads(path.read_bytes())
+    assert all(result[k] == v for k, v in info.items())
+    for key in ("NSMicrophoneUsageDescription", "NSAppleEventsUsageDescription", "NSLocalNetworkUsageDescription", "NSDocumentsFolderUsageDescription", "NSDesktopFolderUsageDescription", "NSDownloadsFolderUsageDescription"):
+        assert result[key].strip()
+    assert "NSCameraUsageDescription" not in result
+    entitlements = plistlib.loads((REPO / "scripts/macos/argusai.entitlements").read_bytes())
+    assert entitlements["com.apple.security.device.audio-input"] is True
+    assert entitlements["com.apple.security.automation.apple-events"] is True
+    assert "com.apple.security.app-sandbox" not in entitlements
+
+
 @pytest.mark.parametrize("system,mode,tag", [("Windows", "folder", "win-x64"), ("Darwin", "app", "macos-x64"), ("Linux", "folder", "linux-x64")])
 def test_native_defaults(monkeypatch, system, mode, tag):
     args = options(monkeypatch, system)
@@ -478,6 +496,10 @@ def test_macos_app_copies_vendor_before_signing(monkeypatch, tmp_path):
         target.write_text("retained vendor fixture")
     calls = []
     def sign_app(path, args):
+        info = plistlib.loads((path / "Contents/Info.plist").read_bytes())
+        assert info["NSMicrophoneUsageDescription"]
+        assert info["NSAppleEventsUsageDescription"]
+        assert info["NSLocalNetworkUsageDescription"]
         assert (path / "Contents/Resources/argusai/vendor/runners/task.js").is_file()
         assert (path / "Contents/Resources/argusai/vendor/sqlmap/sqlmap.py").read_text() == "retained vendor fixture"
         assert (path / "Contents/Resources/licenses/LICENSE").is_file()

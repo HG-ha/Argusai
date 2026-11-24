@@ -15,7 +15,20 @@ class AssistantToolsMixin:
             sid = self._validate_session_id(sid)
         except Exception:
             pass
-        return dc.desktop_session_status(sid)
+        result = dc.desktop_session_status(sid)
+        try:
+            result["permission_hint_dismissed"] = bool(self.settings_mgr.get().gui_macos_permission_hint_dismissed)
+        except Exception:
+            result["permission_hint_dismissed"] = False
+        return result
+
+    def dismiss_macos_permission_hint(self) -> dict[str, Any]:
+        """Persist dismissal independently of the WebView's local server port."""
+        try:
+            self.settings_mgr.update(lambda settings: setattr(settings, "gui_macos_permission_hint_dismissed", True))
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def stop_desktop_action(self, session_id: str = "") -> dict[str, Any]:
         """Stop desktop continuous-action authorization immediately."""
@@ -33,6 +46,28 @@ class AssistantToolsMixin:
         from argusai.core.workspace import darwin_permissions as dp
 
         return dp.open_privacy_settings(str(pane or "accessibility"))
+
+    def get_macos_permissions(self, pane: str = "") -> dict[str, Any]:
+        """Read permissions without showing any authorization dialogs."""
+        from argusai.core.workspace import darwin_permissions as dp
+
+        if pane == "microphone":
+            return {"ok": True, "status": dp.microphone_status()}
+        return dp.permission_center_snapshot()
+
+    def request_macos_permission(self, pane: str) -> dict[str, Any]:
+        """A user-initiated request for microphone or notification access."""
+        from argusai.core.workspace.darwin_permissions import request_permission
+
+        return request_permission(str(pane or "").strip().lower())
+
+    def show_macos_permission_card(
+        self, pane: str = "accessibility", labels: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Show a draggable reference to this app next to macOS privacy settings."""
+        from .macos_permission_card import show_permission_card
+
+        return show_permission_card(str(pane or "accessibility"), labels)
 
     def list_assistant_tools(self, session_id: str = "") -> dict[str, Any]:
         try:

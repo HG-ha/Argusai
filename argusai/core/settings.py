@@ -504,6 +504,7 @@ class AppSettings:
     gui_window_height: int = 0
     gui_window_maximized: bool = False
     gui_close_to_tray: bool = True
+    gui_macos_permission_hint_dismissed: bool = False
     gui_desktop_pet: bool = False
     gui_pet_snap: bool = False
     gui_pet_scale: float = 1.0
@@ -640,6 +641,7 @@ class AppSettings:
             "logging": self.logging.normalised().to_dict(),
             "gui": {
                 "close_to_tray": bool(self.gui_close_to_tray),
+                "macos_permission_hint_dismissed": bool(self.gui_macos_permission_hint_dismissed),
                 "desktop_pet": bool(self.gui_desktop_pet),
                 "pet_snap": bool(self.gui_pet_snap),
                 "pet_scale": normalise_pet_scale(self.gui_pet_scale),
@@ -927,6 +929,7 @@ def _parse(raw: dict[str, Any]) -> AppSettings:
         gui_pet_x=_optional_int(gui.get("pet_x")),
         gui_pet_y=_optional_int(gui.get("pet_y")),
         gui_close_to_tray=True if "close_to_tray" not in gui else bool(gui.get("close_to_tray")),
+        gui_macos_permission_hint_dismissed=bool(gui.get("macos_permission_hint_dismissed", False)),
     )
 
 

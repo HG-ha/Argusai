@@ -199,13 +199,9 @@ def desktop_notify(
                 **quiet_subprocess_kwargs(),
             )
         elif sys.platform == "darwin":
-            script = 'on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run'
-            proc = subprocess.run(
-                ["osascript", "-e", script, safe_title, safe_message],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+            from argusai.core.workspace.darwin_notifications import send_notification
+
+            return {**send_notification(safe_title, safe_message), "title": safe_title, "level": severity}
         else:
             notifier = shutil.which("notify-send")
             if not notifier:

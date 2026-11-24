@@ -1,4 +1,6 @@
 import { computed, onUnmounted, ref } from 'vue'
+import { api } from '../api.js'
+import { state as appState } from '../state.js'
 
 export const MAX_VOICE_RECORD_SECONDS = 120
 
@@ -58,6 +60,7 @@ export function useAssistantVoiceInput() {
   let analyserBuffer = null
   let rafId = 0
   let lastSampleAt = 0
+  let captureGeneration = 0
 
   const isSupported = computed(() => {
     if (typeof navigator === 'undefined') return false
@@ -158,6 +161,7 @@ export function useAssistantVoiceInput() {
   }
 
   function cancel() {
+    captureGeneration++
     clearTickTimer()
     teardownAnalyser()
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -182,8 +186,37 @@ export function useAssistantVoiceInput() {
       return { ok: false, error: 'unsupported' }
     }
     chosenMime = pickRecorderMimeType()
+    const generation = ++captureGeneration
     try {
-      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (appState.platform === 'darwin') {
+        state.value = 'requesting'
+        const result = await api.requestMacosPermission('microphone')
+        if (generation !== captureGeneration) return { ok: false, error: 'cancelled' }
+        if (!result?.ok) {
+          state.value = 'idle'
+          return { ok: false, error: 'macos_permission', error_code: result?.error_code }
+        }
+        if (result.pending) {
+          const deadline = Date.now() + 120000
+          let status = result.status
+          while (status === 'not_determined' && Date.now() < deadline && generation === captureGeneration) {
+            await new Promise(resolve => setTimeout(resolve, 500))
+            if (generation !== captureGeneration) return { ok: false, error: 'cancelled' }
+            status = (await api.getMacosPermissions('microphone'))?.status
+          }
+          if (generation !== captureGeneration) return { ok: false, error: 'cancelled' }
+          if (status !== 'granted') {
+            state.value = 'idle'
+            return { ok: false, error: 'macos_permission', error_code: 'macos_microphone_denied' }
+          }
+        }
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (generation !== captureGeneration) {
+        stream.getTracks().forEach(track => track.stop())
+        return { ok: false, error: 'cancelled' }
+      }
+      mediaStream = stream
       chunks = []
       const options = chosenMime ? { mimeType: chosenMime } : undefined
       mediaRecorder = new MediaRecorder(mediaStream, options)
@@ -203,6 +236,7 @@ export function useAssistantVoiceInput() {
       }, 1000)
       return { ok: true }
     } catch (err) {
+      if (generation !== captureGeneration) return { ok: false, error: 'cancelled' }
       cancel()
       return { ok: false, error: String(err?.message || err || 'mic_denied') }
     }

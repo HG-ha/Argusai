@@ -41,6 +41,8 @@ dependencies = [
     "regex>=2024.11.6",
     "h2>=4.1,<5",
     "qqbot-agent-sdk>=1.2.2,<2",
+    "pyobjc-framework-avfoundation>=10.3,<13 ; sys_platform == 'darwin'",
+    "pyobjc-framework-usernotifications>=10.3,<13 ; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

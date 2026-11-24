@@ -10,6 +10,7 @@ import { useConfirm } from '../composables/useConfirm.js'
 import { useClientList } from '../composables/useClientList.js'
 import { navigate, route } from '../router.js'
 import StorageDirField from './settings/StorageDirField.vue'
+import MacosPermissions from './settings/MacosPermissions.vue'
 import AIProviderPicker from './settings/AIProviderPicker.vue'
 import ListToolbar from './list/ListToolbar.vue'
 import ListPager from './list/ListPager.vue'
@@ -2722,10 +2723,11 @@ function formatEndpointLatency(latencyMs) {
 }
 
 const settingsSearch = ref('')
-const activeSettingsSection = ref(route.params.section === 'updates' ? 'updates' : 'ai')
+const activeSettingsSection = ref(['updates', 'macos_permissions'].includes(route.params.section) ? route.params.section : 'ai')
 const settingsContentEl = ref(null)
 
 const SETTINGS_CATEGORY_DEFINITIONS = [
+  { id: 'macos_permissions', group: 'local', labelKey: 'macosPermissions.title', keywords: 'macos permission privacy microphone screen automation files folders network notifications 麦克风 权限 隐私 局域网 通知 自动化' },
   { id: 'appearance', group: 'workspace', labelKey: 'settings.appearanceTitle', keywords: 'theme appearance light dark auto tray 主题 外观 浅色 深色 自动 托盘' },
   { id: 'updates', group: 'workspace', labelKey: 'updates.title', keywords: 'update upgrade version release download installation 更新 升级 版本 发布 下载 安装' },
   { id: 'ai', group: 'workspace', labelKey: 'settings.aiTitle', keywords: 'ai model endpoint api key vision asr tokens 模型 端点 密钥 视觉 语音' },
@@ -2747,6 +2749,7 @@ function configuredHabitCount() {
 }
 
 function categorySummary(id) {
+  if (id === 'macos_permissions') return t('macosPermissions.summary')
   if (id === 'appearance') {
     return themePrefOptions.value.find(opt => opt.value === theme.preferred)?.label || t('settings.control.statusUnknown')
   }
@@ -2841,7 +2844,9 @@ function categoryHealth(id) {
   return 'neutral'
 }
 
-const settingsCategories = computed(() => SETTINGS_CATEGORY_DEFINITIONS.map(category => ({
+const settingsCategories = computed(() => SETTINGS_CATEGORY_DEFINITIONS
+  .filter(category => category.id !== 'macos_permissions' || state.platform === 'darwin')
+  .map(category => ({
   ...category,
   label: t(category.labelKey),
   summary: categorySummary(category.id),
@@ -2881,8 +2886,19 @@ function selectSettingsSection(id) {
   })
 }
 
+async function enableDesktopNotifications(enabled) {
+  if (!enabled || state.platform !== 'darwin') return
+  try {
+    const result = await api.requestMacosPermission('notifications')
+    if (!result?.ok) selectSettingsSection('macos_permissions')
+  } catch (_) {
+    showToast(t('macosPermissions.requestFailed'), 'error')
+  }
+}
+
 watch(() => route.params.section, (section) => {
   if (section === 'updates') selectSettingsSection('updates')
+  if (section === 'macos_permissions' && state.platform === 'darwin') selectSettingsSection(section)
 })
 </script>
 
@@ -2948,6 +2964,16 @@ watch(() => route.params.section, (section) => {
       </nav>
 
       <main ref="settingsContentEl" class="settings-content">
+
+    <section v-if="state.platform === 'darwin' && activeSettingsSection === 'macos_permissions'" class="settings-section-card settings-domain">
+      <div class="settings-section-header">
+        <div class="settings-head-text">
+          <h2 class="settings-section-title">{{ t('macosPermissions.title') }}</h2>
+          <p class="settings-head-desc">{{ t('macosPermissions.summary') }}</p>
+        </div>
+      </div>
+      <div class="settings-section-content"><MacosPermissions /></div>
+    </section>
 
     <!-- Appearance -->
     <section v-show="activeSettingsSection === 'appearance'" class="settings-section-card settings-domain">
@@ -3652,7 +3678,8 @@ watch(() => route.params.section, (section) => {
         <div class="form-col">
           <label>{{ t('settings.assistantDesktopNotifications') }}</label>
           <div style="display:flex;align-items:center;min-height:34px">
-            <NSwitch v-model:value="settings.assistant.desktop_notifications" />
+            <NSwitch v-model:value="settings.assistant.desktop_notifications" @update:value="enableDesktopNotifications" />
+            <button v-if="state.platform === 'darwin'" class="ghost tiny" type="button" @click="selectSettingsSection('macos_permissions')">{{ t('macosPermissions.title') }}</button>
           </div>
           <div class="hint">{{ t('settings.assistantDesktopNotificationsHint') }}</div>
         </div>

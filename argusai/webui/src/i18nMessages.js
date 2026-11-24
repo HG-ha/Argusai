@@ -11,6 +11,50 @@ import zhHant from './i18n/locales/zh-Hant.js'
 
 export const messages = {
   zh: {
+    macosPermissions: {
+      "title": "macOS 权限",
+      "summary": "按功能授权，随时修改",
+      "hint": "只需开启正在使用的功能所需权限。返回应用后会刷新状态；关闭此页不会影响普通对话。",
+      "loadFailed": "无法读取权限状态，请刷新重试。",
+      "requestFailed": "未能获得授权，可在系统设置中检查。",
+      "openFailed": "无法打开系统设置。",
+      "needsBuild": "当前运行程序缺少麦克风用途声明。请使用更新后的 .app；源码运行需由实际启动程序提供该声明。",
+      "unavailableHint": "此权限无法通过当前启动方式检测或申请。安装版 .app 支持以 ArgusAI 身份授权。",
+      "request": "申请权限",
+      "waiting": "等待系统确认…",
+      "labels": {
+        "accessibility": "辅助功能",
+        "screen_capture": "屏幕录制",
+        "listen_event": "输入监控",
+        "microphone": "麦克风",
+        "notifications": "通知",
+        "local_network": "本地网络",
+        "automation": "自动化",
+        "files_and_folders": "文件与文件夹",
+        "full_disk_access": "完全磁盘访问"
+      },
+      "status": {
+        "granted": "已授权",
+        "denied": "未授权",
+        "restricted": "系统限制",
+        "not_determined": "尚未申请",
+        "unknown": "暂时无法检测",
+        "unavailable": "当前不可用",
+        "per_resource": "按应用或目录授权",
+        "manual": "在系统设置中确认"
+      },
+      "hints": {
+        "accessibility": "用于 Agent 控制鼠标与键盘。只在需要桌面操作时开启。",
+        "screen_capture": "用于截取桌面画面。授权后若系统要求，请重新启动应用。",
+        "listen_event": "仅在系统要求监听键盘输入时开启；模拟按键通常使用辅助功能权限。",
+        "microphone": "点击录音时才申请并采集声音。录音会交给你配置的语音识别或 AI 端点处理。",
+        "notifications": "用于任务完成、待确认和异常提醒。申请后还可在系统设置中调整横幅和声音；专注模式可能影响提醒。",
+        "local_network": "访问内网目标、局域网模型或供其他设备连接代理时需要。系统会在实际访问时询问；此处不通过探测网络触发授权。",
+        "automation": "Agent 通过 AppleScript 控制其他应用时，系统会按目标应用分别询问。请在执行相关任务时授权。",
+        "files_and_folders": "访问桌面、文稿、下载、网络卷或移动磁盘时按目录授权。优先通过文件选择器选择需要的文件；拒绝后可在这里修改。",
+        "full_disk_access": "仅在任务确实需要访问受保护数据且普通文件授权不足时开启。普通聊天、扫描和大多数文件任务不需要。"
+      }
+    },
     updates: {
       title: '软件更新', currentVersion: '当前版本 {version}', check: '检查更新', checking: '正在检查…',
       download: '下载更新', retryDownload: '重试下载', cancelDownload: '取消下载', installRestart: '安装并重启',
@@ -1965,6 +2009,17 @@ export const messages = {
       manualConfirm: "手动确认",
       manageAllConversations: "管理全部对话与沙盒",
       macosDesktopPermissions: "macOS 桌面权限",
+      macosPermissionSummary: "桌面截图和键鼠控制需要系统权限，可稍后设置。",
+      macosPermissionHint: "仅桌面截图和键鼠控制需要这些权限，普通对话可直接使用。关闭后可从对话顶部的桌面权限按钮重新打开。",
+      macosPermissionDismiss: "关闭提醒，以后不再自动显示",
+      macosPermissionGranted: "已授权",
+      macosPermissionMissing: "未授权",
+      macosPermissionStatusFailed: "无法读取权限状态，请刷新重试。",
+      macosPermissionDrag: "拖拽添加",
+      macosPermissionDragTitle: "拖拽添加应用权限",
+      macosPermissionDragHint: "把下方应用图标拖入系统设置的权限列表，再开启开关。",
+      macosPermissionReveal: "在访达中显示",
+      macosPermissionDragUnavailable: "拖拽卡片适用于 .app 安装版。源码运行时，请在系统设置中添加实际启动它的 Terminal/Python。",
       openSettings: "打开设置",
       desktopContinuousAuthorization: "桌面连续操作授权中",
       remainingTime: "剩余 {time}",
@@ -3769,6 +3824,50 @@ export const messages = {
   },
 
   en: {
+    macosPermissions: {
+      "title": "macOS permissions",
+      "summary": "Grant access by feature",
+      "hint": "Enable only the permissions needed for the feature you use. Status refreshes when you return. Closing this page does not affect regular chat.",
+      "loadFailed": "Could not read permissions. Refresh to try again.",
+      "requestFailed": "Access was not granted. Check System Settings.",
+      "openFailed": "Could not open System Settings.",
+      "needsBuild": "This process has no microphone purpose declaration. Use the updated .app; source runs need a declaration in the actual launcher.",
+      "unavailableHint": "This launch method cannot check or request this permission. The .app build uses ArgusAI’s identity.",
+      "request": "Request access",
+      "waiting": "Waiting for macOS…",
+      "labels": {
+        "accessibility": "Accessibility",
+        "screen_capture": "Screen recording",
+        "listen_event": "Input monitoring",
+        "microphone": "Microphone",
+        "notifications": "Notifications",
+        "local_network": "Local network",
+        "automation": "Automation",
+        "files_and_folders": "Files and folders",
+        "full_disk_access": "Full disk access"
+      },
+      "status": {
+        "granted": "Granted",
+        "denied": "Not granted",
+        "restricted": "Restricted",
+        "not_determined": "Not requested",
+        "unknown": "Cannot determine",
+        "unavailable": "Unavailable",
+        "per_resource": "Per app or folder",
+        "manual": "Check System Settings"
+      },
+      "hints": {
+        "accessibility": "Lets Agent control the mouse and keyboard. Enable when desktop input is needed.",
+        "screen_capture": "Allows desktop screenshots. Restart the app if macOS asks you to after granting access.",
+        "listen_event": "Enable only if macOS requires keyboard input monitoring. Simulated input normally uses Accessibility.",
+        "microphone": "Requested only when you start recording. Audio is processed by your configured speech recognition or AI endpoint.",
+        "notifications": "For task completion, approval and error alerts. Configure banners and sounds in System Settings; Focus may silence alerts.",
+        "local_network": "For intranet targets, LAN model endpoints or devices connecting to the proxy. macOS asks during actual access; this page does not probe the network.",
+        "automation": "AppleScript control is authorized separately for each target app when you run the relevant task.",
+        "files_and_folders": "Desktop, Documents, Downloads, network and removable volumes have separate access controls. Select files using the file picker first; change denied access here.",
+        "full_disk_access": "Enable only for a task that needs protected data beyond ordinary file access. Regular chat, scanning and most file tasks do not need it."
+      }
+    },
     updates: {
       title: 'Software updates', currentVersion: 'Current version {version}', check: 'Check for updates', checking: 'Checking…',
       download: 'Download update', retryDownload: 'Retry download', cancelDownload: 'Cancel download', installRestart: 'Install and restart',
@@ -5714,6 +5813,17 @@ export const messages = {
       manualConfirm: "Manual confirmation",
       manageAllConversations: "Manage all conversations and sandboxes",
       macosDesktopPermissions: "macOS desktop permissions",
+      macosPermissionSummary: "Screen capture and desktop input need system permissions. You can set them up later.",
+      macosPermissionHint: "These permissions are only needed for screen capture and desktop input. Regular chat works without them. Reopen this panel using the desktop permissions button at the top of the conversation.",
+      macosPermissionDismiss: "Dismiss this reminder and stop showing it automatically",
+      macosPermissionGranted: "Granted",
+      macosPermissionMissing: "Not granted",
+      macosPermissionStatusFailed: "Could not read permission status. Refresh to try again.",
+      macosPermissionDrag: "Add by dragging",
+      macosPermissionDragTitle: "Drag to add app permissions",
+      macosPermissionDragHint: "Drag the app icon into the permission list in System Settings, then switch it on.",
+      macosPermissionReveal: "Show in Finder",
+      macosPermissionDragUnavailable: "The drag card requires a .app build. For source runs, add the actual Terminal/Python launcher in System Settings.",
       openSettings: "Open settings",
       desktopContinuousAuthorization: "Continuous desktop authorization active",
       remainingTime: "{time} remaining",

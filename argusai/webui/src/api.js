@@ -475,6 +475,10 @@ export const api = {
   getDesktopActionStatus: (sessionId) => call("get_desktop_action_status", sessionId || ""),
   stopDesktopAction: (sessionId) => call("stop_desktop_action", sessionId || ""),
   openMacosPrivacySettings: (pane) => call("open_macos_privacy_settings", pane || "accessibility"),
+  getMacosPermissions: (pane = "") => call("get_macos_permissions", pane),
+  dismissMacosPermissionHint: () => call("dismiss_macos_permission_hint"),
+  requestMacosPermission: (pane) => call("request_macos_permission", pane || ""),
+  showMacosPermissionCard: (pane, labels) => call("show_macos_permission_card", pane || "accessibility", labels || {}),
 
   setUiContext: (data) => call("set_ui_context", data || {}),
   getUiContext: () => call("get_ui_context"),

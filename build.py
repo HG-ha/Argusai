@@ -41,6 +41,16 @@ LINUX_GTK_TYPELIBS = (
 LINUX_GTK_NATIVE_MODULES = ("gi/_gi", "gi/_gi_cairo", "cairo/_cairo")
 LEGAL_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md", "SOURCE_CODE.txt",
                "python/THIRD_PARTY_NOTICES.txt", "python/manifest.json")
+MACOS_USAGE_DESCRIPTIONS = {
+    "NSMicrophoneUsageDescription": "ArgusAI records audio only when you start a voice message, then sends it to your configured speech or AI endpoint.",
+    "NSAppleEventsUsageDescription": "ArgusAI uses AppleScript to control other applications when you request an automation task.",
+    "NSLocalNetworkUsageDescription": "ArgusAI connects to local AI endpoints, authorized intranet targets and devices using your proxy.",
+    "NSDesktopFolderUsageDescription": "ArgusAI accesses files on your Desktop when you select them or request a file task.",
+    "NSDocumentsFolderUsageDescription": "ArgusAI accesses files in Documents when you select them or request a file task.",
+    "NSDownloadsFolderUsageDescription": "ArgusAI reads selected downloads and saves task outputs when you request it.",
+    "NSNetworkVolumesUsageDescription": "ArgusAI accesses files on network volumes when you select them or request a file task.",
+    "NSRemovableVolumesUsageDescription": "ArgusAI accesses files on removable volumes when you select them or request a file task.",
+}
 
 
 def run(args: list[str | Path], *, cwd: Path = ROOT) -> None:
@@ -487,6 +497,16 @@ def sign(path: Path, args: argparse.Namespace) -> None:
     run(["codesign", "--verify", "--deep", "--strict", path])
 
 
+def configure_macos_permissions(bundle: Path) -> None:
+    """Declare purposes before the final signature, without granting TCC access."""
+    path = bundle / "Contents/Info.plist"
+    with path.open("rb") as stream:
+        info = plistlib.load(stream)
+    info.update(MACOS_USAGE_DESCRIPTIONS)
+    with path.open("wb") as stream:
+        plistlib.dump(info, stream)
+
+
 def notarize(path: Path, args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="argusai-notary-") as temporary:
         archive = path
@@ -547,6 +567,7 @@ def finish(args: argparse.Namespace) -> Path:
         with (payload / "Contents/Info.plist").open("rb") as stream:
             executable = plistlib.load(stream)["CFBundleExecutable"]
         run(["file", payload / "Contents/MacOS" / executable])
+        configure_macos_permissions(payload)
         sign(payload, args)
         if args.notarize:
             notarize(payload, args)

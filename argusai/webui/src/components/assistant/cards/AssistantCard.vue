@@ -1704,24 +1704,26 @@ watch(
       <p v-if="block.message">{{ block.message }}</p>
       <p v-else-if="block.active">{{ t('assistantCard.desktop.controlEnabled') }}<span v-if="block.scope"> · {{ block.scope }}</span></p>
       <p v-else>{{ t('assistantCard.desktop.controlEnded') }}</p>
-      <div v-if="macosPermMissing.length" class="macos-perm-notice">
+      <details v-if="macosPermMissing.length" class="macos-perm-notice">
+        <summary>{{ t('assistant.macosDesktopPermissions') }}</summary>
         <p v-for="p in macosPermMissing" :key="p.id" class="macos-perm-line">
           <strong>{{ p.label }}</strong>: {{ p.hint }}
           <button class="ghost tiny" type="button" @click="openMacosPrivacy(p.id)">{{ t('assistantCard.action.openSettings') }}</button>
         </p>
-      </div>
+      </details>
     </div>
 
     <div v-else-if="block.type === 'desktop_observe'" class="card-body desktop-observe-body">
       <p v-if="block.sensitive_warning" class="desktop-sensitive-warn">{{ block.sensitive_warning }}</p>
       <p v-if="block.permission_notice" class="macos-perm-line">{{ block.permission_notice }}</p>
       <p v-if="block.screenshot_error" class="desktop-screenshot-err">{{ block.screenshot_error }}</p>
-      <div v-if="macosPermMissing.length" class="macos-perm-notice">
+      <details v-if="macosPermMissing.length" class="macos-perm-notice">
+        <summary>{{ t('assistant.macosDesktopPermissions') }}</summary>
         <p v-for="p in macosPermMissing" :key="p.id" class="macos-perm-line">
           <strong>{{ p.label }}</strong>: {{ p.hint }}
           <button class="ghost tiny" type="button" @click="openMacosPrivacy(p.id)">{{ t('assistantCard.action.openSettings') }}</button>
         </p>
-      </div>
+      </details>
       <p v-if="block.monitor_count"><strong>{{ t('assistantCard.label.displays') }}</strong> {{ t('assistantCard.desktop.displayCount', { count: block.monitor_count }) }}</p>
       <p v-if="block.coordinate_hint" class="desktop-coord-hint">{{ block.coordinate_hint }}</p>
       <p v-if="block.foreground?.title"><strong>{{ t('assistantCard.label.foregroundWindow') }}</strong> {{ block.foreground.title }}</p>
@@ -1772,6 +1774,7 @@ watch(
   background: color-mix(in srgb, var(--warning, #e6a23c) 12%, var(--card-bg));
   border: 1px solid color-mix(in srgb, var(--warning, #e6a23c) 35%, var(--border));
 }
+.macos-perm-notice summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .macos-perm-line {
   margin: 4px 0;
   font-size: 12px;

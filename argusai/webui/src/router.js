@@ -21,7 +21,7 @@ const ROUTES = [
   { name: "reverse", re: /^#\/reverse\/?$/ },
   { name: "reverse_job", re: /^#\/reverse\/(.+)$/, params: ["id"] },
   { name: "settings", re: /^#\/settings\/?$/ },
-  { name: "settings", re: /^#\/settings\/(updates)\/?$/, params: ["section"] },
+  { name: "settings", re: /^#\/settings\/(updates|macos_permissions)\/?$/, params: ["section"] },
   { name: "about", re: /^#\/about\/?$/ },
 ];
 

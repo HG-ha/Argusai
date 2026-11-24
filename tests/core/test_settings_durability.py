@@ -16,6 +16,22 @@ from argusai.gui.settings import SettingsMixin
 from argusai.core.tools.user_profile_tools import user_profile_apply_update
 
 
+def test_macos_permission_dismissal_survives_restart_and_unrelated_saves(tmp_path, monkeypatch) -> None:
+    from argusai.gui.assistant_tools import AssistantToolsMixin
+    from argusai.core.workspace import desktop_control
+
+    monkeypatch.setattr(SettingsManager, "_sync_runtime_settings", lambda self, settings: None)
+    monkeypatch.setattr(desktop_control, "desktop_session_status", lambda sid: {"ok": True})
+    path = tmp_path / "settings.json"
+    api = SimpleNamespace(settings_mgr=SettingsManager(path))
+    assert not AssistantToolsMixin.get_desktop_action_status(api)["permission_hint_dismissed"]
+    assert AssistantToolsMixin.dismiss_macos_permission_hint(api)["ok"]
+    restarted = SimpleNamespace(settings_mgr=SettingsManager(path))
+    restarted.settings_mgr.update(lambda settings: setattr(settings, "gui_window_width", 1280))
+    assert AssistantToolsMixin.get_desktop_action_status(restarted)["permission_hint_dismissed"] is True
+    assert restarted.settings_mgr.get().gui_window_width == 1280
+
+
 def test_settings_atomic_backup_and_corruption_recovery(tmp_path) -> None:
     path = tmp_path / "settings.json"
     manager = SettingsManager(path)

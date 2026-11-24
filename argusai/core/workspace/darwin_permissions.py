@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import subprocess
 import sys
+import threading
 from typing import Any
 
 # Ventura+ deep links first, then legacy System Preferences URLs.
@@ -22,6 +23,23 @@ _SETTINGS_URLS: dict[str, tuple[str, ...]] = {
         "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
     ),
 }
+for _pane, _anchor in {
+    "microphone": "Privacy_Microphone",
+    "automation": "Privacy_Automation",
+    "files_and_folders": "Privacy_FilesAndFolders",
+    "full_disk_access": "Privacy_AllFiles",
+    "local_network": "Privacy_LocalNetwork",
+}.items():
+    _SETTINGS_URLS[_pane] = (
+        f"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?{_anchor}",
+        f"x-apple.systempreferences:com.apple.preference.security?{_anchor}",
+    )
+_SETTINGS_URLS["notifications"] = (
+    "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+    "x-apple.systempreferences:com.apple.preference.notifications",
+)
+_MIC_REQUEST_PENDING = False
+_MIC_REQUEST_LOCK = threading.Lock()
 
 # Prompting from osascript grants TCC to osascript, not ArgusAI, and the
 # system dialog can look like a password prompt every time a tool runs.
@@ -153,7 +171,9 @@ def open_privacy_settings(pane: str = "accessibility") -> dict[str, Any]:
     if sys.platform != "darwin":
         return {"ok": False, "error": "not macOS"}
     key = str(pane or "accessibility").strip().lower()
-    urls = _SETTINGS_URLS.get(key) or _SETTINGS_URLS["accessibility"]
+    urls = _SETTINGS_URLS.get(key)
+    if not urls:
+        return {"ok": False, "error_code": "unknown_macos_permission", "pane": key}
     last_err = ""
     for url in urls:
         try:
@@ -162,6 +182,102 @@ def open_privacy_settings(pane: str = "accessibility") -> dict[str, Any]:
         except Exception as e:
             last_err = str(e)
     return {"ok": False, "error": last_err or "failed to open System Settings", "pane": key}
+
+
+def _audio_capture_api() -> tuple[Any, Any]:
+    from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+
+    return AVCaptureDevice, AVMediaTypeAudio
+
+
+def microphone_status() -> str:
+    """Read TCC without requesting access or opening an audio device."""
+    if sys.platform != "darwin":
+        return "unavailable"
+    try:
+        device, media = _audio_capture_api()
+        return {0: "not_determined", 1: "restricted", 2: "denied", 3: "granted"}.get(
+            int(device.authorizationStatusForMediaType_(media)), "unknown"
+        )
+    except Exception:
+        return "unknown"
+
+
+def _microphone_usage_declared() -> bool:
+    from Foundation import NSBundle
+
+    return bool(NSBundle.mainBundle().objectForInfoDictionaryKey_("NSMicrophoneUsageDescription"))
+
+
+def request_microphone() -> dict[str, Any]:
+    """Called by a user gesture only. Return promptly while the system asks."""
+    global _MIC_REQUEST_PENDING
+    if sys.platform != "darwin":
+        return {"ok": False, "status": "unavailable", "error_code": "not_macos"}
+    status = microphone_status()
+    if status not in {"not_determined", "granted"}:
+        return {"ok": False, "status": status, "granted": False, "error_code": "macos_microphone_denied"}
+    try:
+        # Missing purpose strings can terminate the process. Source launchers
+        # must provide their own declaration; never mutate a host Python.app.
+        if not _microphone_usage_declared():
+            return {"ok": False, "status": status, "error_code": "macos_usage_description_missing"}
+        if status == "granted":
+            return {"ok": True, "status": status, "granted": True}
+        with _MIC_REQUEST_LOCK:
+            if _MIC_REQUEST_PENDING:
+                return {"ok": True, "status": status, "pending": True}
+            _MIC_REQUEST_PENDING = True
+
+        def completed(_granted: bool) -> None:
+            global _MIC_REQUEST_PENDING
+            with _MIC_REQUEST_LOCK:
+                _MIC_REQUEST_PENDING = False
+
+        device, media = _audio_capture_api()
+        device.requestAccessForMediaType_completionHandler_(media, completed)
+        return {"ok": True, "status": status, "pending": True}
+    except Exception:
+        with _MIC_REQUEST_LOCK:
+            _MIC_REQUEST_PENDING = False
+        return {"ok": False, "status": "unknown", "error_code": "macos_permission_request_failed"}
+
+
+def permission_center_snapshot() -> dict[str, Any]:
+    """All app permissions; unknown/per-resource permissions are never 'denied'.
+
+    Keep check_all() desktop-only: tool readiness must not depend on recording,
+    notifications, or access to unrelated folders.
+    """
+    snap = check_all()
+    if sys.platform != "darwin":
+        return snap
+    from .darwin_notifications import notification_status
+
+    rows = []
+    for row in snap["permissions"]:
+        status = (listen_event_status() if row["id"] == "listen_event"
+                  else "granted" if row["granted"] else "denied")
+        rows.append({**row, "status": status, "requestable": False,
+                     "granted": True if status == "granted" else False if status == "denied" else None})
+    for key, status in (("microphone", microphone_status()), ("notifications", notification_status())):
+        rows.append({"id": key, "status": status, "granted": True if status == "granted" else False if status in {"denied", "restricted"} else None,
+                     "requestable": status == "not_determined", "settings_url": _SETTINGS_URLS[key][0]})
+    for key in ("local_network", "automation", "files_and_folders", "full_disk_access"):
+        rows.append({"id": key, "status": "per_resource" if key in {"automation", "files_and_folders"} else "manual", "granted": None,
+                     "requestable": False, "settings_url": _SETTINGS_URLS[key][0]})
+    return {"ok": True, "platform": "darwin", "permissions": rows}
+
+
+def request_permission(pane: str) -> dict[str, Any]:
+    """Explicit UI request, without probing private files or arbitrary LAN hosts."""
+    if pane == "microphone":
+        return request_microphone()
+    if pane == "notifications":
+        from .darwin_notifications import request_notifications
+
+        return request_notifications()
+    return {"ok": False, "error_code": "macos_permission_requires_settings", "pane": pane}
 
 
 def _permission_row(
