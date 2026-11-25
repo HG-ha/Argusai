@@ -12,6 +12,16 @@ import zhHant from './i18n/locales/zh-Hant.js'
 export const messages = {
   zh: {
     macosPermissions: {
+      "currentApp": "当前运行的应用",
+      "appPath": "应用路径",
+      "copyPath": "复制路径",
+      "identityHint": "状态对应当前进程。系统中的同名项或旧签名授权可能不适用于当前应用。",
+      "repairTitle": "系统里已开启，仍不可用？",
+      "repairHint": "已勾选却仍未授权时，旧项可能属于其他副本或旧签名。先移除旧项，再添加当前路径的应用；如系统要求，请重启。",
+      "repairStep1": "退出其他 ArgusAI 副本，确认使用上方显示的应用路径。",
+      "repairStep2": "在系统设置的对应权限列表中选中旧应用项并移除。",
+      "repairStep3": "拖入当前应用图标，或通过访达和系统设置的添加按钮选择同一路径。",
+      "repairStep4": "开启开关，按系统提示重启 ArgusAI，再返回这里刷新检查。",
       "title": "macOS 权限",
       "summary": "按功能授权，随时修改",
       "hint": "只需开启正在使用的功能所需权限。返回应用后会刷新状态；关闭此页不会影响普通对话。",
@@ -3827,6 +3837,16 @@ export const messages = {
 
   en: {
     macosPermissions: {
+      "currentApp": "Currently running app",
+      "appPath": "App path",
+      "copyPath": "Copy path",
+      "identityHint": "Status belongs to this process. A same-name entry or an older signing identity may not cover this app.",
+      "repairTitle": "Enabled in Settings, but still unavailable?",
+      "repairHint": "An enabled entry may belong to another copy or an older signature. Remove the old entry, then add the app at this exact path. Restart if macOS asks.",
+      "repairStep1": "Quit other ArgusAI copies and check the app path shown above.",
+      "repairStep2": "Select and remove the old app entry in the relevant System Settings permission list.",
+      "repairStep3": "Drag this app icon, or use Finder and the Add button to select the exact same path.",
+      "repairStep4": "Enable access, restart ArgusAI if macOS asks, then return and refresh.",
       "title": "macOS permissions",
       "summary": "Grant access by feature",
       "hint": "Enable only the permissions needed for the feature you use. Status refreshes when you return. Closing this page does not affect regular chat.",

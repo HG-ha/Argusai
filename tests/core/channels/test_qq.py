@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import time
 from types import SimpleNamespace
+
+import pytest
 
 from argusai.core.channels.adapters import QQAdapter, create_channel_adapter
 from argusai.core.channels.cards import render_channel_reply
@@ -17,6 +20,94 @@ def _config() -> ChannelConfig:
         name="QQ test",
         enabled=True,
     )
+
+
+def test_qq_socket_uses_bundled_ca_for_initial_connect_and_reconnect(monkeypatch) -> None:
+    # Simulate frozen Python with no system CAs while keeping verification on.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    assert not context.get_ca_certs()
+    monkeypatch.setattr(ssl, "create_default_context", lambda: context)
+    adapter = QQAdapter(_config(), {})
+    socket = adapter._create_websocket(SimpleNamespace())
+    calls = []
+
+    class Session:
+        closed = False
+
+        async def ws_connect(self, url, **kwargs):
+            calls.append((url, kwargs))
+            return SimpleNamespace(closed=True)
+
+    async def connect():
+        session = Session()
+        await socket.open("wss://api.sgroup.qq.com/websocket", session)
+        await socket.open("wss://api.sgroup.qq.com/websocket", socket._session)
+        assert socket._session.session is session
+
+    asyncio.run(connect())
+    assert len(calls) == 2
+    assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+    assert len(context.get_ca_certs()) > 0
+    assert all(call[1]["ssl"] is context for call in calls)
+
+
+@pytest.mark.parametrize("failure", [None, ssl.SSLCertVerificationError("missing issuer")])
+def test_qq_socket_thread_completion_is_reported_to_adapter(monkeypatch, failure) -> None:
+    from qqbot_agent_sdk import QQWebSocket
+
+    async def run(_self, _url):
+        if failure:
+            raise failure
+
+    monkeypatch.setattr(QQWebSocket, "_run_ws_async", run)
+    adapter = QQAdapter(_config(), {})
+    adapter._connected = True
+    socket = adapter._create_websocket(SimpleNamespace())
+    if failure:
+        with pytest.raises(ssl.SSLCertVerificationError):
+            asyncio.run(socket._run_ws_async("wss://gateway"))
+        assert "missing issuer" in adapter.status()["last_error"]
+    else:
+        asyncio.run(socket._run_ws_async("wss://gateway"))
+    assert adapter._ws_closed.is_set()
+    assert not adapter.status()["connected"]
+
+
+def test_qq_control_worker_exits_when_sdk_socket_thread_dies(monkeypatch) -> None:
+    import qqbot_agent_sdk
+
+    class Api:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def setup(self, _client):
+            pass
+
+        def ensure_token_sync(self):
+            return "test-token"
+
+        def get_gateway_url_sync(self):
+            return "wss://gateway"
+
+        async def get_gateway_url(self):
+            return self.get_gateway_url_sync()
+
+    monkeypatch.setattr(qqbot_agent_sdk, "QQApiClient", Api)
+    adapter = QQAdapter(_config(), {"app_id": "app", "client_secret": "secret"})
+    stopped = []
+
+    def start(*_args):
+        adapter._set_error("certificate validation failed")
+        adapter._ws_closed.set()
+
+    async def stop():
+        stopped.append(True)
+
+    monkeypatch.setattr(adapter, "_create_websocket", lambda _callbacks: SimpleNamespace(start=start, async_stop=stop))
+    with pytest.raises(RuntimeError, match="certificate validation failed"):
+        asyncio.run(adapter._run())
+    assert stopped == [True]
+    assert not adapter.status()["connected"]
 
 
 def test_qq_provider_factory_and_direct_message_boundary() -> None:

@@ -491,7 +491,7 @@ jobs:
       - name: Test release tooling
         run: uv run --locked --group build pytest tests/scripts/ -q
       - name: Test per-channel streaming preferences
-        run: uv run --locked --group build python -m pytest tests/core/channels/test_outbound.py tests/core/channels/test_streaming.py tests/gui/test_channel_live.py -q --tb=short
+        run: uv run --locked --group build python -m pytest tests/core/channels/test_outbound.py tests/core/channels/test_streaming.py tests/core/channels/test_qq.py tests/gui/test_channel_live.py tests/gui/test_macos_permission_card.py tests/core/test_darwin_permissions.py -q --tb=short
       - name: Test update verification, native installer helpers and GUI handoff
         env:
           PYTEST_ADDOPTS: --timeout=240

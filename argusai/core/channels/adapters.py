@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -3873,6 +3874,7 @@ class QQAdapter(ChannelAdapter):
         self._session_lock = threading.Lock()
         self._session_id: str | None = None
         self._session_seq: int | None = None
+        self._ws_closed = threading.Event()
         # QQ's native C2C stream endpoint is not exposed by the current Python
         # SDK, so the adapter keeps the small amount of sequencing state the
         # official protocol requires (stable msg_seq, increasing index, and
@@ -3933,11 +3935,57 @@ class QQAdapter(ChannelAdapter):
             self._ws = None
             self._http_client = None
 
+    def _create_websocket(self, callbacks: Any) -> Any:
+        from qqbot_agent_sdk import QQWebSocket
+        import certifi
+
+        # Keep system/operator trust and add the CA bundle shipped with the
+        # app. Frozen Python's build-machine OpenSSL paths may not exist on
+        # the user's Mac, while httpx still works through its certifi default.
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        owner = self
+
+        class VerifiedSession:
+            def __init__(self, session: Any) -> None:
+                self.session = session
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.session, name)
+
+            def ws_connect(self, *args: Any, **kwargs: Any) -> Any:
+                kwargs["ssl"] = context
+                return self.session.ws_connect(*args, **kwargs)
+
+        class VerifiedWebSocket(QQWebSocket):
+            async def open(self, gateway_url: str, aio_session: Any) -> None:
+                # The SDK also uses this public method for reconnects. Avoid
+                # repeatedly wrapping its retained session on each reconnect.
+                session = (aio_session if isinstance(aio_session, VerifiedSession)
+                           else VerifiedSession(aio_session))
+                await super().open(gateway_url, session)
+
+            async def _run_ws_async(self, gateway_url: str) -> None:
+                # SDK 1.2.2 logs initial handshake failures inside its thread
+                # without notifying the adapter. Let the runtime see a dead
+                # worker and retry, instead of leaving it "connecting" forever.
+                try:
+                    await super()._run_ws_async(gateway_url)
+                except Exception as exc:
+                    owner._set_error(f"{type(exc).__name__}: {exc}")
+                    raise
+                finally:
+                    owner._on_disconnected()
+                    owner._ws_closed.set()
+
+        return VerifiedWebSocket(callbacks, log_tag=f"ArgusAI:{self.config.id}")
+
     async def _run(self) -> None:
-        from qqbot_agent_sdk import QQApiClient, QQWebSocket, WSCallbacks
+        from qqbot_agent_sdk import QQApiClient, WSCallbacks
 
         app_id, secret = self._credentials()
         self._loop = asyncio.get_running_loop()
+        self._ws_closed.clear()
         timeout = httpx.Timeout(60, connect=15)
         async with httpx.AsyncClient(timeout=timeout, trust_env=True) as client:
             api = QQApiClient(app_id, secret, log_tag=f"ArgusAI:{self.config.id}")
@@ -3960,11 +4008,13 @@ class QQAdapter(ChannelAdapter):
                 get_gateway_url=api.get_gateway_url_sync,
             )
             gateway_url = await api.get_gateway_url()
-            ws = QQWebSocket(callbacks, log_tag=f"ArgusAI:{self.config.id}")
+            ws = self._create_websocket(callbacks)
             self._ws = ws
             ws.start(gateway_url, self._loop)
             try:
                 while not self._stop.is_set():
+                    if self._ws_closed.is_set():
+                        raise RuntimeError(self._last_error or "QQ WebSocket worker stopped")
                     await asyncio.sleep(0.2)
             finally:
                 await ws.async_stop()

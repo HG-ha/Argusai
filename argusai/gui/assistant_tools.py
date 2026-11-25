@@ -53,7 +53,13 @@ class AssistantToolsMixin:
 
         if pane == "microphone":
             return {"ok": True, "status": dp.microphone_status()}
-        return dp.permission_center_snapshot()
+        snapshot = dp.permission_center_snapshot()
+        try:
+            from .macos_permission_card import running_app_identity
+            app = running_app_identity()
+        except ImportError:  # Shell builds omit native GUI permission cards.
+            app = {"available": False}
+        return {**snapshot, "app": app}
 
     def request_macos_permission(self, pane: str) -> dict[str, Any]:
         """A user-initiated request for microphone or notification access."""

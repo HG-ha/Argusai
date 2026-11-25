@@ -1,5 +1,15 @@
 export default {
   "macosPermissions": {
+    "currentApp": "Aplicativo em execução",
+    "appPath": "Caminho do aplicativo",
+    "copyPath": "Copiar caminho",
+    "identityHint": "O status pertence a este processo. Uma entrada com o mesmo nome ou uma assinatura anterior pode não abranger este aplicativo.",
+    "repairTitle": "Ativado nos ajustes, mas indisponível?",
+    "repairHint": "A entrada pode pertencer a outra cópia ou assinatura anterior. Remova-a e adicione o aplicativo deste caminho exato. Reinicie se o macOS solicitar.",
+    "repairStep1": "Feche outras cópias do ArgusAI e confira o caminho exibido acima.",
+    "repairStep2": "Selecione e remova a entrada antiga na lista de permissões correspondente dos Ajustes do Sistema.",
+    "repairStep3": "Arraste este ícone ou use o Finder e o botão de adicionar para selecionar o mesmo caminho.",
+    "repairStep4": "Ative o acesso, reinicie o ArgusAI se solicitado e volte para atualizar o status.",
     "title": "Permissões do macOS",
     "summary": "Acesso por função",
     "hint": "Ative apenas as permissões necessárias. O estado é atualizado ao voltar. Fechar esta página não afeta conversas normais.",

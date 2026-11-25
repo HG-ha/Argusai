@@ -1,5 +1,15 @@
 export default {
   "macosPermissions": {
+    "currentApp": "Aplicación en ejecución",
+    "appPath": "Ruta de la aplicación",
+    "copyPath": "Copiar ruta",
+    "identityHint": "El estado corresponde a este proceso. Una entrada con el mismo nombre o una firma anterior puede no cubrir esta aplicación.",
+    "repairTitle": "¿Está activado, pero sigue sin funcionar?",
+    "repairHint": "La entrada puede pertenecer a otra copia o firma anterior. Elimínala y añade la aplicación de esta ruta exacta. Reinicia si macOS lo pide.",
+    "repairStep1": "Cierra otras copias de ArgusAI y comprueba la ruta indicada arriba.",
+    "repairStep2": "Selecciona y elimina la entrada antigua de la lista de permisos correspondiente en Ajustes del Sistema.",
+    "repairStep3": "Arrastra este icono o usa Finder y el botón de añadir para seleccionar exactamente la misma ruta.",
+    "repairStep4": "Activa el acceso, reinicia ArgusAI si macOS lo pide y vuelve para actualizar el estado.",
     "title": "Permisos de macOS",
     "summary": "Acceso según la función",
     "hint": "Activa solo los permisos necesarios. El estado se actualiza al volver. Cerrar esta página no afecta al chat normal.",

@@ -43,6 +43,24 @@ def running_app_bundle() -> Path | None:
     return None
 
 
+def running_app_identity() -> dict[str, Any]:
+    """Identify the current process, never a same-name installed copy."""
+    if sys.platform != "darwin":
+        return {"available": False}
+    bundle = running_app_bundle()
+    if bundle is None:
+        return {"available": False}
+    try:
+        info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
+        if not isinstance(info, dict):
+            return {"available": False}
+        return {"available": True, "name": bundle.name, "path": str(bundle),
+                "bundle_id": str(info.get("CFBundleIdentifier") or ""),
+                "version": str(info.get("CFBundleShortVersionString") or "")}
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return {"available": False}
+
+
 def _permission_icon_class() -> Any:
     global _icon_class
     if _icon_class is not None:
@@ -80,7 +98,7 @@ def _show_on_main(bundle: Path, labels: dict[str, str]) -> None:
     style = (AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable
              | AppKit.NSWindowStyleMaskUtilityWindow)
     panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-        AppKit.NSMakeRect(0, 0, 340, 240), style, AppKit.NSBackingStoreBuffered, False,
+        AppKit.NSMakeRect(0, 0, 430, 370), style, AppKit.NSBackingStoreBuffered, False,
     )
     panel.setTitle_(labels["title"])
     panel.setReleasedWhenClosed_(False)
@@ -88,29 +106,31 @@ def _show_on_main(bundle: Path, labels: dict[str, str]) -> None:
     panel.setLevel_(AppKit.NSFloatingWindowLevel)
     content = panel.contentView()
 
-    def label(text: str, frame: Any, size: float) -> None:
+    def label(text: str, frame: Any, size: float, *, selectable: bool = False, lines: int = 3) -> None:
         field = AppKit.NSTextField.alloc().initWithFrame_(frame)
         field.setStringValue_(text)
         field.setEditable_(False)
-        field.setSelectable_(False)
+        field.setSelectable_(selectable)
         field.setBordered_(False)
         field.setDrawsBackground_(False)
         field.setAlignment_(AppKit.NSTextAlignmentCenter)
         field.setFont_(AppKit.NSFont.systemFontOfSize_(size))
         field.setTextColor_(AppKit.NSColor.labelColor())
-        field.setMaximumNumberOfLines_(3)
+        field.setMaximumNumberOfLines_(lines)
         field.setLineBreakMode_(AppKit.NSLineBreakByWordWrapping)
         content.addSubview_(field)
 
-    label(labels["hint"], AppKit.NSMakeRect(18, 175, 304, 50), 12)
-    icon = _permission_icon_class().alloc().initWithFrame_(AppKit.NSMakeRect(134, 86, 72, 72))
+    label(labels["hint"], AppKit.NSMakeRect(18, 310, 394, 45), 12)
+    icon = _permission_icon_class().alloc().initWithFrame_(AppKit.NSMakeRect(179, 230, 72, 72))
     icon.app_url = NSURL.fileURLWithPath_(str(bundle))
     icon.setImage_(AppKit.NSWorkspace.sharedWorkspace().iconForFile_(str(bundle)))
     icon.setImageScaling_(AppKit.NSImageScaleProportionallyUpOrDown)
     content.addSubview_(icon)
-    label(bundle.name, AppKit.NSMakeRect(18, 58, 304, 22), 13)
+    label(bundle.name, AppKit.NSMakeRect(18, 202, 394, 22), 13)
+    label(str(bundle), AppKit.NSMakeRect(18, 148, 394, 48), 11, selectable=True)
+    label(labels["repair"], AppKit.NSMakeRect(18, 57, 394, 83), 12, lines=5)
 
-    reveal = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(60, 16, 220, 30))
+    reveal = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(75, 16, 280, 30))
     reveal.setTitle_(labels["reveal"])
     reveal.setBezelStyle_(AppKit.NSBezelStyleRounded)
     reveal.setTarget_(icon)
@@ -141,6 +161,7 @@ def show_permission_card(pane: str, labels: dict[str, Any] | None = None) -> dic
         "title": "Add app permissions",
         "hint": "Drag this app into the permissions list in System Settings, then enable it.",
         "reveal": "Show in Finder",
+        "repair": "Already enabled but still unavailable? Remove the old app entry in System Settings, then add this exact app and enable it. Quit other copies, and restart this app if macOS asks.",
     }.items()}
     done = threading.Event()
     outcome = {"ok": False, "cancelled": False}
@@ -170,4 +191,4 @@ def show_permission_card(pane: str, labels: dict[str, Any] | None = None) -> dic
         return {"ok": False, "error_code": "macos_permission_card_failed"}
     from argusai.core.workspace.darwin_permissions import open_privacy_settings
     result = open_privacy_settings(pane)
-    return {**result, "app_name": bundle.name, "card_shown": True}
+    return {**result, "app_name": bundle.name, "app_path": str(bundle), "card_shown": True}

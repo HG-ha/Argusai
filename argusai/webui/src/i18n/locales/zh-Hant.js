@@ -1,5 +1,15 @@
 export default {
   "macosPermissions": {
+    "currentApp": "目前執行的應用程式",
+    "appPath": "應用程式路徑",
+    "copyPath": "複製路徑",
+    "identityHint": "狀態對應目前程序。系統中的同名項目或舊簽章授權可能不適用於目前應用程式。",
+    "repairTitle": "系統已開啟，仍無法使用？",
+    "repairHint": "已勾選卻仍未授權時，舊項目可能屬於其他副本或舊簽章。請先移除舊項目，再加入目前路徑的應用程式；如系統要求，請重新啟動。",
+    "repairStep1": "結束其他 ArgusAI 副本，確認使用上方顯示的應用程式路徑。",
+    "repairStep2": "在系統設定的對應權限清單中選取並移除舊應用程式項目。",
+    "repairStep3": "拖入目前應用程式圖示，或透過 Finder 與加入按鈕選擇相同路徑。",
+    "repairStep4": "開啟權限，依系統提示重新啟動 ArgusAI，再返回這裡重新整理。",
     "title": "macOS 權限",
     "summary": "按功能授權，隨時修改",
     "hint": "只需開啟正在使用的功能所需權限。返回應用程式後會更新狀態；關閉此頁不影響一般對話。",

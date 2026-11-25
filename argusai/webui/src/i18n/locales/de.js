@@ -1,5 +1,15 @@
 export default {
   "macosPermissions": {
+    "currentApp": "Aktuell laufende App",
+    "appPath": "App-Pfad",
+    "copyPath": "Pfad kopieren",
+    "identityHint": "Der Status gilt für diesen Prozess. Gleichnamige Einträge oder ältere Signaturen gelten möglicherweise nicht für diese App.",
+    "repairTitle": "In den Einstellungen erlaubt, aber nicht verfügbar?",
+    "repairHint": "Der Eintrag kann zu einer anderen Kopie oder alten Signatur gehören. Entferne ihn und füge die App unter diesem Pfad hinzu. Starte sie bei Bedarf neu.",
+    "repairStep1": "Beende andere ArgusAI-Kopien und prüfe den oben angezeigten App-Pfad.",
+    "repairStep2": "Wähle den alten App-Eintrag in der betreffenden Berechtigungsliste der Systemeinstellungen und entferne ihn.",
+    "repairStep3": "Ziehe dieses App-Symbol hinein oder wähle mit Finder und Hinzufügen genau denselben Pfad.",
+    "repairStep4": "Aktiviere den Zugriff, starte ArgusAI bei Aufforderung neu und aktualisiere dann den Status.",
     "title": "macOS-Berechtigungen",
     "summary": "Zugriff je nach Funktion",
     "hint": "Nur benötigte Rechte aktivieren. Der Status wird bei der Rückkehr aktualisiert. Normale Chats funktionieren auch ohne diese Rechte.",

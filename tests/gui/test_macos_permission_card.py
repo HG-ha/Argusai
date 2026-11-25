@@ -28,6 +28,11 @@ def test_target_is_the_actual_bundle_even_after_rename(tmp_path, monkeypatch):
     root, binary = bundle(tmp_path)
     monkeypatch.setattr(sys, "executable", str(binary))
     assert card.running_app_bundle() == root
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert card.running_app_identity() == {
+        "available": True, "name": root.name, "path": str(root),
+        "bundle_id": "com.argusai.app", "version": "",
+    }
 
 
 def test_executable_symlink_resolves_to_the_real_bundle(tmp_path, monkeypatch):
@@ -52,6 +57,8 @@ def test_does_not_invent_or_guess_permission_target(tmp_path, monkeypatch, mode)
         (root / "Contents/Info.plist").write_bytes(plistlib.dumps(["not an app manifest"]))
     monkeypatch.setattr(sys, "executable", str(binary))
     assert card.running_app_bundle() is None
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert card.running_app_identity() == {"available": False}
 
 
 def test_unsupported_host_and_source_run_do_not_open_settings(monkeypatch):
@@ -73,12 +80,27 @@ def test_native_card_and_settings_receive_only_current_bundle(tmp_path, monkeypa
     monkeypatch.setattr(card, "_show_on_main", lambda target, labels: calls.append((target, labels)))
     monkeypatch.setattr(darwin_permissions, "open_privacy_settings", lambda pane: {"ok": True, "pane": pane})
     result = card.show_permission_card("screen_capture", {"title": "拖拽授权", "path": "/wrong.app"})
-    assert result == {"ok": True, "pane": "screen_capture", "app_name": root.name, "card_shown": True}
+    assert result == {"ok": True, "pane": "screen_capture", "app_name": root.name, "app_path": str(root), "card_shown": True}
     assert calls[0][0] == root
     assert calls[0][1]["title"] == "拖拽授权"
     assert "path" not in calls[0][1]
+    assert "Remove the old app entry" in calls[0][1]["repair"]
     assert card.show_permission_card("unknown")["ok"] is False
     assert len(calls) == 1
+
+
+def test_permission_api_keeps_process_identity_separate_from_actual_grants(tmp_path, monkeypatch):
+    from argusai.gui.assistant_tools import AssistantToolsMixin
+    from argusai.core.workspace import darwin_permissions
+
+    root, binary = bundle(tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "executable", str(binary))
+    row = {"id": "accessibility", "status": "denied", "granted": False}
+    monkeypatch.setattr(darwin_permissions, "permission_center_snapshot", lambda: {"ok": True, "permissions": [row]})
+    result = AssistantToolsMixin.get_macos_permissions(SimpleNamespace())
+    assert result["app"]["path"] == str(root)
+    assert result["permissions"] == [row]
 
 
 def test_native_drag_writes_the_app_file_and_cannot_move_it(monkeypatch):
